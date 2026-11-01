@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Shell checks and the contract tests (checks/, with wolos and wolos-pkgbuilds checked out next to
+# this repo: checks/tests/support/siblings.rs). Light: a GitHub runner, no image build.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: wolos-iso
+      - uses: actions/checkout@v4
+        with:
+          repository: wonderlandos/wolos
+          path: wolos
+      - uses: actions/checkout@v4
+        with:
+          repository: wonderlandos/wolos-pkgbuilds
+          path: wolos-pkgbuilds
+      - name: shellcheck
+        working-directory: wolos-iso
+        run: shellcheck -S error build.sh release/*.sh tests/*.sh profile/profiledef.sh
+      - name: Contract tests
+        run: cargo test --manifest-path wolos-iso/checks/Cargo.toml

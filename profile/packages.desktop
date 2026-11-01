@@ -1,8 +1,8 @@
-# WolOS desktop runtime packages (Arch names at the snapshot in image/arch/snapshot). One per line.
-# Base system, kernel, firmware, networking: image/arch/packages.x86_64. image/build.sh merges both.
-# WolOS itself: wol daemons, shell, overlay, plugins (built into [wolos] by image/repo/build.sh).
+# WolOS desktop runtime packages (Arch names at the snapshot in profile/snapshot). One per line.
+# Base system, kernel, firmware, networking: profile/packages.x86_64. build.sh merges both.
+# WolOS itself: wol daemons, shell, overlay, plugins (built into [wolos] by wolos-build/wolos-build).
 wolos-system
-# Graphics / session: the WolOS Hyprland fork (patches in image/hyprland/patches), Mesa, Vulkan, VA-API.
+# Graphics / session: the WolOS Hyprland fork (patches in wolos-pkgbuilds/hyprland-wolos/patches), Mesa, Vulkan, VA-API.
 hyprland-wolos
 hypridle
 xdg-desktop-portal-hyprland
@@ -18,7 +18,7 @@ lib32-vulkan-icd-loader
 intel-media-driver       # VA-API iHD (Gen8+): Helium/mpv GPU decode; LIBVA_DRIVER_NAME=iHD from wol-session
 # NVIDIA: nvidia-open-dkms + nvidia-utils are installed by `wol hw boot --online` when an NVIDIA GPU is
 # present (DKMS builds against linux-wolos-headers).
-# GPU proof tools (image/hw/verify-gpu.sh)
+# GPU proof tools (wolos/files/usr/lib/wolos/verify-gpu.sh)
 mesa-utils
 vulkan-tools
 libva-utils
@@ -85,7 +85,7 @@ celluloid                # Videos (mpv)
 mpv
 file-roller
 baobab
-# Games (archicture/modules/games.md): native Steam (multilib) and Wine for Windows programs.
+# Games (wolos/docs/modules/games.md): native Steam (multilib) and Wine for Windows programs.
 steam
 umu-launcher
 gamemode               # games can run through gamemoderun

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// Resource pressure for the limits test (image/vm/test/limits). Runs only in the throwaway guest
+// Resource pressure for the limits test (tests/test/limits). Runs only in the throwaway guest
 // (it needs /run/kbomb-guest, which only the guest's generator creates) and every worker stops at
 // a deadline. Usage: kb KIND SECONDS; waits for a line on stdin before it starts.
 #define _GNU_SOURCE

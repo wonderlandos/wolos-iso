@@ -4,7 +4,7 @@
 # systemd-analyze time, blame, critical chain, plot, and the wolos-boot stage lines (ADR 0012).
 # A throwaway unit arrives as a systemd credential over SMBIOS, so the sealed slot and the signed
 # image stay untouched; results are read back from @var.
-# Usage: image/vm/test/boot-time.sh DISK.raw OUTDIR [RUNS]   (needs sudo for the loop mount)
+# Usage: tests/test/boot-time.sh DISK.raw OUTDIR [RUNS]   (needs sudo for the loop mount)
 # Env: WOLOS_OVMF_CODE, WOLOS_OVMF_VARS (firmware), WOLOS_QEMU_EXTRA, WOLOS_TIMEOUT (per boot, 240).
 set -eu
 DISK=$1; OUT=$2; RUNS=${3:-5}

@@ -4,12 +4,12 @@
 # the ISO's kernel boots with wolos.autoinstall=/dev/vda (installs and powers off), then the
 # installed disk boots on its own. A bystander disk (other.raw, random head) stays attached and must
 # come out byte-identical. Results: lines "BOOT PASS|FAIL <what>" in $T/checks.txt.
-# Usage: image/vm/test-install.sh [ISO]   (--build: image/vm/build.sh first)
+# Usage: tests/test-install.sh [ISO]   (--build: tests/build.sh first)
 # Env: WOLOS_VM (~/WolOS-vm), WOLOS_KEEP_DISK=1 keeps the installed disk as $T/disk.raw for
 #      run-installed.sh (otherwise the scratch install.raw is deleted).
 # Needs: qemu-system-x86_64, edk2-ovmf, bsdtar, blkid, sfdisk; python3 + Pillow for the screenshot.
 set -u
-REPO=$(cd "$(dirname "$0")/../.." && pwd); H=$REPO/image/vm/test
+REPO=$(cd "$(dirname "$0")/.." && pwd); H=$REPO/tests/test
 VM=${WOLOS_VM:-$HOME/WolOS-vm}; T=$VM/test
 OVMF=${WOLOS_OVMF:-/usr/share/edk2/x64}
 command -v qemu-system-x86_64 >/dev/null || { echo "$0: qemu-system-x86_64 missing (pacman -S qemu-desktop)" >&2; exit 1; }
@@ -17,7 +17,7 @@ command -v qemu-system-x86_64 >/dev/null || { echo "$0: qemu-system-x86_64 missi
 mkdir -p "$T"
 # One VM at a time: another VM on the same disk and sockets starves the install (15 GB hosts).
 pgrep -x qemu-system-x86 >/dev/null && { echo "test-install: another QEMU VM is running" >&2; exit 1; }
-if [ "${1:-}" = --build ]; then "$REPO/image/vm/build.sh" || exit 1; shift; fi
+if [ "${1:-}" = --build ]; then "$REPO/tests/build.sh" || exit 1; shift; fi
 ISO=${1:-$(ls -t "$VM"/out/wolos-*.iso 2>/dev/null | head -1)}
 [ -f "$ISO" ] || { echo "test-install: no ISO in $VM/out" >&2; exit 1; }
 cd "$T" || exit 1

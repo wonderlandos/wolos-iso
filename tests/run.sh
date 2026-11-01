@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Boot the newest WolOS ISO (live desktop) in QEMU/KVM: OVMF, virtio-vga-gl (Hyprland runs), a window.
-# Usage: image/vm/run.sh [ISO]   Env: WOLOS_VM (default ~/WolOS-vm), WOLOS_MEM (6G), WOLOS_DISPLAY (gtk,gl=on).
+# Usage: tests/run.sh [ISO]   Env: WOLOS_VM (default ~/WolOS-vm), WOLOS_MEM (6G), WOLOS_DISPLAY (gtk,gl=on).
 set -eu
 VM=${WOLOS_VM:-$HOME/WolOS-vm}; T=$VM/test
 OVMF=${WOLOS_OVMF:-/usr/share/edk2/x64}
@@ -9,7 +9,7 @@ command -v qemu-system-x86_64 >/dev/null || { echo "$0: qemu-system-x86_64 missi
 [ -f "$OVMF/OVMF_CODE.4m.fd" ] || { echo "$0: no OVMF in $OVMF (pacman -S edk2-ovmf)" >&2; exit 1; }
 mkdir -p "$T"
 ISO=${1:-$(ls -t "$VM"/out/wolos-*.iso 2>/dev/null | head -1)}
-[ -f "$ISO" ] || { echo "run.sh: no ISO in $VM/out (image/vm/build.sh)" >&2; exit 1; }
+[ -f "$ISO" ] || { echo "run.sh: no ISO in $VM/out (tests/build.sh)" >&2; exit 1; }
 [ -f "$T/vars-live.fd" ] || cp "$OVMF/OVMF_VARS.4m.fd" "$T/vars-live.fd"
 exec qemu-system-x86_64 -enable-kvm -cpu host -smp "$(nproc)" -m "${WOLOS_MEM:-6G}" -machine q35 \
   -drive if=pflash,format=raw,readonly=on,file="$OVMF/OVMF_CODE.4m.fd" -drive if=pflash,format=raw,file="$T/vars-live.fd" \

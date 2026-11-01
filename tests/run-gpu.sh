@@ -8,7 +8,7 @@
 set -eu
 VM=${WOLOS_VM:-/home/klee/WolOS-vm}; T=$VM/test; OVMF=${WOLOS_OVMF:-/usr/share/edk2/x64}
 GPU=${WOLOS_GPU:-0000:00:02.0}
-[ -f "$T/disk.raw" ] || { echo "run-gpu: no $T/disk.raw (WOLOS_KEEP_DISK=1 image/vm/test-install.sh)"; exit 1; }
+[ -f "$T/disk.raw" ] || { echo "run-gpu: no $T/disk.raw (WOLOS_KEEP_DISK=1 tests/test-install.sh)"; exit 1; }
 modprobe vfio-pci   # not in the initramfs: vfio-pci.ids= binds the iGPU when it loads
 drv=$(basename "$(readlink -f /sys/bus/pci/devices/$GPU/driver)")
 [ "$drv" = vfio-pci ] || { echo "run-gpu: $GPU is bound to $drv, not vfio-pci (boot the passthrough entry)"; exit 1; }

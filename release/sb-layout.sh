@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Secure Boot layout of the live ISO's EFI partition (ADR 0025), edited in place with mtools.
-#   sb-layout.sh layout ISO REPO_DIR   shim first, systemd-boot second, one UKI (image/build.sh,
+#   sb-layout.sh layout ISO REPO_DIR   shim first, systemd-boot second, one UKI (build.sh,
 #                                      WOLOS_SB_LAYOUT=1)
-#   sb-layout.sh sign ISO KEY CERT     sign systemd-boot and the UKI, add the certificate (iso.yml,
+#   sb-layout.sh sign ISO KEY CERT     sign systemd-boot and the UKI, add the certificate (release.yml,
 #                                      once WOLOS_SB_KEY / WOLOS_SB_CERT exist)
 # layout: EFI/BOOT/BOOTX64.EFI becomes the pinned shim (Fedora's build, signed by Microsoft) with
 # MokManager (mmx64.efi) next to it; systemd-boot moves to EFI/BOOT/grubx64.efi, the second stage
@@ -14,7 +14,7 @@
 # key from disk") on the first boot with Secure Boot on.
 set -euo pipefail
 die() { echo "sb-layout.sh: $*" >&2; exit 1; }
-SHIM_SHA=351e131d3c4a636704e9cae7d1296baf8a05beca9922cfebbfa48933c9bf1ad3 # image/repo/wolos-shim
+SHIM_SHA=351e131d3c4a636704e9cae7d1296baf8a05beca9922cfebbfa48933c9bf1ad3 # wolos-pkgbuilds/wolos-shim
 MM_SHA=ed4442fa88cccba3a9e6a32d21a8f4c56bf5aab184f1fb9aadde8d3a9d04dc27
 UKIFY=$(command -v ukify || echo /usr/lib/systemd/ukify)
 export MTOOLS_SKIP_CHECK=1

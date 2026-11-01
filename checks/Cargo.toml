@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Contract tests of this repo's files (moved from wolos crates/controller/tests with them). Std only.
+# Run: cargo test --manifest-path checks/Cargo.toml (siblings: tests/support/siblings.rs).
+[package]
+name = "wolos-iso-checks"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-2.0-or-later"
+publish = false
+
+[workspace]

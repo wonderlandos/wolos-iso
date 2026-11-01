@@ -12,12 +12,12 @@ echo wolos-guest > "$R/etc/hostname"
 cat > "$R/etc/fstab" <<'EOF'
 /dev/vda /home btrfs subvol=/@home,compress=zstd 0 0
 EOF
-cp -r "$REPO"/image/files/usr/lib/sysctl.d/. "$R/usr/lib/sysctl.d/"
-cp "$REPO"/image/files/usr/lib/tmpfiles.d/70-wolos-performance.conf "$R/usr/lib/tmpfiles.d/"
-cp "$REPO"/image/files/usr/lib/systemd/zram-generator.conf "$R/usr/lib/systemd/"
+cp -r "${WOLOS_SRC:-$REPO/../wolos}"/files/usr/lib/sysctl.d/. "$R/usr/lib/sysctl.d/"
+cp "${WOLOS_SRC:-$REPO/../wolos}"/files/usr/lib/tmpfiles.d/70-wolos-performance.conf "$R/usr/lib/tmpfiles.d/"
+cp "${WOLOS_SRC:-$REPO/../wolos}"/files/usr/lib/systemd/zram-generator.conf "$R/usr/lib/systemd/"
 mkdir -p "$R/usr/lib/systemd/system.conf.d" "$R/usr/lib/systemd/user.conf.d"
-cp "$REPO"/image/files/usr/lib/systemd/system.conf.d/70-wolos-limits.conf "$R/usr/lib/systemd/system.conf.d/"
-cp "$REPO"/image/files/usr/lib/systemd/user.conf.d/70-wolos-limits.conf "$R/usr/lib/systemd/user.conf.d/"
+cp "${WOLOS_SRC:-$REPO/../wolos}"/files/usr/lib/systemd/system.conf.d/70-wolos-limits.conf "$R/usr/lib/systemd/system.conf.d/"
+cp "${WOLOS_SRC:-$REPO/../wolos}"/files/usr/lib/systemd/user.conf.d/70-wolos-limits.conf "$R/usr/lib/systemd/user.conf.d/"
 cat > "$R/usr/lib/systemd/system-generators/kbomb" <<'EOF'
 #!/bin/sh
 # Second disk: a tar with this run's test files, and after/ with the limits under test.

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Build [wolos-cachy] (ADR 0019): x86-64-v3 builds of the image's packages, frozen at the release.
-# Roots = image/arch/packages.x86_64 + desktop/packages.txt + image/repo/cachy-extra; their
-# dependency closure is resolved in the Arch repos at image/arch/snapshot. A package is taken from
+# Roots = profile/packages.x86_64 + profile/packages.desktop + release/cachy-extra; their
+# dependency closure is resolved in the Arch repos at profile/snapshot. A package is taken from
 # the upstream x86-64-v3 repos (cachyos-v3, cachyos-core-v3, cachyos-extra-v3, first hit wins)
 # only when its version matches the Arch snapshot's (same upstream version, another build);
 # otherwise the Arch package stays. An epoch ':' in a file name becomes '.' (release assets cannot
@@ -18,14 +18,14 @@
 #      WOLOS_CACHY_URL (upstream server, $repo; default the x86_64_v3 mirror),
 #      WOLOS_ARCH_URL (Arch server, $repo; default the archive at the snapshot),
 #      WOLOS_CACHY_KEY (upstream keyring, default /usr/share/pacman/keyrings/cachyos.gpg),
-#      WOLOS_CACHY_TRUST (trusted fingerprints, default image/repo/cachy-trusted),
+#      WOLOS_CACHY_TRUST (trusted fingerprints, default release/cachy-trusted),
 #      WOLOS_CACHY_NOVERIFY=1 (tests: sha256 only), WOLOS_SIGN_KEY | WOLOS_UNSIGNED=1 as build.sh,
 #      WOLOS_CACHY_REFRESH=1 (download the databases again), WOLOS_REPO_ADD (tests).
 set -euo pipefail
-HERE=$(cd "$(dirname "$0")" && pwd); IMG=$(dirname "$HERE"); REPO=$(dirname "$IMG")
+HERE=$(cd "$(dirname "$0")" && pwd); ROOT=$(dirname "$HERE")
 WORK=${WOLOS_WORK:-${WOLOS_VM:-$HOME/WolOS-vm}/build}
 OUT=${WOLOS_CACHY_DIR:-$WORK/cachy}
-SNAP=$(tr -d '[:space:]' < "$IMG/arch/snapshot")
+SNAP=$(tr -d '[:space:]' < "$ROOT/profile/snapshot")
 ARCH_URL=${WOLOS_ARCH_URL:-https://archive.archlinux.org/repos/${SNAP//-//}/\$repo/os/x86_64}
 CACHY_URL=${WOLOS_CACHY_URL:-https://mirror.cachyos.org/repo/x86_64_v3/\$repo}
 ARCH_REPOS="core extra multilib"
@@ -74,7 +74,7 @@ done
 if [ -n "${WOLOS_CACHY_PKGS:-}" ]; then
   roots=$WOLOS_CACHY_PKGS
 else
-  roots=$(cat "$IMG/arch/packages.x86_64" "$REPO/desktop/packages.txt" "$HERE/cachy-extra" 2>/dev/null |
+  roots=$(cat "$ROOT/profile/packages.x86_64" "$ROOT/profile/packages.desktop" "$HERE/cachy-extra" 2>/dev/null |
     sed 's/#.*//' | tr -s ' \t' '\n' | grep . | sort -u | tr '\n' ' ')
 fi
 awk -F'\t' -v roots="$roots" '
