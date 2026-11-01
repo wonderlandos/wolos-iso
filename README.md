@@ -18,12 +18,12 @@ published repo** (+ the Arch snapshot), never from a source tree, so an image is
 
 ## Release flow
 
-1. Packages land in `[wolos-testing]` (wolos-pkgbuilds `build.yml` -> `publish.yml`).
-2. Tag `vX.Y.Z` here: `release.yml` refreshes `[wolos-cachy]`, builds the ISO on the ECS cluster
+1. Packages land in `[wolos-testing]` (wolos-pkgbuilds `build.yml`, then the publish button in wolos: `what=packages`).
+2. Release `vX.Y.Z` from the publish button in wolos (`what=iso -f run=vX.Y.Z`; the signing keys live there): this repo's reusable `release.yml` refreshes `[wolos-cachy]`, builds the ISO on the ECS cluster
    from `[wolos-testing]` (`wolos-build iso --ecs`), boots it in a VM (`tests/test-install.sh`;
    with `WOLOS_SB_KEY`/`WOLOS_SB_CERT` also Secure Boot), signs `release.json`, and publishes the ISO,
    `.sha256`, `release.json` and `.sig` as the latest release of `wonderlandos/wolos-packages`.
-3. The tested packages are promoted to `[wolos]` (wolos-pkgbuilds `promote.yml`).
+3. The tested packages are promoted to `[wolos]` (publish button, `what=promote`).
 4. Users: `wolos-update-check.timer` fetches `releases/latest/download/release.json` (+ `.sig`);
    Software Update or `wolos-update-slot` runs `wol update apply` into the other slot.
 
