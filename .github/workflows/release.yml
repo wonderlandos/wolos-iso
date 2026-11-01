@@ -9,9 +9,9 @@
 # (wolos-pkgbuilds promote.yml).
 # Secrets: WOLOS_GPG_KEY (armored gpg key: [wolos-cachy] database), WOLOS_RELEASE_KEY (Ed25519 PEM,
 # the package key: release.json.sig), WOLOS_SB_KEY / WOLOS_SB_CERT (PEM, Secure Boot, ADR 0025; with
-# vars.WOLOS_SB_LAYOUT=1), WOLOS_RELEASES_TOKEN (writes the releases repo), WOLOS_BUILD_TOKEN (reads
-# the private wonderlandos/wolos-build). Variables: AWS_ROLE_ARN, AWS_REGION, CLUSTER, TASK_DEF_ISO,
-# CAPACITY, BUCKET (the cluster, OIDC), WOLOS_RELEASES_REPO.
+# vars.WOLOS_SB_LAYOUT=1), WOLOS_RELEASES_TOKEN (writes the releases repo). Variables: AWS_ROLE_ARN,
+# AWS_REGION, CLUSTER, TASK_DEF_ISO, CAPACITY, BUCKET (the cluster, OIDC), WOLOS_RELEASES_REPO.
+# The tool runs from the builder image (.github/builder, .github/builder-image; ECR over OIDC).
 name: release
 
 on:
@@ -46,11 +46,6 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
           path: wolos-iso
-      - uses: actions/checkout@v4
-        with:
-          repository: wonderlandos/wolos-build
-          token: ${{ secrets.WOLOS_BUILD_TOKEN }}
-          path: wolos-build
 
       - name: Releases token
         run: |
@@ -100,6 +95,9 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
+      # The tool: the builder image (.github/builder-image), not a checkout of the private repo.
+      - name: Builder registry
+        uses: aws-actions/amazon-ecr-login@v2
 
       # mkarchiso (archlinux, privileged task) on a whole host, from [wolos-testing] as published.
       - name: ISO on the build cluster
@@ -111,7 +109,7 @@ jobs:
           WOLOS_REPO_NAME: wolos-testing
           WOLOS_CACHY_DIR: out/cachy
           WOLOS_IMAGE_URL: https://github.com/${{ vars.WOLOS_RELEASES_REPO || 'wonderlandos/wolos-packages' }}/releases/download/${{ inputs.tag || github.ref_name }}
-        run: WOLOS_ISO=$PWD/wolos-iso wolos-build/wolos-build iso --ecs --out out/iso
+        run: WOLOS_ISO=$PWD/wolos-iso wolos-iso/.github/builder wolos-build iso --ecs --out out/iso
 
       - name: Release files
         run: |
