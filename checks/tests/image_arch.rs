@@ -267,19 +267,62 @@ fn profile_boots_linux_wolos_quietly_with_an_install_entry() {
     assert!(preset.contains("/boot/vmlinuz-linux-wolos") && preset.contains("archiso"));
 }
 
-/// WOLOS_STAGE_ONLY=1: the profile is staged (desktop packages merged, [wolos] read from the local
-/// repo for the build, image files, overlay and design in airootfs) and mkarchiso is not run.
+/// WOLOS_STAGE_ONLY=1: the profile is staged from the published repo (its database names the
+/// versions; desktop packages merged; [wolos-testing] from $WOLOS_REPO_URL with signatures checked;
+/// live-only files in airootfs) and mkarchiso is not run. `sudo` is a fake: the WolOS key goes into
+/// a copy of the host's pacman keyring, which a test host need not have.
 #[test]
-fn build_stages_the_profile_from_the_local_repo() {
+fn build_stages_the_profile_from_the_published_repo() {
+    use std::os::unix::fs::PermissionsExt;
     bash_n("build.sh");
     let d = scratch("stage");
-    let local = d.join("repo/x86_64");
-    fs::create_dir_all(&local).unwrap();
-    fs::write(local.join("wolos.db"), "").unwrap();
+    let repo_dir = d.join("repo");
+    fs::create_dir_all(&repo_dir).unwrap();
+    // A sync database: one `<name>-<ver>/desc` per package, as repo-add writes it.
+    let t = d.join("db");
+    for (n, v) in [("wolos-base", "0.11.4-1"), ("linux-wolos", "1:1.0+7.3-5")] {
+        let e = t.join(format!("{n}-{v}"));
+        fs::create_dir_all(&e).unwrap();
+        fs::write(
+            e.join("desc"),
+            format!("%FILENAME%
+{n}-{v}-x86_64.pkg.tar.zst
+
+%NAME%
+{n}
+
+%VERSION%
+{v}
+
+"),
+        )
+        .unwrap();
+    }
+    let o = Command::new("tar")
+        .arg("-czf")
+        .arg(repo_dir.join("wolos-testing.db"))
+        .arg("-C")
+        .arg(&t)
+        .arg(".")
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    fs::write(repo_dir.join("revision"), "r42
+").unwrap();
+    let bin = d.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    fs::write(bin.join("sudo"), "#!/bin/sh
+exit 0
+").unwrap();
+    fs::set_permissions(bin.join("sudo"), fs::Permissions::from_mode(0o755)).unwrap();
+    let url = format!("file://{}", repo_dir.display());
+    // The real file, not the overlay's link: build.sh copies $HERE/profile with cp -a, and a copied
+    // link would stage into this repo's profile/.
     let o = Command::new("bash")
-        .arg(repo("build.sh"))
-        .env("WOLOS_WORK", &d)
-        .env("WOLOS_REPO_DIR", d.join("repo"))
+        .arg(repo("build.sh").canonicalize().unwrap())
+        .env("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()))
+        .env("WOLOS_WORK", d.join("work"))
+        .env("WOLOS_REPO_URL", &url)
         .env("WOLOS_STAGE_ONLY", "1")
         .output()
         .unwrap();
@@ -289,40 +332,47 @@ fn build_stages_the_profile_from_the_local_repo() {
         "{out}{}",
         String::from_utf8_lossy(&o.stderr)
     );
-    let p = d.join("profile");
+    let p = d.join("work/profile");
     let pk = fs::read_to_string(p.join("packages.x86_64")).unwrap();
     assert!(
-        pk.contains("wolos-base\n") && pk.contains("steam\n"),
+        pk.contains("wolos-base
+") && pk.contains("steam
+"),
         "{pk}"
     );
+    assert!(!p.join("packages.desktop").exists());
     let pc = fs::read_to_string(p.join("pacman.conf")).unwrap();
-    assert!(
-        pc.contains(&format!(
-            "Server = file://{}/$arch",
-            d.join("repo").display()
-        )),
-        "{pc}"
-    );
     // pacstrap writes the database where pacman puts it on any host (install-run moves it into
     // the slot): the build's pacman.conf has no DBPath, the installed system's keeps it.
     assert!(!pc.contains("DBPath"), "{pc}");
+    // The WolOS key, in a keyring of the build's own.
+    assert!(
+        pc.contains(&format!("GPGDir = {}/", d.join("work/gnupg").display())),
+        "{pc}"
+    );
     // No systemd-firstboot prompt on the console: the Setup Assistant asks instead.
     let fb =
-        std::fs::read_link(d.join("profile/airootfs/etc/systemd/system/systemd-firstboot.service"));
+        std::fs::read_link(p.join("airootfs/etc/systemd/system/systemd-firstboot.service"));
     assert_eq!(fb.unwrap(), PathBuf::from("/dev/null"));
-    // The CI builder has the tree without .git: the revision comes from the repo, or "local".
-    assert!(read("build.sh").contains("rev-parse --short HEAD 2>/dev/null || echo local"));
+    // The published repo replaces [wolos], signatures required (the global SigLevel).
+    assert!(!pc.contains("
+[wolos]
+"), "{pc}");
     let wolos = pc
-        .split("\n[wolos]\n")
+        .split("
+[wolos-testing]
+")
         .nth(1)
-        .unwrap()
-        .split("\n[")
+        .unwrap_or_else(|| panic!("no [wolos-testing]: {pc}"))
+        .split("
+[")
         .next()
         .unwrap();
     assert!(
-        wolos.contains("SigLevel = Never") && wolos.matches("SigLevel").count() == 1,
+        wolos.contains(&format!("Server = {url}")) && !wolos.contains("SigLevel"),
         "{wolos}"
     );
+    assert!(pc.contains("SigLevel = Required"), "{pc}");
     // The installed system's pacman.conf keeps the published [wolos] server.
     let ac = fs::read_to_string(p.join("airootfs/etc/pacman.conf")).unwrap();
     assert!(!ac.contains("file://"));
@@ -330,7 +380,7 @@ fn build_stages_the_profile_from_the_local_repo() {
         !ac.contains("\nDBPath"),
         "install-run names it on the installed system"
     );
-    assert!(!d.join("profile/airootfs/usr/lib/pacman").exists());
+    assert!(!p.join("airootfs/usr/lib/pacman").exists());
     // Live-only files; everything else comes from the wolos-system package (a file in both would
     // stop pacstrap: airootfs is copied first).
     for f in [
@@ -375,17 +425,33 @@ fn release_manifest_names_snapshot_repo_image_and_hash() {
         .arg("2026-10-20")
         .arg("r42")
         .arg("https://example.org/img")
+        .arg("0.11.4")
+        .arg("1:1.0+7.3-5")
         .output()
         .unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
-    assert_eq!(v["snapshot"], "2026/10/20");
-    assert_eq!(v["wolos_repo"], "r42");
-    assert_eq!(v["image"], "https://example.org/img/wolos-0.11-x86_64.iso");
+    let out = String::from_utf8(o.stdout).unwrap();
+    // One flat JSON object of plain values (this crate is std only: no JSON parser).
+    let v = |k: &str| -> String {
+        let at = out.find(&format!("\"{k}\":")).unwrap_or_else(|| panic!("{k} in {out}"));
+        let r = &out[at + k.len() + 3..];
+        match r.strip_prefix('"') {
+            Some(r) => r[..r.find('"').unwrap()].to_owned(),
+            None => r[..r.find([',', '}']).unwrap()].to_owned(),
+        }
+    };
+    assert!(out.trim().starts_with('{') && out.trim().ends_with('}'), "{out}");
+    assert_eq!(v("version"), "0.11.4");
+    assert_eq!(v("snapshot"), "2026/10/20");
+    assert_eq!(v("wolos_repo"), "r42");
+    assert_eq!(v("cachy"), "");
+    assert_eq!(v("kernel"), "1:1.0+7.3-5");
+    assert_eq!(v("image"), "https://example.org/img/wolos-0.11-x86_64.iso");
+    assert_eq!(v("size"), "9"); // "iso bytes"
     // sha256("iso bytes")
     let sum = Command::new("sha256sum").arg(&iso).output().unwrap();
     let sum = String::from_utf8_lossy(&sum.stdout);
-    assert_eq!(v["sha256"], sum.split_whitespace().next().unwrap());
+    assert_eq!(v("sha256"), sum.split_whitespace().next().unwrap());
 }
 
 /// base-manifest.sh PKG...: "sha256  /path" for every file of the base packages, sorted; the
@@ -478,7 +544,7 @@ fn live_iso_secure_boot_layout_is_ready_and_off() {
         b.contains(r#"if [ "${WOLOS_SB_LAYOUT:-0}" = 1 ]; then"#),
         "no switch"
     );
-    assert!(b.contains(r#""$IMG/sb-layout.sh" layout"#));
+    assert!(b.contains(r#""$HERE/release/sb-layout.sh" layout"#));
     let l = read("release/sb-layout.sh");
     let shim = read("wolos-shim/PKGBUILD");
     for f in ["shimx64.efi", "mmx64.efi"] {

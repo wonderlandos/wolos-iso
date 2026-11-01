@@ -31,6 +31,34 @@ const LINUX_FIRMWARE_PARTS: &[&str] = &[
     "linux-firmware-realtek",
 ];
 
+/// The Arch packages the hardware catalogue names (wolos `crates/core/src/hardware/catalog.rs`,
+/// a sibling: this crate is std only): the strings of its `FW_*` consts and of every `firmware:` /
+/// `packages:` list.
+fn catalogue_packages() -> Vec<String> {
+    let src = read("crates/core/src/hardware/catalog.rs");
+    let mut v: Vec<String> = Vec::new();
+    for l in src.lines() {
+        let l = l.trim();
+        let list = if l.starts_with("const FW_") {
+            l.split_once('=').map(|(_, r)| r)
+        } else {
+            l.strip_prefix("firmware:").or_else(|| l.strip_prefix("packages:"))
+        };
+        let Some(list) = list.and_then(|r| r.trim().strip_prefix("&[")) else { continue };
+        let list = list.split(']').next().unwrap();
+        for p in list.split(',').map(|p| p.trim().trim_matches('"')).filter(|p| !p.is_empty()) {
+            if !v.iter().any(|x| x == p) {
+                v.push(p.to_owned());
+            }
+        }
+    }
+    // The parse still sees the catalogue: a reformat that hides its lists fails here.
+    for want in ["intel-ucode", "linux-firmware-intel", "vulkan-radeon", "nvidia-open"] {
+        assert!(v.iter().any(|x| x == want), "catalog.rs: {want} not found ({v:?})");
+    }
+    v
+}
+
 fn shipped() -> Vec<String> {
     let mut v = Vec::new();
     for f in ["profile/packages.x86_64", "profile/packages.desktop"] {
@@ -49,19 +77,14 @@ fn every_catalogue_package_ships_offline_or_is_listed_as_not_shipped() {
     let pkgs = shipped();
     let has = |p: &str| pkgs.iter().any(|x| x == p);
     let covered = |p: &str| has(p) || (LINUX_FIRMWARE_PARTS.contains(&p) && has("linux-firmware"));
-    for e in CATALOG {
-        for p in e.firmware.iter().chain(e.packages) {
-            let skip = NOT_SHIPPED.iter().any(|(n, _)| n == p);
-            assert!(
-                covered(p) || skip,
-                "{}: {p} neither shipped nor in NOT_SHIPPED",
-                e.name
-            );
-            assert!(
-                !(covered(p) && skip),
-                "{p} is shipped: drop it from NOT_SHIPPED"
-            );
-        }
+    for p in &catalogue_packages() {
+        let p = p.as_str();
+        let skip = NOT_SHIPPED.iter().any(|(n, _)| *n == p);
+        assert!(covered(p) || skip, "{p} neither shipped nor in NOT_SHIPPED");
+        assert!(
+            !(covered(p) && skip),
+            "{p} is shipped: drop it from NOT_SHIPPED"
+        );
     }
     for want in [
         "linux-firmware",

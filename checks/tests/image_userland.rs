@@ -81,7 +81,7 @@ fn image_ships_the_everyday_userland() {
 /// and that package has no mark in its name and is not in the image.
 #[test]
 fn the_image_leaves_the_firefox_folder_alone() {
-    let root = std::path::siblings::root();
+    let root = siblings::root();
     assert!(!root.join("desktop/overlay/usr/lib/firefox").exists());
     assert!(
         root.join("wolos-browser-config/PKGBUILD")

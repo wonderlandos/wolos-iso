@@ -30,4 +30,7 @@ jobs:
         working-directory: wolos-iso
         run: shellcheck -S error build.sh release/*.sh tests/*.sh profile/profiledef.sh
       - name: Contract tests
-        run: cargo test --manifest-path wolos-iso/checks/Cargo.toml
+        run: |
+          # bsdtar: build.sh reads the repo database with it (the stage-only test).
+          command -v bsdtar >/dev/null || { sudo apt-get update -q && sudo apt-get install -yq libarchive-tools; }
+          cargo test --manifest-path wolos-iso/checks/Cargo.toml

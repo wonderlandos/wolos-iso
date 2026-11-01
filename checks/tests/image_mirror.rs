@@ -27,13 +27,6 @@ fn scratch(name: &str) -> PathBuf {
     d
 }
 
-fn run(line: &str, env: &mut FakeEnv) -> i32 {
-    env.out.clear();
-    env.err.clear();
-    let argv: Vec<&str> = line.split_whitespace().collect();
-    execute(&parse(&argv).unwrap(), env)
-}
-
 /// A sync database: one `<name>-<ver>/desc` per package.
 fn db(dir: &std::path::Path, name: &str, pkgs: &[(&str, &str, &str, &str)]) {
     let t = dir.join(format!("t-{name}"));
