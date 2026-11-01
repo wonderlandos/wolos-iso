@@ -72,12 +72,10 @@ jobs:
             g=$(mktemp -d)
             gpg --homedir "$g" --batch --keyserver hkps://keyserver.ubuntu.com --recv-keys $(cut -d: -f1 wolos-iso/release/cachy-trusted)
             gpg --homedir "$g" --batch --export > /tmp/upstream.gpg
-            if [ -n "$GPG_KEY" ]; then
-              echo "$GPG_KEY" | gpg --batch --import
-              export WOLOS_SIGN_KEY=$(gpg --list-secret-keys --with-colons | awk -F: "/^fpr/ {print \$10; exit}")
-            else
-              export WOLOS_UNSIGNED=1
-            fi
+            # A release is always signed: no key, no release.
+            if [ -z "$GPG_KEY" ]; then echo "::error::secret WOLOS_GPG_KEY is not set"; exit 1; fi
+            echo "$GPG_KEY" | gpg --batch --import
+            export WOLOS_SIGN_KEY=$(gpg --list-secret-keys --with-colons | awk -F: "/^fpr/ {print \$10; exit}")
             WOLOS_CACHY_KEY=/tmp/upstream.gpg WOLOS_CACHY_DIR=/src/out/cachy wolos-iso/release/mirror-cachy.sh
           '
           sudo chown -R "$(id -u)" out/cachy
