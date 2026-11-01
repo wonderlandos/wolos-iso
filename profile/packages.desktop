@@ -2,7 +2,7 @@
 # Base system, kernel, firmware, networking: profile/packages.x86_64. build.sh merges both.
 # WolOS itself: wol daemons, shell, overlay, plugins (built into [wolos] by wolos-build/wolos-build).
 wolos-system
-# Graphics / session: the WolOS Hyprland fork (patches in wolos-pkgbuilds/hyprland-wolos/patches), Mesa, Vulkan, VA-API.
+# Graphics / session: the WolOS Hyprland fork (patches in wolos-pkgbuilds/hyprland-wolos), Mesa, Vulkan, VA-API.
 hyprland-wolos
 hypridle
 xdg-desktop-portal-hyprland
