@@ -8,8 +8,8 @@
 # Env: WOLOS_REPO_NAME (default wolos-testing; wolos = stable), WOLOS_REPO_URL (default its GitHub
 #      release in wonderlandos/wolos-packages), WOLOS_WORK (default ~/WolOS-vm/build),
 #      WOLOS_OUT (default $WORK/out), WOLOS_STAGE_ONLY=1 (stage the profile, no ISO),
-#      WOLOS_IMAGE_URL (manifest base URL), WOLOS_CACHY_DIR ([wolos-cachy], its revision),
-#      WOLOS_SB_LAYOUT=1 (shim layout), WOLOS_PODMAN=1 (force the container).
+#      WOLOS_IMAGE_URL (manifest base URL), WOLOS_SB_LAYOUT=1 (shim layout),
+#      WOLOS_PODMAN=1 (force the container).
 #      Disk: ~15 GB in $WORK (packages + squashfs + ISO).
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -98,6 +98,10 @@ clean_work   # disk: the pacstrap root is in the squashfs now
 # until the WolOS Secure Boot key exists; release.yml signs it with WOLOS_SB_KEY / WOLOS_SB_CERT.
 # The shim comes from the repo the image was built from.
 if [ "${WOLOS_SB_LAYOUT:-0}" = 1 ]; then
+  # The layout without a signature is an image shim refuses wherever Secure Boot is on: the
+  # person's first boot would be the firmware's error screen. No key, no layout (release.yml:
+  # WOLOS_SB_CERT, build boxes: WOLOS_SB_CERT=path).
+  [ -n "${WOLOS_SB_CERT:-}" ] || die "WOLOS_SB_LAYOUT=1 needs WOLOS_SB_CERT (the signing certificate): unsigned, the image would not boot with Secure Boot on"
   mkdir -p "$WORK/shim/x86_64"
   f=$(field wolos-shim FILENAME)
   curl -fsSL --retry 5 -o "$WORK/shim/x86_64/$f" "$URL/$f"
@@ -107,7 +111,7 @@ fi
 # 4. Release manifest next to the ISO.
 ISO=$(ls -t "$OUT"/wolos-*.iso | head -1)
 "$HERE/release/release-manifest.sh" "$ISO" "$SNAP" "$REV" "${WOLOS_IMAGE_URL:-https://github.com/wonderlandos/wolos-packages/releases/download/$SNAP}" \
-  "$VER" "$KV" "$(cat "${WOLOS_CACHY_DIR:-$WORK/cachy}/revision" 2>/dev/null || :)" > "${ISO%.iso}.json"
+  "$VER" "$KV" > "${ISO%.iso}.json"
 # A release asset is at most 2 GiB: the ISO is one download, never split.
 SZ=$(stat -c %s "$ISO")
 [ "$SZ" -le $((2047 * 1024 * 1024)) ] || die "$ISO is $SZ bytes, over the 2047 MiB release asset limit"

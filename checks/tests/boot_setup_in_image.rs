@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+//! What this file checks (wolos-iso): boot-setup in the image: the tools it needs ship and the first stage stays pinned.
 //! boot-setup with every tool faked: which chain each tier gets and what it asks of the firmware.
 #![allow(dead_code, unused_imports)]
 #[path = "support/siblings.rs"]

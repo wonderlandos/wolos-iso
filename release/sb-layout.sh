@@ -73,10 +73,29 @@ sign() {
     sbverify --cert "$cert" "$t/$f.signed" >/dev/null || die "$f: signature does not verify"
   done
   openssl x509 -in "$cert" -outform DER -out "$t/wolos-secureboot.cer"
+  # What the blue screen is and what to do on it, for the person who meets MokManager first: in
+  # the root, and next to the certificate where "Enroll key from disk" browses (EFI/BOOT).
+  cat > "$t/README-SECURE-BOOT.txt" <<'TXT'
+WolOS and Secure Boot
+
+Started with Secure Boot on, this medium shows a blue screen first. It comes
+from your computer's firmware (shim's MokManager), not from WolOS, and it
+waits for you.
+
+  1. Press any key.
+  2. Choose "Enroll key from disk", then this medium, then
+     EFI\BOOT\wolos-secureboot.cer, then Continue, then Yes.
+  3. Choose Reboot. WolOS starts; the screen does not come back.
+
+After installing, the installed system has its own key; the installer says
+what to expect before the restart. Without Secure Boot this file is of no use.
+TXT
   mcopy -o -i "$e" "$t/wolos.efi.signed" ::/EFI/Linux/wolos.efi
   mcopy -o -i "$e" "$t/grubx64.efi.signed" ::/EFI/BOOT/grubx64.efi
   mcopy -o -i "$e" "$t/wolos-secureboot.cer" ::/wolos-secureboot.cer
-  echo "sb-layout: signed systemd-boot and the UKI, /wolos-secureboot.cer added in $iso"
+  mcopy -o -i "$e" "$t/wolos-secureboot.cer" ::/EFI/BOOT/wolos-secureboot.cer
+  mcopy -o -i "$e" "$t/README-SECURE-BOOT.txt" ::/README-SECURE-BOOT.txt
+  echo "sb-layout: signed systemd-boot and the UKI, /wolos-secureboot.cer (also EFI/BOOT/) and /README-SECURE-BOOT.txt added in $iso"
 }
 
 case ${1:-} in

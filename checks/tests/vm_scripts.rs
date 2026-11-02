@@ -24,6 +24,7 @@ fn scripts_parse_and_freebsd_vm_tooling_is_gone() {
         "tests/run-installed.sh",
         "tests/test-install.sh",
         "tests/run-gpu.sh",
+        "tests/test-audio.sh",
     ] {
         let o = Command::new("sh").arg("-n").arg(repo(s)).output().unwrap();
         assert!(
@@ -132,4 +133,37 @@ fn install_test_is_unattended_and_proves_the_bystander_disk_untouched() {
     ] {
         assert!(t.contains(want), "test-install.sh lacks {want}");
     }
+}
+
+/// test-audio.sh runs inside a booted WolOS and proves the sound rules end to end: the WolOS
+/// fragments are what PipeWire loaded (64-frame floor, 96 kHz allowed), a 64-frame stream on a
+/// null sink plays with 0 xruns, a forced buffer applies and reverts, echo cancel and the App
+/// Mix load on demand and unload, `wol audio reset` is a dry run, `wol audio doctor` passes.
+#[test]
+fn audio_test_proves_floor_force_modules_and_reset_in_the_guest() {
+    let t = read("tests/test-audio.sh");
+    for want in [
+        "pw-metadata -n settings 0",
+        "clock.min-quantum",
+        "clock.allowed-rates",
+        "module-null-sink",
+        "sink_name=wolos_test",
+        "pw-cat",
+        "--latency 64/48000",
+        "--raw",
+        "pw-top -b -n",
+        "clock.force-quantum 256",
+        "clock.force-quantum 0",
+        "module-echo-cancel",
+        "wol audio appmix on",
+        "wol audio appmix off",
+        "wol audio reset",
+        "wpctl clear-default",
+        "wol audio doctor",
+        "trap cleanup EXIT",
+        "test-audio: PASS",
+    ] {
+        assert!(t.contains(want), "test-audio.sh lacks {want}");
+    }
+    assert!(!t.contains("reset --yes"), "the guest test never resets for real");
 }

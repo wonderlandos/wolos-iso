@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+//! What this file checks (wolos-iso): The archiso profile (ADR 0016): snapshot, pacman.conf order, package list, boot entries, the build from the published repo and the release manifest.
 //! The Arch Linux image (ADR 0016): mkarchiso profile `profile`, pinned to one Arch Linux Archive
 //! date, `[wolos]` before the Arch repos, linux-wolos only, the `[wolos]` repo build and the release
 //! manifest. Scripts run against fakes; nothing here needs root or the network.
@@ -71,7 +72,8 @@ fn snapshot_is_one_archive_date() {
 
 /// pacman reads only the snapshot date; `[wolos]` comes first so linux-wolos and the WolOS
 /// packages win over same-named Arch ones. Arch servers inline (nothing rolls in between
-/// releases); `[wolos]` and `[wolos-cachy]` read the dated wolos-mirrorlist (ADR 0019).
+/// releases); `[wolos]` reads the dated wolos-mirrorlist, the three gated CachyOS v3 sections read
+/// wolos-cachy-mirrorlist (the CDN redirect, ADR 0030), and x86_64_v3 packages are accepted.
 #[test]
 fn pacman_conf_is_pinned_and_wolos_comes_first() {
     let date = snapshot().replace('-', "/");
@@ -102,9 +104,21 @@ fn pacman_conf_is_pinned_and_wolos_comes_first() {
             inc,
             [
                 "Include = /etc/pacman.d/wolos-mirrorlist",
-                "#Include = /etc/pacman.d/wolos-mirrorlist"
+                "#Include = /etc/pacman.d/wolos-cachy-mirrorlist",
+                "#Include = /etc/pacman.d/wolos-cachy-mirrorlist",
+                "#Include = /etc/pacman.d/wolos-cachy-mirrorlist"
             ],
-            "{f}: only [wolos] and the gated [wolos-cachy]"
+            "{f}: only [wolos] and the three gated CachyOS sections"
+        );
+        let gated: Vec<&str> = c.lines().filter(|l| l.starts_with("#[")).collect();
+        assert_eq!(
+            gated,
+            ["#[cachyos-v3]", "#[cachyos-core-v3]", "#[cachyos-extra-v3]"],
+            "{f}: gated sections, in CachyOS order"
+        );
+        assert!(
+            c.contains("\nArchitecture = x86_64 x86_64_v3\n"),
+            "{f}: CachyOS v3 packages carry arch x86_64_v3"
         );
         assert!(c.contains("SigLevel = Required"), "{f}: signed packages");
     }
@@ -129,7 +143,7 @@ fn every_tool_wol_install_runs_ships_in_the_image() {
             "wolos-base",
             &[
                 "blkid", "cat", "df", "lsblk", "mkdir", "mkswap", "mount", "partx", "sfdisk",
-                "udevadm", "umount",
+                "test", "udevadm", "umount",
             ],
         ),
     ];
@@ -444,7 +458,7 @@ fn release_manifest_names_snapshot_repo_image_and_hash() {
     assert_eq!(v("version"), "0.11.4");
     assert_eq!(v("snapshot"), "2026/10/20");
     assert_eq!(v("wolos_repo"), "r42");
-    assert_eq!(v("cachy"), "");
+    assert!(!out.contains("\"cachy\""), "no cachy field since ADR 0030: {out}");
     assert_eq!(v("kernel"), "1:1.0+7.3-5");
     assert_eq!(v("image"), "https://example.org/img/wolos-0.11-x86_64.iso");
     assert_eq!(v("size"), "9"); // "iso bytes"

@@ -15,20 +15,25 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           path: wolos-iso
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: wonderlandos/wolos
           path: wolos
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: wonderlandos/wolos-pkgbuilds
           path: wolos-pkgbuilds
+      - name: Pin lint (uses @sha, images @sha256; wolos/tools/ci/pin-lint.py)
+        run: python3 wolos/tools/ci/pin-lint.py wolos-iso
       - name: shellcheck
         working-directory: wolos-iso
         run: shellcheck -S error build.sh release/*.sh tests/*.sh profile/profiledef.sh
+      - name: "Script headers: parse, SPDX on line 2, purpose on line 3 (wolos/docs/STANDARDS.md §2)"
+        working-directory: wolos-iso
+        run: bash ../wolos/tools/check-headers.sh build.sh release/*.sh tests/*.sh
       - name: Contract tests
         run: |
           # bsdtar: build.sh reads the repo database with it (the stage-only test).

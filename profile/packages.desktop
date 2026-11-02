@@ -44,6 +44,7 @@ pipewire-libcamera
 gst-plugin-pipewire
 lib32-pipewire
 wireplumber
+noise-suppression-for-voice   # RNNoise LADSPA plugin: Settings > Sound "Reduce background noise" (loaded on demand)
 playerctl
 # Wayland tools used by keybinds
 grim

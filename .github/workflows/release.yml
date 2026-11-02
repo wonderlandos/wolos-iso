@@ -1,20 +1,20 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# A WolOS release: on a tag v*, refresh [wolos-cachy] (release/mirror-cachy.sh, ADR 0019), build the
-# ISO with mkarchiso on the ECS cluster from the published [wolos-testing] repo (wolos-build iso
+# A WolOS release: on a tag v*, build the ISO with mkarchiso on the ECS cluster from the published
+# [wolos-testing] repo (wolos-build iso
 # --ecs; never from a source tree), boot and install it in a VM, sign release.json, and publish the
 # ISO, its .sha256 and release.json (+ release.json.sig) as the latest release of
 # vars.WOLOS_RELEASES_REPO: release.json is what `update-check` and `wol update` read.
 # Reusable: called only by wonderlandos/wolos .github/workflows/publish.yml (what=iso, run=<tag>),
-# the one repo that holds the keys (secrets: inherit); OIDC subject = wolos main, so vars.* are
+# the one repo that holds the keys (explicit secrets); OIDC subject = wolos main, so vars.* are
 # wolos's. The tag (vX.Y.Z) is a tag of wolos-iso; calling again re-runs its release (same checks).
 # The runner never builds: it signs, tests and publishes. Then promote the packages to [wolos]
 # (what=promote, wolos-pkgbuilds promote.yml).
-# Every result also lands in s3://$BUCKET/runs/release-<tag>/{cachy,dist}/ (+ cachy.sh, release.sh:
-# the release writes). With secrets.WOLOS_RELEASES_TOKEN they run here; without it (the documented
+# Every result also lands in s3://$BUCKET/runs/release-<tag>/dist/ (+ release.sh: the release
+# writes). With secrets.WOLOS_RELEASES_TOKEN they run here; without it (the documented
 # hand mode) nothing is written to the releases repo and a ::notice:: gives main the command to run
 # with the lead's gh login. A missing signing key is always an error.
-# Secrets: WOLOS_GPG_KEY (armored gpg key: [wolos-cachy] database), WOLOS_RELEASE_KEY (Ed25519 PEM,
-# the package key: release.json.sig), WOLOS_SB_KEY / WOLOS_SB_CERT (PEM, Secure Boot, ADR 0025; with
+# Secrets: WOLOS_RELEASE_KEY (Ed25519 PEM, the package key: release.json.sig), WOLOS_SB_KEY /
+# WOLOS_SB_CERT (PEM, Secure Boot, ADR 0025; with
 # vars.WOLOS_SB_LAYOUT=1), WOLOS_RELEASES_TOKEN (optional: writes the releases repo). Variables:
 # AWS_ROLE_ARN, AWS_REGION, CLUSTER, TASK_DEF_ISO, CAPACITY, BUCKET (the cluster, OIDC), WOLOS_RELEASES_REPO.
 # The tool runs from the builder image (.github/builder, .github/builder-image; ECR over OIDC).
@@ -27,6 +27,15 @@ on:
         description: Release tag of wolos-iso (vX.Y.Z)
         type: string
         required: true
+    secrets:
+      WOLOS_RELEASE_KEY:
+        required: true
+      WOLOS_SB_KEY:
+        required: false
+      WOLOS_SB_CERT:
+        required: false
+      WOLOS_RELEASES_TOKEN:
+        required: false
 
 permissions:
   contents: read
@@ -35,6 +44,9 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # Required reviewers: the lead configures them on the `release` environment of the caller
+    # repo (wolos, Settings > Environments > release). Signing secrets are passed explicitly.
+    environment: release
     timeout-minutes: 360
     env:
       TAG: ${{ inputs.tag }}
@@ -52,65 +64,20 @@ jobs:
           case $TAG in v[0-9]*.*) ;; *) echo "::error::tag '$TAG' is not vX.Y.Z"; exit 1 ;; esac
           [ -n "$BUCKET" ] || { echo "::error::vars.BUCKET is not set in the calling repo"; exit 1; }
           [ "$UPLOAD" = 1 ] || echo "::notice::no WOLOS_RELEASES_TOKEN: hand mode, $GH_REPO is only read"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: wonderlandos/wolos-iso
           ref: refs/tags/${{ inputs.tag }}
           path: wolos-iso
 
-      - name: The [wolos-cachy] repo
-        id: cachy
-        env:
-          GPG_KEY: ${{ secrets.WOLOS_GPG_KEY }}
-        run: |
-          snap=$(tr -d '[:space:]' < wolos-iso/profile/snapshot)
-          tag=wolos-cachy-$snap
-          mkdir -p out/cachy/x86_64
-          # Resume: verified packages of the last refresh are kept, the rest is downloaded.
-          gh release download "$tag" --dir out/cachy/x86_64 --pattern '*.pkg.tar.zst' 2>/dev/null || true
-          docker run --rm -v "$PWD:/src" -w /src -e GPG_KEY archlinux:base-devel bash -euo pipefail -c '
-            pacman -Syu --noconfirm --needed curl gnupg libarchive
-            # Upstream signing keys by the fingerprints pinned in release/cachy-trusted.
-            g=$(mktemp -d)
-            gpg --homedir "$g" --batch --keyserver hkps://keyserver.ubuntu.com --recv-keys $(cut -d: -f1 wolos-iso/release/cachy-trusted)
-            gpg --homedir "$g" --batch --export > /tmp/upstream.gpg
-            # A release is always signed: no key, no release.
-            if [ -z "$GPG_KEY" ]; then echo "::error::secret WOLOS_GPG_KEY is not set"; exit 1; fi
-            echo "$GPG_KEY" | gpg --batch --import
-            export WOLOS_SIGN_KEY=$(gpg --list-secret-keys --with-colons | awk -F: "/^fpr/ {print \$10; exit}")
-            WOLOS_CACHY_KEY=/tmp/upstream.gpg WOLOS_CACHY_DIR=/src/out/cachy wolos-iso/release/mirror-cachy.sh
-          '
-          sudo chown -R "$(id -u)" out/cachy
-          cat out/cachy/sizes.txt >> "$GITHUB_STEP_SUMMARY"
-          cd out/cachy/x86_64
-          for l in wolos-cachy.db wolos-cachy.files wolos-cachy.db.sig wolos-cachy.files.sig; do
-            [ -L "$l" ] && cp --remove-destination "$(readlink -f "$l")" "$l"
-          done
-          rm -f ./*.pkg.tar.zst.sig   # inside the database
-          if find . -type f -size +2047M | grep -q .; then echo "::error::asset over 2 GiB"; exit 1; fi
-          n=$(ls | wc -l); [ "$n" -le 1000 ] || { echo "::error::$n assets, GitHub keeps 1000"; exit 1; }
-          echo "[wolos-cachy] $n assets, $(du -cb . | tail -1 | cut -f1) bytes" | tee -a "$GITHUB_STEP_SUMMARY"
-          # The release writes, run in the [wolos-cachy] directory: here (token) or by main (hand mode).
-          mkdir -p "$GITHUB_WORKSPACE/out/publish"
-          printf 'tag=%s\n' "$tag" > "$GITHUB_WORKSPACE/out/publish/cachy.sh"
-          cat >> "$GITHUB_WORKSPACE/out/publish/cachy.sh" <<'SH'
-          gh release view "$tag" >/dev/null 2>&1 ||
-            gh release create "$tag" --title "[wolos-cachy] repo ($tag)" --notes "pacman repository" --latest=false
-          gh release upload "$tag" --clobber ./*
-          gh release view "$tag" --json assets -q '.assets[].name' | while read -r a; do
-            [ -e "$a" ] || gh release delete-asset "$tag" "$a" --yes
-          done
-          SH
-          if [ "$UPLOAD" = 1 ]; then sh -eu "$GITHUB_WORKSPACE/out/publish/cachy.sh"; fi
-
       - name: AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
       # The tool: the builder image (.github/builder-image), not a checkout of the private repo.
       - name: Builder registry
-        uses: aws-actions/amazon-ecr-login@v2
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
 
       # mkarchiso (archlinux, privileged task) on a whole host, from [wolos-testing] as published.
       - name: ISO on the build cluster
@@ -120,7 +87,6 @@ jobs:
           CAPACITY: ${{ vars.CAPACITY }}
           BUCKET: ${{ vars.BUCKET }}
           WOLOS_REPO_NAME: wolos-testing
-          WOLOS_CACHY_DIR: out/cachy
           WOLOS_IMAGE_URL: https://github.com/${{ vars.WOLOS_RELEASES_REPO || 'wonderlandos/wolos-packages' }}/releases/download/${{ inputs.tag || github.ref_name }}
         run: WOLOS_ISO=$PWD/wolos-iso wolos-iso/.github/builder wolos-build iso --ecs --out out/iso
 
@@ -138,7 +104,7 @@ jobs:
         run: |
           iso=$(ls dist/*.iso)
           docker run --rm --device /dev/kvm -v "$PWD:/src" -w /src archlinux:latest bash -euo pipefail -c "
-            pacman -Sy --noconfirm --needed qemu-base edk2-ovmf libarchive util-linux python >/dev/null
+            pacman -Sy --noconfirm --needed qemu-base edk2-ovmf libarchive util-linux python python-pillow mtools dosfstools swtpm >/dev/null
             WOLOS_VM=/src/out/vm sh wolos-iso/tests/test-install.sh $iso || true
             cat /src/out/vm/test/checks.txt"
           grep -q 'BOOT PASS' out/vm/test/checks.txt && ! grep -q 'FAIL' out/vm/test/checks.txt
@@ -169,7 +135,9 @@ jobs:
           json.dump(m, open("dist/release.json", "w"), separators=(",", ":"))
           PY
           elif [ "$WOLOS_SB_LAYOUT" = 1 ]; then
-            echo "::warning::WOLOS_SB_LAYOUT=1 without WOLOS_SB_KEY/WOLOS_SB_CERT: the image boots with Secure Boot off only"
+            # Unsigned, the shim layout is an image that fails on every PC with Secure Boot on: not a release.
+            echo "::error::WOLOS_SB_LAYOUT=1 without WOLOS_SB_KEY/WOLOS_SB_CERT: the image would not boot with Secure Boot on; add the secrets or set WOLOS_SB_LAYOUT=0"
+            exit 1
           fi
 
       - name: Sign release.json
@@ -186,6 +154,7 @@ jobs:
       - name: Publish the release
         run: |
           snap=$(tr -d '[:space:]' < wolos-iso/profile/snapshot)
+          mkdir -p out/publish
           printf 'TAG=%s\nsnap=%s\n' "$TAG" "$snap" > out/publish/release.sh
           cat >> out/publish/release.sh <<'SH'
           gh release view "$TAG" >/dev/null 2>&1 ||
@@ -195,17 +164,15 @@ jobs:
           gh release edit "$TAG" --latest
           SH
           s3=s3://$BUCKET/runs/$RUN
-          aws s3 sync --quiet --delete out/cachy/x86_64/ "$s3/cachy/"
           aws s3 sync --quiet --delete dist/ "$s3/dist/"
-          aws s3 cp --quiet out/publish/cachy.sh "$s3/cachy.sh"
           aws s3 cp --quiet out/publish/release.sh "$s3/release.sh"
-          echo "release files: $s3/{cachy,dist}/" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "release files: $s3/dist/" | tee -a "$GITHUB_STEP_SUMMARY"
           if [ "$UPLOAD" = 1 ]; then (cd dist && sh -eu ../out/publish/release.sh); exit 0; fi
           d=wolos-$RUN
-          cmd="mkdir -p $d && aws s3 sync $s3/ $d/ && (cd $d/cachy && GH_REPO=$GH_REPO sh -eux ../cachy.sh) && (cd $d/dist && GH_REPO=$GH_REPO sh -eux ../release.sh)"
+          cmd="mkdir -p $d && aws s3 sync $s3/ $d/ && (cd $d/dist && GH_REPO=$GH_REPO sh -eux ../release.sh)"
           { echo "### Not published: no WOLOS_RELEASES_TOKEN (hand mode)"; echo '```'; echo "$cmd"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           echo "::notice title=Release built and signed, not published (no WOLOS_RELEASES_TOKEN)::Publish with your gh login: $cmd"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-${{ inputs.tag }}
           path: |

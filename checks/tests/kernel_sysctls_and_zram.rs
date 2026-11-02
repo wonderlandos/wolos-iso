@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+//! What this file checks (wolos-iso): The image ships the memory and latency sysctls and zram for linux-wolos.
 //! linux-wolos (ADR 0016): the WolOS kernel fork at a pinned commit + Arch's config at the snapshot +
 //! `linux-wolos/wolos.config` + extra patches from `$WOLOS_TREE/kernel/linux/patches` when present.
 //! The kernel builds with makepkg; these tests pin what the recipe and its prepare step must do.
