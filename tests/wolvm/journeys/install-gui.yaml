@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# The installer app, driven like a person with keys. A template: the agent checks every
+# screenshot (Read tool) and edits keys/clicks to the screen it sees, then reruns with --from N.
+name: installer by keyboard
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: installer welcome page
+- checkpoint: installer-open
+- key: tab
+- key: ret
+  caption: next page (language)
+- wait-stable:
+  timeout: 30
+- key: ret
+  caption: keyboard
+- wait-stable:
+  timeout: 30
+- note: "continue: disk, account (type the name/password), summary, Install"
+- ssh: "journalctl -b --no-pager -n 80 -t wol-installer"
+  rc: any
+  save: installer-journal.txt

@@ -6,15 +6,20 @@
 # Usage: tests/test-installer.sh remaster BASE.iso BIN_DIR | tests/test-installer.sh run SCENARIO...
 #        tests/test-installer.sh layouts BIN_DIR NAME...   (real partitioning on loop devices, no VM)
 # Scenarios: erase alongside-windows alongside-linux manual manual-ext4 password encrypted-alongside tpm medium
-# Env: WOLOS_E2E (work dir), WOLOS_OVMF, WOLOS_E2E_INSTALL_S, WOLOS_E2E_BOOT_S (longer without /dev/kvm).
-# Needs: qemu, edk2-ovmf, swtpm, sudo, squashfs-tools, xorriso.
+#            bitlocker-windows reinstall-windows
+# Exit status of `run`: 1 when any E2E FAIL line came out or a scenario left no E2E PASS line
+# (tests/test/verdict.sh), else 0.
+# VMs: wolvm (tests/wolvm/wolvm, tests/README-wolvm.md), one per scenario (e2e-<scenario> in
+#      $WOLOS_E2E/wolvm): the scenario's raw disk goes in (--from-image) and comes back out raw for
+#      the checks; KVM when /dev/kvm is usable, TCG otherwise.
+# Env: WOLOS_E2E (work dir), WOLOS_E2E_INSTALL_S, WOLOS_E2E_BOOT_S (longer without /dev/kvm).
+# Needs: wolvm's tools (qemu, qemu-img, edk2-ovmf, bsdtar, swtpm), sudo, squashfs-tools, xorriso.
 set -u
 REPO=$(cd "$(dirname "$0")/.." && pwd); H=$REPO/tests/test
 # The WolOS source the installer comes from: $WOLOS_SRC, else a wolos checkout next to this repo.
 SRC=${WOLOS_SRC:-$(dirname "$REPO")/wolos}
-W=${WOLOS_E2E:-$HOME/wolos-e2e}; OVMF=${WOLOS_OVMF:-/usr/share/edk2/x64}
+W=${WOLOS_E2E:-$HOME/wolos-e2e}
 ISO=$W/wolos-e2e.iso
-GB=$((1000 * 1000 * 1000))
 mkdir -p "$W"
 
 remaster() { # base.iso bin_dir: this tree's installer on the base image
@@ -47,8 +52,6 @@ remaster() { # base.iso bin_dir: this tree's installer on the base image
   rm -f "$ISO"
   xorriso -indev "$base" -outdev "$ISO" -boot_image any replay \
     -map "$W/new.sfs" /wolos/x86_64/airootfs.sfs -end 2>/dev/null
-  bsdtar -xOf "$ISO" wolos/boot/x86_64/vmlinuz-linux-wolos > "$W/kernel"
-  bsdtar -xOf "$ISO" wolos/boot/x86_64/initramfs-linux-wolos.img > "$W/initrd"
   ls -la "$ISO"
 }
 
@@ -101,6 +104,16 @@ mk_linux_inner() {
   sudo umount "$m"
 }
 
+# bitlocker_header FILE OFFSET: a BitLocker (Windows 7 and later) volume header at byte OFFSET of
+# FILE: the jump and "-FVE-FS-" where NTFS has its jump and "NTFS    ", the first metadata offset
+# (64 KiB, the u64 at byte 176) and the metadata block's own "-FVE-FS-" there. blkid needs all
+# three: "-FVE-FS-" alone is no file system at all (checked with util-linux 2.42).
+bitlocker_header() {
+  printf '\353\130\220-FVE-FS-' | dd of="$1" bs=1 seek="$2" conv=notrunc status=none
+  printf '\000\000\001\000\000\000\000\000' | dd of="$1" bs=1 seek=$(($2 + 176)) conv=notrunc status=none
+  printf -- '-FVE-FS-' | dd of="$1" bs=1 seek=$(($2 + 65536)) conv=notrunc status=none
+}
+
 mk_disk() { # kind path
   D=$2; rm -f "$D"; truncate -s 64G "$D"
   case $1 in
@@ -113,6 +126,12 @@ size=16MiB, type=E3C9E316-0B5C-4DB8-817D-F92DF00215AE
 type=EBD0A0A2-B9E5-4433-87C0-68B6B72699C7
 E
       with_loop "$D" mk_windows_inner ;;
+    bitlocker)
+      # Windows whose system partition BitLocker protects (blkid then says TYPE=BitLocker, as on a
+      # real PC). Install Alongside must refuse to shrink it and touch nothing.
+      mk_disk windows "$D"
+      local p3; p3=$(sfdisk -d "$D" | grep -E "^${D}3 " | sed -E 's/.*start= *([0-9]+).*/\1/')
+      bitlocker_header "$D" $((p3 * 512)) ;;
     linux)
       sfdisk -q "$D" <<'E'
 label: gpt
@@ -125,41 +144,55 @@ E
   esac
 }
 
-vm() { # dir extra-args...
-  local d=$1; shift
-  local accel="-enable-kvm -cpu host"
-  [ -e /dev/kvm ] || accel="-accel tcg,thread=multi -cpu max"
-  qemu-system-x86_64 $accel -smp 4 -m 6G -machine q35 \
-    -drive if=pflash,format=raw,readonly=on,file="$OVMF/OVMF_CODE.4m.fd" -drive if=pflash,format=raw,file="$d/vars.fd" \
-    -drive file="$d/disk.raw",if=virtio,format=raw,discard=unmap \
-    -nic none -device virtio-vga -device qemu-xhci -device usb-tablet -display none -qmp "unix:$d/qmp.sock,server,nowait" ${TPM_ARGS:-} "$@"
+w() { "$REPO/tests/wolvm/wolvm" --home "$W/wolvm" "$@"; }
+running() { w status "$1" 2>/dev/null | grep -q '"running": true'; }
+wait_off() { # vm seconds: until the VM powered itself off, else stop it
+  local t=0
+  while running "$1" && [ "$t" -lt "$2" ]; do sleep 5; t=$((t + 5)); done
+  running "$1" && w stop "$1" --force >/dev/null 2>&1
+}
+to_raw() { # vm dir: the VM's disk back as $dir/disk.raw (the checks below read it with losetup)
+  qemu-img convert -f qcow2 -O raw "$W/wolvm/vms/$1/disk.qcow2" "$2/disk.raw"
 }
 
-tpm_start() { # dir: a TPM2 that lives through install and boot
-  mkdir -p "$1/tpm"
-  swtpm socket --tpm2 --tpmstate "dir=$1/tpm" --ctrl "type=unixio,path=$1/tpm.sock" --daemon --terminate
-  TPM_ARGS="-chardev socket,id=c,path=$1/tpm.sock -tpmdev emulator,id=t,chardev=c -device tpm-tis,tpmdev=t"
-}
-
-label() { blkid -o value -s LABEL "$ISO"; }
-
-install_in_vm() { # dir scenario
-  local d=$1 s=$2 start=$SECONDS
-  timeout "${WOLOS_E2E_INSTALL_S:-1500}" bash -c "$(declare -f vm); OVMF=$OVMF TPM_ARGS='${TPM_ARGS:-}'; vm $d -cdrom $ISO -kernel $W/kernel -initrd $W/initrd \
-    -append 'archisobasedir=wolos archisolabel=$(label) wolos.e2e=$s wolos.try console=ttyS0 quiet audit=0' -serial file:$d/install.log"
-  echo "$s: install took $((SECONDS - start)) s" | tee "$d/took"
+install_in_vm() { # dir scenario-name plan
+  local d=$1 n=e2e-$2 s=$3 start=$SECONDS tpm=
+  [ "$2" != tpm ] || tpm=--tpm   # a TPM2 that lives through install and boot (wolvm keeps its state)
+  # The disk keeps its size (a grown disk would move the GPT backup header the installer reads).
+  w new "$n" --from-image "$d/disk.raw" --disk "$(stat -c %s "$d/disk.raw")" --iso "$ISO" --direct --no-net \
+    --mem 6G --smp 4 --gpu virtio $tpm --append "wolos.e2e=$s wolos.try quiet audit=0" --force >/dev/null || return 1
+  w start "$n" >/dev/null || return 1
+  wait_off "$n" "${WOLOS_E2E_INSTALL_S:-1500}"
+  w serial "$n" tail -n 1000000 > "$d/install.log"
+  to_raw "$n" "$d"
+  echo "$2: install took $((SECONDS - start)) s" | tee "$d/took"
 }
 
 boot_in_vm() { # dir scenario: up, a screenshot, a clean stop
-  local d=$1 s=$2
-  [ "$s" != tpm ] || tpm_start "$d"   # swtpm ends with the VM that used it; its state stays
-  vm "$d" -serial "file:$d/boot.log" & local q=$!
+  local d=$1 s=$2 n=e2e-$2
+  w set "$n" --boot disk --no-iso >/dev/null
+  w start "$n" >/dev/null
   if [ "$s" = password ] || [ "$s" = encrypted-alongside ]; then
-    for t in 1 2 3 4; do sleep 15; python3 "$H/qmp.py" "$d" shot "$d/unlock$t.png"; python3 "$H/qmp.py" "$d" keys $'white rabbit\n'; done
+    for t in 1 2 3 4; do sleep 15; w screenshot "$n" "$d/unlock$t.png" >/dev/null 2>&1; w type "$n" 'white rabbit\n' -e >/dev/null 2>&1; done
   fi
   sleep "${WOLOS_E2E_BOOT_S:-150}"
-  python3 "$H/qmp.py" "$d" shot "$d/booted.png" || :
-  kill "$q"; wait "$q" 2>/dev/null
+  w screenshot "$n" "$d/booted.png" >/dev/null 2>&1 || :
+  w stop "$n" --force >/dev/null 2>&1
+  w serial "$n" tail -n 1000000 > "$d/boot.log"
+  to_raw "$n" "$d"
+}
+
+adjtime() { # dir: the installed slot's /etc/adjtime (empty when it has none) in $dir/adjtime
+  local m=$1/mnt p; mkdir -p "$m"; : > "$1/adjtime"
+  read_adjtime() {
+    for p in "${LOOP}"p*; do
+      sudo mount -o ro,subvol=@wolos-a "$p" "$m" 2>/dev/null || continue
+      # shellcheck disable=SC2024  # the copy is the caller's file on purpose; only reading needs root
+      [ ! -f "$m/etc/adjtime" ] || sudo cat "$m/etc/adjtime" > "$1/adjtime"
+      sudo umount "$m"
+    done
+  }
+  with_loop "$1/disk.raw" read_adjtime "$1"
 }
 
 blessed() { # dir: the boot entry lost its counter
@@ -183,6 +216,7 @@ say() { if eval "$2"; then echo "E2E PASS $S: $1"; else echo "E2E FAIL $S: $1"; 
 untouched() { # the partitions this scenario must never write
   case $S in
     alongside-windows | encrypted-alongside) echo 1 2 ;;
+    bitlocker-windows) echo 1 2 3 ;;   # refused: nothing at all is written
     alongside-linux) echo 2 4 ;;   # its startup partition is shared on purpose: see kept_checks
     manual*) echo 4 ;;
   esac
@@ -218,23 +252,34 @@ kept_checks() { # dir hashes-before: what the person kept is still there
 
 scenario() { # name
   S=$1; local d=$W/$S plan=$S before=
-  rm -rf "$d"; mkdir -p "$d"; cp "$OVMF/OVMF_VARS.4m.fd" "$d/vars.fd"
-  TPM_ARGS=
+  rm -rf "$d"; mkdir -p "$d"
   case $S in
     erase|password|tpm) mk_disk blank "$d/disk.raw" ;;
     alongside-windows) mk_disk windows "$d/disk.raw"; plan=alongside ;;
     encrypted-alongside) mk_disk windows "$d/disk.raw" ;;
+    bitlocker-windows) mk_disk bitlocker "$d/disk.raw"; plan=alongside ;;
     alongside-linux) mk_disk linux "$d/disk.raw"; plan=alongside ;;
     manual|manual-ext4) mk_disk linux "$d/disk.raw" ;;
   esac
-  [ "$S" != tpm ] || tpm_start "$d"
   before=$(kept_hashes "$d")
-  install_in_vm "$d" "$plan"
+  install_in_vm "$d" "$S" "$plan" || { echo "E2E FAIL $S: wolvm could not start the VM"; return; }
   grep -a 'summary:' "$d/install.log" | sed 's/.*summary: /  /' | sort -u
+  if [ "$S" = bitlocker-windows ]; then
+    # Refused before any write (the Windows side has to turn BitLocker off first), and says why.
+    say "BitLocker disk refused (no install)" "! grep -aq 'wolos-install: done' '$d/install.log'"
+    say "the refusal names BitLocker" "grep -aqi 'bitlocker' '$d/install.log'"
+    kept_checks "$d" "$before"
+    return
+  fi
   say "installer said done" "grep -aq 'wolos-install: done' '$d/install.log'"
   kept_checks "$d" "$before"
   boot_in_vm "$d" "$S"
   say "booted (entry blessed)" "blessed '$d'"
+  # Windows stays: the hardware clock in local time (install-run, audit3 R2B-12); else UTC.
+  case $S in
+    alongside-windows) adjtime "$d"; say "clock in local time (/etc/adjtime LOCAL)" "grep -qx LOCAL '$d/adjtime'" ;;
+    alongside-linux) adjtime "$d"; say "clock in UTC (no Windows)" "! grep -qx LOCAL '$d/adjtime'" ;;
+  esac
   [ "$S" != manual-ext4 ] || say "one copy, no second slot" "! grep -q wolos-b '$d/entries'"
 }
 
@@ -249,6 +294,7 @@ layouts() { # bin_dir names...: the real partitioning on loop devices, no VM and
       *) mk_disk linux "$d/disk.raw" ;;
     esac
     before=$(kept_hashes "$d")
+    # shellcheck disable=SC2024  # the output files are the caller's on purpose; only wol needs root
     apply_layout() {
       sudo "$bin/wol" install probe "$LOOP" > "$d/probe.json" || return 1
       "$bin/install_scenario" "$plan" "$d/probe.json" "$d/plan" || return 1
@@ -262,11 +308,60 @@ layouts() { # bin_dir names...: the real partitioning on loop devices, no VM and
   done
 }
 
+boot_files() { # dir: the sha256 of every file under EFI/wolos on the disk, in $dir/boot-files
+  local m=$1/mnt p; mkdir -p "$m"; : > "$1/boot-files"
+  list_boot() {
+    for p in "${LOOP}"p*; do
+      sudo mount -o ro "$p" "$m" 2>/dev/null || continue
+      [ ! -d "$m/EFI/wolos" ] || (cd "$m" && sudo find EFI/wolos -type f -exec sha256sum {} +) | sort >> "$1/boot-files"
+      sudo umount "$m"
+    done
+  }
+  with_loop "$1/disk.raw" list_boot "$1"
+}
+
+windows_hashes() { # disk.raw: the Windows partitions (system, reserved, Windows) as they are
+  local n; for n in 1 2 3; do part_hash "$1" "$n"; done
+}
+
+reinstall() { # WolOS again beside Windows, over the old WolOS (audit3 R2B-5, audit5 I6-7)
+  # alongside-windows first; then Replace on the old WolOS partition: its startup files are
+  # replaced (install-run clears EFI/wolos when no WolOS stays), Windows stays byte-identical,
+  # the clock stays local, the disk boots with one WolOS entry.
+  S=reinstall-windows; local d=$W/$S before
+  rm -rf "$d"; mkdir -p "$d"
+  mk_disk windows "$d/disk.raw"
+  install_in_vm "$d" "$S" alongside || { echo "E2E FAIL $S: wolvm could not start the VM"; return; }
+  say "first install (alongside) said done" "grep -aq 'wolos-install: done' '$d/install.log'"
+  boot_in_vm "$d" "$S"
+  say "first install booted (entry blessed)" "blessed '$d'"
+  boot_files "$d"; mv "$d/boot-files" "$d/boot-files.1"
+  mv "$d/install.log" "$d/install-1.log"; mv "$d/boot.log" "$d/boot-1.log"
+  # install_scenario's replace-wolos picks the old WolOS in Replace's list the way the installer
+  # knows it (its GPT name or file system label WolOS); the disk goes in as the first install left it.
+  before=$(windows_hashes "$d/disk.raw")
+  install_in_vm "$d" "$S" replace-wolos || { echo "E2E FAIL $S: wolvm could not start the VM again"; return; }
+  grep -a 'summary:' "$d/install.log" | sed 's/.*summary: /  /' | sort -u
+  say "second install (replace) said done" "grep -aq 'wolos-install: done' '$d/install.log'"
+  say "Windows partitions byte-identical" "[ \"$before\" = \"\$(windows_hashes '$d/disk.raw')\" ]"
+  file_hash "$d" 3 "ntfs-3g -o ro" Users/Alice/keep.bin
+  say "the person's file intact" "cmp -s '$d/disk.raw.keep' '$d/keep.after'"
+  boot_in_vm "$d" "$S"
+  say "booted again (entry blessed)" "blessed '$d'"
+  boot_files "$d"
+  say "the old WolOS startup files replaced" "[ -s '$d/boot-files' ] && ! cmp -s '$d/boot-files.1' '$d/boot-files'"
+  say "one WolOS entry, none left from the old install" "[ \"\$(grep -c '^wolos-' '$d/entries')\" = 1 ]"
+  adjtime "$d"; say "clock in local time (/etc/adjtime LOCAL)" "grep -qx LOCAL '$d/adjtime'"
+}
+
 medium() { # the installer's own medium is refused
-  S=medium; local d=$W/$S; rm -rf "$d"; mkdir -p "$d"; cp "$OVMF/OVMF_VARS.4m.fd" "$d/vars.fd"
+  S=medium; local d=$W/$S n=e2e-medium; rm -rf "$d"; mkdir -p "$d"
   mk_disk blank "$d/disk.raw"
-  timeout 300 bash -c "$(declare -f vm); OVMF=$OVMF; vm $d -drive file=$ISO,if=virtio,format=raw,readonly=off,snapshot=on -kernel $W/kernel -initrd $W/initrd \
-    -append 'archisobasedir=wolos archisolabel=$(label) wolos.e2e=medium wolos.try console=ttyS0 quiet audit=0' -serial file:$d/install.log"
+  # The ISO as a writable disk (a USB stick; writes go to a throwaway overlay), not a CD.
+  w new "$n" --from-image "$d/disk.raw" --disk "$(stat -c %s "$d/disk.raw")" --iso "$ISO" --iso-bus virtio --direct --no-net \
+    --mem 6G --smp 4 --gpu virtio --append "wolos.e2e=medium wolos.try quiet audit=0" --force >/dev/null &&
+    w start "$n" >/dev/null && wait_off "$n" 300
+  w serial "$n" tail -n 1000000 > "$d/install.log"
   say "boot medium refused" "grep -aq 'medium-refused' '$d/install.log'"
 }
 
@@ -275,9 +370,19 @@ case ${1:-} in
   layouts) shift; layouts "$@" ;;
   run) shift
     for s in "$@"; do
-      if [ "$s" = medium ]; then medium; else scenario "$s"; fi 2>&1 | tee "$W/$s.result" &
+      rm -f "$W/$s.result"
+      case $s in
+        medium) medium ;;
+        reinstall-windows) reinstall ;;
+        *) scenario "$s" ;;
+      esac 2>&1 | tee "$W/$s.result" &
     done
     wait
-    grep -h '^E2E\|install took' "$W"/*.result ;;
+    [ $# -gt 0 ] || { echo "usage: $0 run SCENARIO..." >&2; exit 2; }
+    # This run's results only (an older *.result in $W is not this run's).
+    res=''
+    for s in "$@"; do grep -h '^E2E\|install took' "$W/$s.result" 2>/dev/null; res="$res $W/$s.result"; done
+    # shellcheck disable=SC2086  # one word per result file
+    sh "$REPO/tests/test/verdict.sh" E2E $res ;;
   *) echo "usage: $0 remaster BASE.iso BIN_DIR | run SCENARIO..." >&2; exit 2 ;;
 esac

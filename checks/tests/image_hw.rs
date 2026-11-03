@@ -8,8 +8,7 @@ mod siblings;
 
 use std::{fs, path::PathBuf};
 fn read(p: &str) -> String {
-    let f = siblings::root()
-        .join(p);
+    let f = siblings::root().join(p);
     fs::read_to_string(&f).unwrap_or_else(|e| panic!("{p}: {e}"))
 }
 
@@ -42,19 +41,34 @@ fn catalogue_packages() -> Vec<String> {
         let list = if l.starts_with("const FW_") {
             l.split_once('=').map(|(_, r)| r)
         } else {
-            l.strip_prefix("firmware:").or_else(|| l.strip_prefix("packages:"))
+            l.strip_prefix("firmware:")
+                .or_else(|| l.strip_prefix("packages:"))
         };
-        let Some(list) = list.and_then(|r| r.trim().strip_prefix("&[")) else { continue };
+        let Some(list) = list.and_then(|r| r.trim().strip_prefix("&[")) else {
+            continue;
+        };
         let list = list.split(']').next().unwrap();
-        for p in list.split(',').map(|p| p.trim().trim_matches('"')).filter(|p| !p.is_empty()) {
+        for p in list
+            .split(',')
+            .map(|p| p.trim().trim_matches('"'))
+            .filter(|p| !p.is_empty())
+        {
             if !v.iter().any(|x| x == p) {
                 v.push(p.to_owned());
             }
         }
     }
     // The parse still sees the catalogue: a reformat that hides its lists fails here.
-    for want in ["intel-ucode", "linux-firmware-intel", "vulkan-radeon", "nvidia-open"] {
-        assert!(v.iter().any(|x| x == want), "catalog.rs: {want} not found ({v:?})");
+    for want in [
+        "intel-ucode",
+        "linux-firmware-intel",
+        "vulkan-radeon",
+        "nvidia-open",
+    ] {
+        assert!(
+            v.iter().any(|x| x == want),
+            "catalog.rs: {want} not found ({v:?})"
+        );
     }
     v
 }
@@ -140,8 +154,7 @@ fn pipewire_carries_all_audio_and_video() {
         );
     }
     let f = "files/usr/share/pipewire/pipewire.conf.d/71-wolos-airplay.conf";
-    let conf = std::fs::read_to_string(format!("{}/{f}", siblings::root_str()))
-        .unwrap_or_default();
+    let conf = std::fs::read_to_string(format!("{}/{f}", siblings::root_str())).unwrap_or_default();
     assert!(
         conf.contains("libpipewire-module-raop-discover"),
         "{f}: AirPlay speakers listed"
@@ -159,13 +172,24 @@ fn microphones_do_not_start_at_hardware_max() {
     };
     let input = conf("files/usr/share/wireplumber/wireplumber.conf.d/71-wolos-input.conf");
     assert!(
-        input.lines().any(|l| l.trim() == "device.routes.default-source-volume = 0.064"),
+        input
+            .lines()
+            .any(|l| l.trim() == "device.routes.default-source-volume = 0.064"),
         "inputs start at 40% (0.4^3 cubic)"
     );
     let alsa = conf("files/usr/share/wireplumber/wireplumber.conf.d/72-wolos-alsa.conf");
-    assert!(alsa.lines().any(|l| l.trim() == "api.alsa.soft-mixer = false"));
-    assert!(alsa.lines().any(|l| l.trim() == "api.alsa.ignore-dB = false"));
+    assert!(
+        alsa.lines()
+            .any(|l| l.trim() == "api.alsa.soft-mixer = false")
+    );
+    assert!(
+        alsa.lines()
+            .any(|l| l.trim() == "api.alsa.ignore-dB = false")
+    );
     let limits = conf("files/etc/security/limits.d/70-wolos-audio.conf");
     assert!(limits.lines().any(|l| l.trim() == "@audio - rtprio 95"));
-    assert!(shipped().iter().any(|p| p == "rtkit"), "rtkit grants realtime to PipeWire clients");
+    assert!(
+        shipped().iter().any(|p| p == "rtkit"),
+        "rtkit grants realtime to PipeWire clients"
+    );
 }

@@ -5,11 +5,11 @@
 # su -l hangs on the serial console (resizewin); use plain su.
 set -u; O=/tmp/lk; mkdir -p $O
 export XDG_RUNTIME_DIR=/tmp/lku GDK_BACKEND=wayland XDG_CONFIG_DIRS=/usr/local/etc/xdg
-rm -rf $XDG_RUNTIME_DIR; mkdir -p -m 700 $XDG_RUNTIME_DIR
+rm -rf "$XDG_RUNTIME_DIR"; mkdir -p "$XDG_RUNTIME_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
 printf 'output HEADLESS-1 mode 1440x900\ndefault_border none\nfor_window [app_id=".*"] floating enable\n' > /tmp/lku.conf
 WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1 sway -c /tmp/lku.conf > /tmp/lku-sway.log 2>&1 &
-sleep 3; export WAYLAND_DISPLAY=wayland-1 SWAYSOCK=$(ls $XDG_RUNTIME_DIR/sway-ipc.*.sock)
-eval $(dbus-launch --sh-syntax)
+sleep 3; set -- "$XDG_RUNTIME_DIR"/sway-ipc.*.sock; export WAYLAND_DISPLAY=wayland-1 SWAYSOCK="$1"
+eval "$(dbus-launch --sh-syntax)"
 ktrace -i -t cn -f /tmp/lk/lock.kt /usr/local/bin/wol-lock > /tmp/lk/wol-lock.log 2>&1 &
 sleep 6; grim $O/10-lock.png
 wtype -s 60 x -k BackSpace wrongpw -k Return; sleep 5; grim $O/11-lock-wrong.png

@@ -8,15 +8,31 @@ here.
 image is a test of the repo, and any image can be rebuilt later from the same two inputs. A dev tree
 on someone's disk can never leak into a release.
 
-**How.**
+**How.** One build path: `wolos-build iso` runs `build.sh` (mkarchiso on the host, no container
+fallback), on the forge or with `--ecs` on the cluster. `build.sh` refuses a repo whose published
+`snapshot` differs from `profile/snapshot`, and writes the ISO, `<iso>.sha256` and the manifest
+`<iso>.json` into the output folder (by hand: `$WOLOS_VM/out`, default `~/WolOS-vm/out`).
 
 ```sh
-# With wolos-build next to this repo (github.com/wonderlandos/wolos-build):
-../wolos-build/wolos-build iso                       # local mkarchiso, from [wolos-testing]
-../wolos-build/wolos-build iso --ecs                 # the same on the ECS cluster
-WOLOS_REPO_NAME=wolos ./build.sh                     # by hand, from the stable [wolos]
-tests/test-install.sh ~/WolOS-vm/build/out/wolos-*.iso   # boot + install in QEMU
+# With wolos-build next to this repo (github.com/wonderlandos/wolos-build), on the forge:
+../wolos-build/wolos-build iso --out DIR             # from [wolos-testing]
+../wolos-build/wolos-build iso --ecs --out DIR       # the same on the ECS cluster
+WOLOS_REPO_NAME=wolos ../wolos-build/wolos-build iso --out DIR   # from the stable [wolos]
+tests/test-install.sh DIR/wolos-*.iso                # unattended install + boot (wolvm, KVM)
 ```
 
-Signing (`release/sign-release.sh`, `release/sb-layout.sh sign`) happens only in `release.yml`,
-with the keys in GitHub secrets. ADR: wolos `docs/adr/0029-repository-split-and-single-build-path.md`.
+**Release.** `wolos-build release --iso DIR vX.Y.Z` publishes DIR's one ISO with its `.sha256`,
+`release.json` and `release.json.sig`. The VM test runs on exactly those artefacts first:
+
+```sh
+tests/test-install.sh --release DIR    # checks the ISO against release.json (else <iso>.json) and
+                                       # <iso>.sha256, then installs and boots it; BOOT PASS|FAIL
+                                       # lines in $WOLOS_VM/test/checks.txt
+```
+
+The VM tests run on the forge (KVM, QEMU, swtpm, OVMF, virt-firmware) through wolvm
+(`tests/wolvm/wolvm`, [tests/README-wolvm.md](tests/README-wolvm.md)); without `/dev/kvm` they run
+on TCG with longer timeouts. How a person checks the download: README "Verify the download".
+
+Signing (`release/sign-release.sh`, `release/sb-layout.sh sign`) happens only in the release
+path, with the keys in GitHub secrets. ADR: wolos `docs/adr/0029-repository-split-and-single-build-path.md`.

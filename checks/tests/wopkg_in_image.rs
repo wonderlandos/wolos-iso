@@ -9,8 +9,7 @@ mod siblings;
 
 use std::{fs, path::PathBuf};
 fn read(p: &str) -> String {
-    let path = siblings::root()
-        .join(p);
+    let path = siblings::root().join(p);
     fs::read_to_string(&path).unwrap_or_else(|e| panic!("{p}: {e}"))
 }
 
@@ -25,7 +24,10 @@ fn wopkg_is_a_repo_package_the_image_installs() {
     assert_eq!(f[1], "wopkg");
     // Its recipe directory rebuilds it; wopkg/ and crates/wopkg/ of wolos reach it only through the
     // pinned _wolos_commit, a change of that directory (wolos-pkgbuilds `packages`).
-    assert!(f[3..].contains(&"wopkg/"), "a change in wopkg/ rebuilds it: {line}");
+    assert!(
+        f[3..].contains(&"wopkg/"),
+        "a change in wopkg/ rebuilds it: {line}"
+    );
     let r = read("wopkg/PKGBUILD");
     assert!(
         r.contains("_wolos_commit=") && r.contains("wolos.git#commit=$_wolos_commit"),

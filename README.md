@@ -8,12 +8,55 @@ published repo** (+ the Arch snapshot), never from a source tree, so an image is
 | Path | What |
 |---|---|
 | `profile/` | mkarchiso profile (releng-based): `snapshot`, `pacman.conf` (`[wolos]` first, then core/extra/multilib at the snapshot), `packages.x86_64` + `packages.desktop` (merged at build), systemd-boot entries (live, Install WolOS), live-only `airootfs` |
-| `build.sh` | staged profile (the published repo, checked against `release/wolos-repo.pub.asc`) -> `mkarchiso` (or `podman` `archlinux:base-devel`) -> ISO + release manifest |
+| `build.sh` | repo `snapshot` == `profile/snapshot` check -> staged profile (the published repo, checked against `release/wolos-repo.pub.asc`; the live root names its channel) -> `mkarchiso` -> ISO + `<iso>.sha256` + release manifest |
 | `release/release-manifest.sh` | `release.json`: `{version, snapshot, wolos_repo, kernel, image, sha256, size}`; version and kernel from the repo database |
 | `release/sign-release.sh` | `release.json.sig`: raw Ed25519 with the package key |
-| `release/sb-layout.sh` | Secure Boot layout (ADR 0025): shim, systemd-boot, one UKI; `sign` with the WolOS SB key |
-| `tests/` | QEMU/KVM + OVMF + virtio-gpu: `build.sh`, `run.sh` (live), `test-install.sh` (unattended), `test-installer.sh` (end to end), `test-secureboot.sh`, `run-installed.sh`, `run-gpu.sh` (host iGPU) |
+| `release/sb-layout.sh` | Secure Boot (ADR 0025): `layout` (shim, systemd-boot, one UKI), `sign` with the live-image key (+ `/ENROL_THIS_KEY_FOR_WOLOS.cer`, `EFI/wolos/README.txt`), `check` (what `wolos-build release` requires) |
+| `release/sb-key.sh`, `release/wolos-live-2026.crt`/`.cer` | the live-image key's path where this host can sign (the forge; exit 3 elsewhere) and its certificate; `wolos-build iso` turns the Secure Boot layout on when the key is there (wolos-build `docs/signing-kms.md`) |
+| `tests/` | QEMU/KVM + OVMF + virtio-gpu: `run.sh` (live), `test-install.sh` (unattended; `--release DIR` for release artefacts), `test-installer.sh` (end to end), `test-secureboot.sh`, `run-installed.sh`, `run-gpu.sh` (host iGPU) |
 | `checks/` | contract tests of these files (Rust, std only): `cargo test --manifest-path checks/Cargo.toml` |
+
+## Build and test (one path)
+
+```sh
+wolos-build iso                   # on the forge (or --ecs): ../wolos-iso/build.sh, ISO in --out DIR
+tests/test-install.sh DIR/wolos-*.iso          # unattended install + boot, on the forge
+tests/test-install.sh --release DIR            # what `wolos-build release --iso DIR` publishes
+```
+
+`build.sh` is the only build: `wolos-build iso` runs it on the forge or on the ECS cluster; by hand it
+needs an Arch host with `archiso` (no container fallback). It refuses to start when
+`$URL/snapshot` (written by `wolos-build publish`) differs from `profile/snapshot`, because the image
+would then mix packages built against one Arch date with a base pinned to another. The live root's
+`pacman.conf` names the repo and release tag the image came from (`[wolos-testing]` or `[wolos]` +
+`Server = URL`); `install-run` (wolos `install-channel`) gives the installed system the same channel.
+Next to the ISO it writes `<iso>.sha256` and the manifest `<iso>.json`; inside the ISO mkarchiso's
+`wolos/x86_64/airootfs.sha512` is the hash the live medium check reads (build.sh refuses an ISO
+without it).
+
+VM tests run on the forge, which has `/dev/kvm`, QEMU, swtpm and OVMF (`/usr/share/edk2/x64`). On a
+host without KVM, `tests/test-install.sh` says so, runs on TCG (software CPU) and multiplies its
+timeouts by `WOLOS_TCG_SCALE` (4).
+
+## Verify the download
+
+Download the ISO, `wolos-<version>-x86_64.iso.sha256`, `release.json` and `release.json.sig` from
+the release, then in that folder:
+
+```sh
+sha256sum -c wolos-*.iso.sha256                  # the ISO is the file the release names
+grep -o '"sha256": *"[0-9a-f]*"' release.json    # the same hash, inside the signed manifest
+for k in /usr/share/wolos/keys/wolos-*.pub; do
+  openssl pkeyutl -verify -rawin -pubin -inkey "$k" -in release.json -sigfile release.json.sig && break
+done
+```
+
+The loop checks that WolOS signed the manifest (Ed25519, the package key; the public keys are in
+wolos `desktop/overlay/usr/share/wolos/keys/`, on an installed system `/usr/share/wolos/keys/`). It
+prints `Signature Verified Successfully`. When the hash in `release.json` matches the ISO's, the
+ISO is the one WolOS released. With `wolos-medium-verify.service` (plan W5, profile) a booted medium
+checks itself too: the live system hashes its squashfs against `airootfs.sha512` in the background,
+and the installer refuses to write a disk from a corrupt stick.
 
 ## Release flow
 

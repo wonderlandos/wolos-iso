@@ -9,7 +9,7 @@ command -v qemu-system-x86_64 >/dev/null || { echo "$0: qemu-system-x86_64 missi
 [ -f "$OVMF/OVMF_CODE.4m.fd" ] || { echo "$0: no OVMF in $OVMF (pacman -S edk2-ovmf)" >&2; exit 1; }
 mkdir -p "$T"
 ISO=${1:-$(ls -t "$VM"/out/wolos-*.iso 2>/dev/null | head -1)}
-[ -f "$ISO" ] || { echo "run.sh: no ISO in $VM/out (tests/build.sh)" >&2; exit 1; }
+[ -f "$ISO" ] || { echo "run.sh: no ISO in $VM/out (wolos-build iso, or ./build.sh)" >&2; exit 1; }
 [ -f "$T/vars-live.fd" ] || cp "$OVMF/OVMF_VARS.4m.fd" "$T/vars-live.fd"
 exec qemu-system-x86_64 -enable-kvm -cpu host -smp "$(nproc)" -m "${WOLOS_MEM:-6G}" -machine q35 \
   -drive if=pflash,format=raw,readonly=on,file="$OVMF/OVMF_CODE.4m.fd" -drive if=pflash,format=raw,file="$T/vars-live.fd" \

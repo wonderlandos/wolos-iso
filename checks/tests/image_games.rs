@@ -7,8 +7,7 @@ mod siblings;
 
 use std::path::PathBuf;
 fn repo(p: &str) -> PathBuf {
-    siblings::root()
-        .join(p)
+    siblings::root().join(p)
 }
 
 fn read(p: &str) -> String {

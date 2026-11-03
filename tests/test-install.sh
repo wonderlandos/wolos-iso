@@ -1,30 +1,53 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Unattended install test of the newest WolOS ISO in a throwaway QEMU/KVM VM (UEFI, no network):
-# the ISO's kernel boots with wolos.autoinstall=/dev/vda (installs and powers off), then the
-# installed disk boots on its own. A bystander disk (other.raw, random head) stays attached and must
-# come out byte-identical. The boot is proven from the disk itself: systemd-bless-boot drops the
-# entry's try counter (wolos-a+3.conf -> wolos-a.conf) only once boot-complete.target was reached,
-# that is once the login window's supervisor ran. Results: lines "BOOT PASS|FAIL <what>" in $T/checks.txt.
-# Usage: tests/test-install.sh [ISO]   (--build: tests/build.sh first)
+# Unattended install test of the newest WolOS ISO in a throwaway VM (UEFI, no network), driven by
+# wolvm (tests/wolvm/wolvm, tests/README-wolvm.md): this script only says what to make, start,
+# press and check; wolvm owns the qemu command line, OVMF, swtpm and KVM-or-TCG. The ISO's kernel
+# boots with wolos.autoinstall=/dev/vda (installs and powers off), then the installed disk boots on
+# its own. A bystander disk (other.raw, random head) stays attached and must come out
+# byte-identical. The boot is proven from the disk itself: systemd-bless-boot drops the entry's try
+# counter (wolos-a+3.conf -> wolos-a.conf) only once boot-complete.target was reached, that is once
+# the login window's supervisor ran. Results: lines "BOOT PASS|FAIL <what>" in $T/checks.txt;
+# the exit status is 1 when any of them failed or none passed (tests/test/verdict.sh).
+# Usage: tests/test-install.sh [ISO]          the newest ISO in $WOLOS_VM/out, or ISO
+#        tests/test-install.sh --build [ISO]  ../build.sh first (the ISO lands in $WOLOS_VM/out)
+#        tests/test-install.sh --release DIR  the artefacts `wolos-build release --iso DIR` publishes:
+#          DIR's one wolos-*.iso, checked against the sha256 of its manifest (release.json, else the
+#          <iso>.json build.sh wrote) and its <iso>.sha256 before the VM starts.
+# KVM: with a usable /dev/kvm (the forge) wolvm runs the VM on KVM; without it on TCG (software
+#      CPU, several times slower): the script says so and multiplies its timeouts by
+#      WOLOS_TCG_SCALE (4).
 # Env: WOLOS_VM (~/WolOS-vm), WOLOS_KEEP_DISK=1 keeps the installed disk as $T/disk.raw for
-#      run-installed.sh (otherwise the scratch install.raw is deleted).
+#      run-installed.sh (otherwise the scratch install.raw is deleted). WOLOS_KEEP_VM=1 keeps the
+#      wolvm VM ($T/wolvm, name "install") for `wolvm --home $T/wolvm start install` and friends.
 #      WOLOS_ENCRYPT=no|tpm|passphrase (default no): tpm adds a swtpm TPM2 that lives through install
 #      and boot; passphrase puts the passphrase on a labelled key disk and types it at the unlock prompt.
-#      WOLOS_SECBOOT=mok: OVMF's Secure Boot firmware with Microsoft's keys (virt-fw-vars
-#      --enroll-redhat), off for the install, on for the boot: the mok tier, whose first boot is
+#      WOLOS_SECBOOT=mok: OVMF's Secure Boot firmware with Microsoft's keys (wolvm --secureboot),
+#      enforcement off for the install, on for the boot: the mok tier, whose first boot is
 #      MokManager; its screens are driven by key presses (WOLOS_MOK_KEYS). Default (plain OVMF vars,
 #      Setup Mode): the own-keys tier.
 #      WOLOS_BOOT_S (240): seconds the installed disk gets to boot (and enroll, and boot again).
-# Needs: qemu-system-x86_64, edk2-ovmf, bsdtar, blkid, sfdisk, mtools; python3 + Pillow for
-#        screenshots; swtpm for tpm; virt-firmware for mok; dosfstools for passphrase.
+#      WOLOS_WOLVM: another wolvm (the checks run this script on a stub).
+# Needs: wolvm's tools (qemu-system-x86_64, qemu-img, edk2-ovmf, bsdtar; swtpm for tpm,
+#        virt-firmware for mok), blkid, sfdisk, mtools; python3 + Pillow for the screenshot check;
+#        dosfstools for passphrase.
 set -u
-REPO=$(cd "$(dirname "$0")/.." && pwd); H=$REPO/tests/test
+REPO=$(cd "$(dirname "$0")/.." && pwd)
 VM=${WOLOS_VM:-$HOME/WolOS-vm}; T=$VM/test
-OVMF=${WOLOS_OVMF:-/usr/share/edk2/x64}
-ENC=${WOLOS_ENCRYPT:-no}; SB=${WOLOS_SECBOOT:-0}; BOOT_S=${WOLOS_BOOT_S:-240}
+ENC=${WOLOS_ENCRYPT:-no}; SB=${WOLOS_SECBOOT:-0}
+N=install
+WOLVM=${WOLOS_WOLVM:-$REPO/tests/wolvm/wolvm}   # WOLOS_WOLVM: tests only (a stub wolvm)
+w() { "$WOLVM" --home "$T/wolvm" "$@"; }
+# wolvm picks KVM when this host can (read and write /dev/kvm), TCG otherwise: longer timeouts then.
+if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+  scale=1
+else
+  scale=${WOLOS_TCG_SCALE:-4}
+  echo "test-install: no usable /dev/kvm: running on TCG (software CPU), timeouts x$scale" >&2
+fi
+BOOT_S=${WOLOS_BOOT_S:-$((240 * scale))}; INSTALL_S=$((1800 * scale))
 command -v qemu-system-x86_64 >/dev/null || { echo "$0: qemu-system-x86_64 missing (pacman -S qemu-desktop)" >&2; exit 1; }
-[ -f "$OVMF/OVMF_CODE.4m.fd" ] || { echo "$0: no OVMF in $OVMF (pacman -S edk2-ovmf)" >&2; exit 1; }
+command -v qemu-img >/dev/null || { echo "$0: qemu-img missing (pacman -S qemu-img)" >&2; exit 1; }
 command -v mdir >/dev/null || { echo "$0: mtools missing (pacman -S mtools): the boot check reads the ESP with it" >&2; exit 1; }
 case $ENC in no | tpm | passphrase) ;; *) echo "$0: WOLOS_ENCRYPT=$ENC: no, tpm or passphrase" >&2; exit 1 ;; esac
 [ "$ENC" != tpm ] || command -v swtpm >/dev/null || { echo "$0: swtpm missing (pacman -S swtpm)" >&2; exit 1; }
@@ -32,92 +55,105 @@ case $ENC in no | tpm | passphrase) ;; *) echo "$0: WOLOS_ENCRYPT=$ENC: no, tpm 
 mkdir -p "$T"
 # One VM at a time: another VM on the same disk and sockets starves the install (15 GB hosts).
 pgrep -x qemu-system-x86 >/dev/null && { echo "test-install: another QEMU VM is running" >&2; exit 1; }
-if [ "${1:-}" = --build ]; then "$REPO/tests/build.sh" || exit 1; shift; fi
+# release_iso DIR: the one ISO of a release directory, whose bytes match its manifest's sha256.
+release_iso() {
+  set -- "$1" "$1"/wolos-*.iso
+  [ $# = 2 ] && [ -f "$2" ] || { echo "test-install: --release $1: needs exactly one wolos-*.iso there" >&2; return 1; }
+  man=$1/release.json; [ -f "$man" ] || man=${2%.iso}.json
+  [ -f "$man" ] || { echo "test-install: --release $1: no release.json or ${2##*/}: no manifest to check the ISO against" >&2; return 1; }
+  want=$(tr -d ' \n' < "$man" | sed -n 's/.*"sha256":"\([0-9a-f]\{64\}\)".*/\1/p')
+  have=$(sha256sum "$2" | cut -d' ' -f1)
+  [ -n "$want" ] && [ "$want" = "$have" ] || { echo "test-install: ${2##*/} is $have, ${man##*/} says ${want:-nothing}: not the released image" >&2; return 1; }
+  if [ -f "$2.sha256" ]; then
+    (cd "$1" && sha256sum -c --status "${2##*/}.sha256") || { echo "test-install: ${2##*/}.sha256 does not match the ISO" >&2; return 1; }
+  fi
+  echo "$2"
+}
+case ${1:-} in
+  --build) "$REPO/build.sh" || exit 1; shift ;;
+  --release) ISO=$(release_iso "${2:?--release DIR}") || exit 1; set -- "$ISO" ;;
+esac
 ISO=${1:-$(ls -t "$VM"/out/wolos-*.iso 2>/dev/null | head -1)}
-[ -f "$ISO" ] || { echo "test-install: no ISO in $VM/out" >&2; exit 1; }
+[ -f "$ISO" ] || { echo "test-install: no ISO in $VM/out (wolos-build iso, or ./build.sh)" >&2; exit 1; }
+ISO=$(cd "$(dirname "$ISO")" && pwd)/$(basename "$ISO")
+echo "test-install: $ISO ($(sha256sum "$ISO" | cut -d' ' -f1))"
+# An archiso image: wolvm --direct boots its kernel with our command line (the ISO menu has no
+# unattended entry).
+bsdtar -tf "$ISO" wolos/boot/x86_64/vmlinuz-linux-wolos >/dev/null 2>&1 || { echo "test-install: no kernel in $ISO" >&2; exit 1; }
 cd "$T" || exit 1
-rm -f serial-install.log serial-boot.log checks.txt install.raw other.raw keys.raw shot*.png mok*.png kernel initrd tpm.sock
-rm -rf tpm
-# Direct kernel boot: the ISO's kernel and initramfs with our command line (the ISO menu has no
-# unattended entry). archisosearchuuid comes from the ISO's label lookup instead: archisolabel.
-bsdtar -xOf "$ISO" wolos/boot/x86_64/vmlinuz-linux-wolos > kernel &&
-  bsdtar -xOf "$ISO" wolos/boot/x86_64/initramfs-linux-wolos.img > initrd || { echo "test-install: no kernel in $ISO" >&2; exit 1; }
-label=$(blkid -o value -s LABEL "$ISO")
-truncate -s 32G install.raw; truncate -s 17G other.raw
+rm -f serial-install.log serial-boot.log checks.txt install.raw other.raw keys.raw shot*.png mok*.png unlock*.png
+w stop "$N" --force >/dev/null 2>&1; w rm "$N" >/dev/null 2>&1
+truncate -s 17G other.raw
 head -c 64M /dev/urandom | dd of=other.raw conv=notrunc status=none
 # shellcheck disable=SC2034  # read inside the checks' eval strings
 other_before=$(sha256sum other.raw | cut -d' ' -f1)
-# Firmware. mok: Secure Boot firmware, Microsoft's keys in, enforcement off for the install (the
-# unsigned live kernel must start) and on for the boot (what the person's PC does).
-CODE=$OVMF/OVMF_CODE.4m.fd; MACHINE="-machine q35"
-if [ "$SB" = mok ]; then
-  CODE=$OVMF/OVMF_CODE.secboot.4m.fd; MACHINE="-machine q35,smm=on -global driver=cfi.pflash01,property=secure,value=on"
-  virt-fw-vars --input "$OVMF/OVMF_VARS.4m.fd" --output vars.fd --enroll-redhat --set-false SecureBootEnable >/dev/null 2>&1 ||
-    { echo "test-install: virt-fw-vars could not prepare the Secure Boot variables" >&2; exit 1; }
-else
-  cp "$OVMF/OVMF_VARS.4m.fd" vars.fd
-fi
 # Encryption words for the live kernel; the recovery key is printed so the run can be inspected.
-words=
+words='' opts=''
 case $ENC in
-  tpm)
-    mkdir -p tpm
-    swtpm socket --tpm2 --tpmstate dir="$T/tpm" --ctrl type=unixio,path="$T/tpm.sock" --daemon --terminate ||
-      { echo "test-install: swtpm did not start" >&2; exit 1; }
-    words="wolos.encrypt=tpm wolos.recovery=console" ;;
+  tpm) words="wolos.encrypt=tpm wolos.recovery=console"; opts="--tpm" ;;
   passphrase)
     # The passphrase on its own small FAT disk, found by label from the live system.
     truncate -s 32M keys.raw && mkfs.vfat -n WOLOSKEY keys.raw >/dev/null || { echo "test-install: mkfs.vfat (dosfstools) failed" >&2; exit 1; }
     printf 'white rabbit' > passphrase.txt && mcopy -i keys.raw passphrase.txt ::passphrase && rm -f passphrase.txt
-    words="wolos.encrypt=passphrase wolos.passphrase=WOLOSKEY:passphrase wolos.recovery=console" ;;
+    words="wolos.encrypt=passphrase wolos.passphrase=WOLOSKEY:passphrase wolos.recovery=console"
+    opts="--drive $T/keys.raw" ;;
 esac
-# 2D virtio-vga: QMP screendump cannot read a GL scanout ("no surface"); Hyprland runs on Mesa.
-GPU="-device virtio-vga -display none"
-tpm_args() { [ "$ENC" = tpm ] && echo "-chardev socket,id=c,path=$T/tpm.sock -tpmdev emulator,id=t,chardev=c -device tpm-tis,tpmdev=t"; }
-keys_args() { [ -f keys.raw ] && echo "-drive file=keys.raw,if=virtio,format=raw"; }
-vm() { # extra qemu args...
-  # shellcheck disable=SC2046,SC2086
-  exec qemu-system-x86_64 -enable-kvm -cpu host -smp 4 -m 4G $MACHINE \
-    -drive if=pflash,format=raw,readonly=on,file="$CODE" -drive if=pflash,format=raw,file=vars.fd \
-    -drive file=install.raw,if=virtio,format=raw,discard=unmap -drive file=other.raw,if=virtio,format=raw $(keys_args) \
-    -nic none $GPU -qmp unix:qmp.sock,server,nowait $(tpm_args) "$@"
+# mok: Secure Boot firmware, Microsoft's keys in, enforcement off for the install (the unsigned
+# live kernel must start) and on for the boot (what the person's PC does).
+[ "$SB" != mok ] || opts="$opts --secureboot"
+sb_enforce() { # on|off, VM stopped
+  w set "$N" --secureboot "$1" >/dev/null 2>&1 && return 0
+  # A wolvm without `set --secureboot`: flip SecureBootEnable in its qcow2 vars here.
+  v=$T/wolvm/vms/$N/vars.qcow2 f=false; [ "$1" = on ] && f=true
+  qemu-img convert -f qcow2 -O raw "$v" vars.raw &&
+    virt-fw-vars --input vars.raw --output vars.sb.raw "--set-$f" SecureBootEnable >/dev/null 2>&1 &&
+    qemu-img convert -f raw -O qcow2 vars.sb.raw "$v"
+  r=$?; rm -f vars.raw vars.sb.raw; return $r
 }
-# 1. Install: vda = install.raw, vdb = bystander. Powers off when done (timeout 30 min).
-vm -cdrom "$ISO" -kernel kernel -initrd initrd \
-  -append "archisobasedir=wolos archisolabel=$label wolos.autoinstall=/dev/vda $words console=ttyS0 quiet" \
-  -serial file:serial-install.log &
-qpid=$!; ( sleep 1800; kill $qpid 2>/dev/null ) & tpid=$!
-wait $qpid; kill $tpid 2>/dev/null
-# 2. Boot the installed disk alone. The swtpm is restarted on its kept state (it ends with the VM).
-if [ "$ENC" = tpm ]; then
-  swtpm socket --tpm2 --tpmstate dir="$T/tpm" --ctrl type=unixio,path="$T/tpm.sock" --daemon --terminate
-fi
-if [ "$SB" = mok ]; then
-  virt-fw-vars --input vars.fd --output vars.sb.fd --set-true SecureBootEnable >/dev/null 2>&1 && mv vars.sb.fd vars.fd
-fi
-vm -serial file:serial-boot.log &
-qpid=$!
-shot() { python3 "$H/qmp.py" "$T" shot "$1" 2>/dev/null || :; }
+# vda = the VM's disk (32G qcow2), vdb = the bystander (raw, so its bytes are compared as they are).
+# 2D virtio-vga (--gpu virtio): QMP screendump cannot read a GL scanout.
+# shellcheck disable=SC2086  # opts are separate words
+w new "$N" --iso "$ISO" --disk 32G --mem 4G --smp 4 --gpu virtio --direct --no-net \
+  --drive "$T/other.raw" $opts --append "wolos.autoinstall=/dev/vda $words quiet" --force >/dev/null ||
+  { echo "test-install: wolvm new failed" >&2; exit 1; }
+[ "$SB" != mok ] || sb_enforce off || { echo "test-install: could not turn Secure Boot enforcement off" >&2; exit 1; }
+running() { w status "$N" 2>/dev/null | grep -q '"running": true'; }
+# 1. Install. The VM powers off when done (timeout 30 min, x4 on TCG).
+w start "$N" >/dev/null || { echo "test-install: the VM did not start" >&2; exit 1; }
+t=0; while running && [ "$t" -lt "$INSTALL_S" ]; do sleep 5; t=$((t + 5)); done
+running && w stop "$N" --force >/dev/null 2>&1
+w serial "$N" tail -n 1000000 > serial-install.log
+# 2. Boot the installed disk alone (wolvm restarts the swtpm on its kept state).
+w set "$N" --boot disk --no-iso >/dev/null
+[ "$SB" != mok ] || sb_enforce on || { echo "test-install: could not turn Secure Boot enforcement on" >&2; exit 1; }
+w start "$N" >/dev/null
+shot() { w screenshot "$N" "$T/$1" >/dev/null 2>&1 || :; }
 if [ "$SB" = mok ]; then
   # MokManager (shim's blue screen): any key, Enroll MOK, Continue, Yes, the password, Reboot. The
   # firmware shows it within seconds of the first boot; one shot per step keeps the evidence.
-  sleep 12; shot mok1.png
+  sleep $((12 * scale)); shot mok1.png
   i=0
   for k in ${WOLOS_MOK_KEYS:-ret down ret down ret down ret b o o t ret ret}; do
-    python3 "$H/qmp.py" "$T" key "$k"; sleep 2
+    w key "$N" "$k" >/dev/null 2>&1; sleep $((2 * scale))
     i=$((i + 1)); [ $((i % 3)) != 0 ] || shot "mok$((i / 3 + 1)).png"
   done
 fi
 if [ "$ENC" = passphrase ]; then
   # The unlock prompt comes before any desktop; a few tries, as a person would, 15 s apart.
-  for t in 1 2 3 4; do sleep 15; shot "unlock$t.png"; python3 "$H/qmp.py" "$T" keys 'white rabbit
-' 2>/dev/null || :; done
+  for t in 1 2 3 4; do sleep $((15 * scale)); shot "unlock$t.png"; w type "$N" 'white rabbit\n' -e >/dev/null 2>&1 || :; done
 fi
 sleep "$BOOT_S"
 shot shot.png
-kill $qpid 2>/dev/null; wait $qpid 2>/dev/null
+# mok: Secure Boot really on in the booted system (the guest agent; no network needed). Without
+# it the mok tier would pass with shim starting anything.
+rm -f sb-state.txt
+[ "$SB" != mok ] || w ssh "$N" "mokutil --sb-state" > sb-state.txt 2>&1 || :
+w stop "$N" --force >/dev/null 2>&1
+w serial "$N" tail -n 1000000 > serial-boot.log
 # shellcheck disable=SC2034
 other_after=$(sha256sum other.raw | cut -d' ' -f1)
+# The installed disk as raw, read from outside below.
+qemu-img convert -f qcow2 -O raw "$T/wolvm/vms/$N/disk.qcow2" install.raw 2>/dev/null || : > install.raw
 sfdisk -d install.raw > parts.txt 2>/dev/null
 # The ESP from outside: its entries say whether the system came up (bless) and what was built.
 esp_off=$(sfdisk -J install.raw 2>/dev/null | python3 -c '
@@ -144,12 +180,15 @@ b() { if eval "$2"; then echo "BOOT PASS $1"; else echo "BOOT FAIL $1"; fi; }
     no) b "disk not encrypted (default autoinstall)" "! grep -aq 'wolos-install: encrypt 45' serial-install.log" ;;
   esac
   [ "$SB" != mok ] || b "mok tier: shim first" "grep -q 'shimx64.efi' efi-wolos.txt && grep -q 'wolos-key.cer' efi-wolos.txt"
+  [ "$SB" != mok ] || b "mok tier: Secure Boot enabled in the booted system" "grep -q 'SecureBoot enabled' sb-state.txt"
   # Informative: a UI screenshot has thousands of colours (firmware and text screens a handful).
   if [ -f shot.png ]; then
     echo "screenshot colours: $(python3 -c "from PIL import Image;print(len(Image.open('shot.png').convert('RGB').getcolors(1<<24) or []))" 2>/dev/null || echo unknown)"
   fi
 } > checks.txt
 grep '^BOOT ' checks.txt
-rm -f other.raw kernel initrd keys.raw
+rm -f other.raw keys.raw
 if [ "${WOLOS_KEEP_DISK:-0}" = 1 ]; then mv install.raw "$T/disk.raw"; else rm -f install.raw; fi
+[ "${WOLOS_KEEP_VM:-0}" = 1 ] || w rm "$N" >/dev/null 2>&1
 echo "test-install: done ($T/checks.txt)"
+sh "$REPO/tests/test/verdict.sh" BOOT checks.txt

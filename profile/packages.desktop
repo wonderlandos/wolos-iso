@@ -7,6 +7,8 @@ hyprland-wolos
 hypridle
 xdg-desktop-portal-hyprland
 xorg-xwayland
+xorg-xrdb # wol-x11-env + Settings cursor size (wol_core::hyprprefs::cursor_sync): Xft.dpi, Xcursor.*
+xorg-xhost # hyprland.conf exec-once: only this account's X11 clients may connect to Xwayland
 mesa
 lib32-mesa
 vulkan-intel             # anv: Vulkan for DXVK/Proton on Intel
@@ -89,6 +91,7 @@ baobab
 # Games (wolos/docs/modules/games.md): native Steam (multilib) and Wine for Windows programs.
 steam
 umu-launcher
+gamescope # Steam's gamescope launch option, fixed-resolution games (Memory Saver lists it)
 gamemode               # games can run through gamemoderun
 lib32-gamemode
 rtkit                  # realtime audio threads (PipeWire)

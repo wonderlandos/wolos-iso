@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Boot the ISO to the live session, prove it is up, collect what a person would ask for.
+# wolvm new live --iso wolos.iso && wolvm journey live tests/wolvm/journeys/live-boot.yaml
+name: live ISO boots to the installer session
+steps:
+- start
+- shot firmware
+- wait-text: "Welcome to"
+  timeout: 240
+  caption: systemd reached the console (console=ttyS0 from SMBIOS)
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 120
+  caption: the screen has settled (installer or desktop)
+- ssh: "cat /etc/os-release; uname -r; cat /proc/cmdline"
+  save: system.txt
+- ssh: "cat /proc/cmdline"
+  expect: "wolos"
+  caption: booted the WolOS live kernel
+- ssh: "timeout 120 systemctl is-system-running --wait"
+  expect: "running"
+  save: system-state.txt
+  caption: no failed units, boot finished (not degraded)
+- ssh: "n=$(systemctl --failed --no-legend --plain | wc -l); echo failed=$n; test $n = 0 && echo no-failed-units"
+  expect: "no-failed-units"
+  save: failed-units.txt
+- ssh: "systemctl is-active wolos-installer.service NetworkManager.service multi-user.target && echo services-up"
+  expect: "services-up"
+  save: services.txt
+  caption: the installer session (wolos-installer; wold waits for Try WolOS), the network and multi-user.target are up
+- logs:
+  n: 500
+- checkpoint: live-up
+- stop

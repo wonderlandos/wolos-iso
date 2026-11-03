@@ -9,7 +9,7 @@ stty -F /dev/ttyS1 raw -echo 115200 2>/dev/null
 chmod 666 /dev/ttyS1
 exec >/dev/ttyS1 2>&1
 ev() { echo "E $(cut -d' ' -f1 /proc/uptime) $*"; }
-ev start kind=$kind mode=$mode mem=$(free -m | awk 'NR==2{print $2}')
+ev start "kind=$kind" "mode=$mode" "mem=$(free -m | awk 'NR==2{print $2}')"
 
 # Properties memsaver::procs::adopt_args adds after this stream (test: image_limits).
 tasks=$(sed -n 's/.*\bkbtasks=\([0-9]*\).*/\1/p' /proc/cmdline)
@@ -18,7 +18,8 @@ if [ "$mode" = after ]; then
 	extra=(TasksMax t "${tasks:-8192}" MemoryMaxScale u 3435973836 MemorySwapMaxScale u 1073741823)
 fi
 adopt() { # NAME PID: the same StartTransientUnit wold's Memory Saver sends for a new window.
-	local session=$(cut -d: -f3 /proc/$(pgrep -ox comp)/cgroup | xargs basename)
+	local session
+	session=$(cut -d: -f3 "/proc/$(pgrep -ox comp)/cgroup" | xargs basename)
 	busctl --system call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
 		org.freedesktop.systemd1.Manager StartTransientUnit 'ssa(sv)a(sa(sv))' \
 		"$1" fail $((5 + ${#extra[@]} / 3)) PIDs au 1 "$2" Slice s user-1000.slice \
@@ -50,14 +51,14 @@ done ) &
 	sleep 1
 done ) &
 sleep 10
-ev nproc $(grep 'Max processes' /proc/$(pgrep -ox comp)/limits | tr -s ' ') bomb-side $(grep 'Max processes' /proc/self/limits | tr -s ' ') threads-max=$(cat /proc/sys/kernel/threads-max)
+ev nproc "$(grep 'Max processes' "/proc/$(pgrep -ox comp)/limits" | awk '{$1=$1}1')" bomb-side "$(grep 'Max processes' /proc/self/limits | awk '{$1=$1}1')" "threads-max=$(cat /proc/sys/kernel/threads-max)"
 
 case $kind in
 load) # False kills: a parallel build next to a browser-like tree, both in window scopes.
 	mkfifo $K/b; as_user bash -c 'read go < '$K'/b; exec '$K'/load.sh' &
 	lp=$!; adopt app-wol-load-$lp.scope $lp; echo go > $K/b
 	ev load-start; wait $lp; ev load-end rc=$?
-	sleep 2; ev done; poweroff -f;;
+	sleep 2; ev "done"; poweroff -f;;
 esac
 
 # kbtrace: the kernel's call graph of the stand-in compositor's forks, kept until the kill.
@@ -78,7 +79,7 @@ for i in $(seq $n); do
 	as_user bash -c 'cd; exec '$K'/kb '$k' 90 < '$K'/go'$i &
 	bp=$!
 	adopt app-wol-bomb-$bp.scope $bp
-	scopes+=(/sys/fs/cgroup/user.slice/user-1000.slice/app-wol-bomb-$bp.scope)
+	scopes+=("/sys/fs/cgroup/user.slice/user-1000.slice/app-wol-bomb-$bp.scope")
 done
 alive() { for s in "${scopes[@]}"; do [ -d "$s" ] && return 0; done; return 1; }
 ev go
@@ -104,5 +105,5 @@ ev cleanup
 rm -f /tmp/kb-fill /dev/shm/kb-fill /home/wol/kb-fill
 sleep 8
 free -m
-ev done
+ev "done"
 poweroff -f

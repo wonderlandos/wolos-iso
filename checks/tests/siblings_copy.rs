@@ -7,8 +7,8 @@ use std::{fs, path::PathBuf};
 #[test]
 fn support_siblings_is_a_verbatim_copy_of_the_wolos_original() {
     let here = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let wolos = std::env::var_os("WOLOS_SRC")
-        .map_or_else(|| here.join("../../wolos"), PathBuf::from);
+    let wolos =
+        std::env::var_os("WOLOS_SRC").map_or_else(|| here.join("../../wolos"), PathBuf::from);
     let original = wolos.join("crates/controller/tests/support/siblings.rs");
     let Ok(want) = fs::read(&original) else {
         eprintln!("skipped: no wolos checkout at {}", wolos.display());

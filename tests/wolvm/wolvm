@@ -1,0 +1,1383 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
+"""wolvm: a QEMU test VM an agent (or a person) drives one step at a time, from ISO boot through
+the installer, the reboot into the installed disk, login and the apps. Python 3 stdlib only.
+
+  wolvm doctor                               KVM, QEMU, OVMF, swtpm, virt-fw-vars present?
+  wolvm new NAME --iso X | --from-image DISK [--disk 40G] [--mem 6G] [--smp 4] [--tpm] [--secureboot]
+            [--gpu virtio|vmsvga|std|qxl|virtio-gl | --virtio | --vmsvga] [--res 1280x800]
+            [--ssh] [--direct] [--append ARGS] [--cred NAME=VALUE]... [--force]
+            [--drive FILE[,ro|,snapshot]]... [--no-net] [--iso-bus ide|virtio]
+  wolvm start NAME | stop NAME [--force] | status NAME | list | rm NAME
+  wolvm set NAME [--boot disk|cdrom] [--iso X | --no-iso] [--append ARGS] [--mem M] [--gpu G]
+            [--secureboot on|off] [--net on|off]
+  wolvm eject NAME                           take the ISO out of the running VM
+  wolvm screenshot NAME OUT.png              QMP screendump; prints "OUT.png WxH"
+  wolvm wait-stable NAME [--timeout S]       until two screens 2 s apart are identical
+  wolvm type NAME TEXT                       US keyboard; \\n in TEXT is Enter (use $'..' in sh)
+  wolvm key NAME COMBO...                    ctrl-alt-t ret esc tab super f2 ... one combo per arg
+  wolvm click NAME X Y [--button left|right|middle] [--double]   screen pixels (usb-tablet)
+  wolvm serial NAME tail [-n N] | serial NAME send TEXT
+  wolvm wait-text NAME TEXT [--timeout S] [--regex] [--new]      on the serial log
+  wolvm wait-agent NAME [--timeout S]        until the QEMU guest agent answers
+  wolvm ssh NAME CMD...                      sshd (--ssh VMs) or the guest agent: a root shell command
+  wolvm ssh-open NAME                        --ssh VMs: start sshd + accept port 22 in the guest (this boot)
+  wolvm logs NAME [-n N] [-u UNIT] [-o FILE] journal of the current boot (serial log as fallback)
+  wolvm snapshot NAME save|restore|list|delete [TAG]   running: whole VM (savevm); stopped: disks
+  wolvm journey NAME FILE [--out DIR] [--from N] [--keep-going]  replay steps, a screenshot each
+  wolvm report DIR                           DIR/report.md + DIR/index.html for a human
+Global: --dry-run (print the qemu command / QMP JSON, run nothing), --home DIR (or $WOLVM_HOME).
+"""
+import argparse, base64, json, os, re, shlex, shutil, socket, struct, subprocess, sys, time, zlib, html
+
+HOME_DEFAULT = os.path.join(os.path.expanduser("~"), ".local", "share", "wolvm")
+FW_DIRS = ["/usr/share/edk2/x64", "/usr/share/edk2-ovmf/x64", "/usr/share/OVMF/x64", "/usr/share/OVMF",
+           "/usr/share/edk2/ovmf", "/usr/share/qemu"]
+FW_CODE = ["OVMF_CODE.4m.fd", "OVMF_CODE_4M.fd", "OVMF_CODE.fd"]
+FW_CODE_SB = ["OVMF_CODE.secboot.4m.fd", "OVMF_CODE_4M.secboot.fd", "OVMF_CODE.secboot.fd"]
+FW_VARS = ["OVMF_VARS.4m.fd", "OVMF_VARS_4M.fd", "OVMF_VARS.fd"]
+GPUS = {"virtio": ["-device", "virtio-vga,xres={x},yres={y}"],
+        "virtio-gl": ["-device", "virtio-vga-gl,xres={x},yres={y}", "-display", "egl-headless"],
+        "vmsvga": ["-device", "vmware-svga"], "std": ["-device", "VGA,xres={x},yres={y}"],
+        "qxl": ["-device", "qxl-vga,xres={x},yres={y}"]}
+DRY = False
+
+
+def read_file(path, mode="r"):
+    """The whole file, closed again (no handle left to the collector: python3 -X dev is quiet)."""
+    with open(path, mode) as f:
+        return f.read()
+
+
+def write_file(path, data, mode="w"):
+    with open(path, mode) as f:
+        f.write(data)
+
+
+def die(msg, code=1):
+    sys.stderr.write(f"wolvm: {msg}\n")
+    sys.exit(code)
+
+
+# ---------------------------------------------------------------- keys and input (pure builders)
+KEY_ALIAS = {"enter": "ret", "return": "ret", "space": "spc", "escape": "esc", "bksp": "backspace",
+             "bs": "backspace", "del": "delete", "super": "meta_l", "win": "meta_l", "meta": "meta_l",
+             "control": "ctrl", "ctl": "ctrl", "altgr": "alt_r", "pageup": "pgup", "pagedown": "pgdn",
+             "ins": "insert", "printscreen": "print", "menu": "compose"}
+# Unshifted and shifted characters of a US layout -> QEMU qcodes (same table as tests/test/qmp.py).
+CHAR_KEY = {" ": "spc", "\n": "ret", "=": "equal", ",": "comma", ".": "dot", "/": "slash", "-": "minus",
+            ";": "semicolon", "'": "apostrophe", "[": "bracket_left", "]": "bracket_right", "\t": "tab",
+            "`": "grave_accent", "\\": "backslash"}
+SHIFT_KEY = {'"': "apostrophe", "_": "minus", ":": "semicolon", "|": "backslash", ">": "dot", "<": "comma",
+             "*": "8", "$": "4", "&": "7", "(": "9", ")": "0", "~": "grave_accent", "!": "1", "#": "3",
+             "{": "bracket_left", "}": "bracket_right", "?": "slash", "+": "equal", "@": "2", "%": "5",
+             "^": "6"}
+
+
+def combo_keys(combo):
+    """'ctrl-alt-t' -> ['ctrl','alt','t']; a lone '-' is the minus key."""
+    if combo in ("-", "minus"):
+        return ["minus"]
+    out = []
+    for k in combo.lower().split("-"):
+        if not k:
+            raise ValueError(f"bad key combo {combo!r}")
+        out.append(KEY_ALIAS.get(k, k))
+    return out
+
+
+def text_keys(text):
+    """Text -> list of key chords (each a list of qcodes)."""
+    chords = []
+    for ch in text:
+        if ch == "\r":
+            continue
+        if ch in CHAR_KEY:
+            chords.append([CHAR_KEY[ch]])
+        elif ch in SHIFT_KEY:
+            chords.append(["shift", SHIFT_KEY[ch]])
+        elif ch.isascii() and ch.isalpha():
+            chords.append(["shift", ch.lower()] if ch.isupper() else [ch])
+        elif ch.isascii() and ch.isdigit():
+            chords.append([ch])
+        else:
+            raise ValueError(f"no US key for {ch!r}")
+    return chords
+
+
+def qmp_send_key(chord, hold_ms=40):
+    return {"execute": "send-key",
+            "arguments": {"keys": [{"type": "qcode", "data": k} for k in chord], "hold-time": hold_ms}}
+
+
+def qmp_abs_move(x, y, w, h):
+    sx = max(0, min(32767, x * 32767 // max(1, w - 1)))
+    sy = max(0, min(32767, y * 32767 // max(1, h - 1)))
+    return {"execute": "input-send-event", "arguments": {"events": [
+        {"type": "abs", "data": {"axis": "x", "value": sx}},
+        {"type": "abs", "data": {"axis": "y", "value": sy}}]}}
+
+
+def qmp_button(button, down):
+    return {"execute": "input-send-event",
+            "arguments": {"events": [{"type": "btn", "data": {"button": button, "down": down}}]}}
+
+
+def qmp_screendump(path, fmt="png"):
+    a = {"filename": path}
+    if fmt != "ppm":
+        a["format"] = fmt
+    return {"execute": "screendump", "arguments": a}
+
+
+def qmp_hmp(line):
+    return {"execute": "human-monitor-command", "arguments": {"command-line": line}}
+
+
+def qemu_escape(v):
+    """A value inside a -opt k=v,k=v string: commas are doubled."""
+    return str(v).replace(",", ",,")
+
+
+# ---------------------------------------------------------------- images (stdlib PNG)
+def ppm_to_png(ppm_bytes):
+    m = re.match(rb"P6\s+(\d+)\s+(\d+)\s+(\d+)\s", ppm_bytes)
+    if not m:
+        raise ValueError("not a P6 PPM")
+    w, h = int(m.group(1)), int(m.group(2))
+    px = ppm_bytes[m.end():m.end() + w * h * 3]
+    raw = b"".join(b"\x00" + px[r * w * 3:(r + 1) * w * 3] for r in range(h))
+
+    def chunk(t, d):
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b"")), (w, h)
+
+
+def png_size(path):
+    with open(path, "rb") as f:
+        head = f.read(24)
+    if head[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError(f"{path}: not a PNG")
+    return struct.unpack(">II", head[16:24])
+
+
+# ---------------------------------------------------------------- journey steps
+VERBS = {  # verb -> how its argument string splits: "one" (whole), "words", "none"
+    "start": "none", "stop": "none", "shot": "one", "screenshot": "one", "type": "one", "key": "words",
+    "click": "words", "wait-text": "one", "wait-agent": "none", "wait-stable": "none", "sleep": "one",
+    "ssh": "one", "exec": "one", "logs": "none", "checkpoint": "one", "snapshot-save": "one",
+    "snapshot-restore": "one", "eject": "none", "boot": "one", "note": "one", "serial-send": "one",
+}
+
+
+def _unquote(s):
+    s = s.strip()
+    if len(s) >= 2 and s[0] == s[-1] == '"':
+        return json.loads(s)
+    if len(s) >= 2 and s[0] == s[-1] == "'":
+        return s[1:-1].replace("''", "'")
+    return s
+
+
+def _scalar(s):
+    s = s.strip()
+    if s[:1] in ("'", '"'):
+        return _unquote(s)
+    if re.fullmatch(r"-?\d+", s):
+        return int(s)
+    if re.fullmatch(r"-?\d+\.\d*", s):
+        return float(s)
+    if s in ("true", "false"):
+        return s == "true"
+    if s in ("", "null", "~"):
+        return None
+    return s
+
+
+def parse_step(item):
+    """A step is "verb args" or {verb: args, option: value...}. Returns {verb, args, opts}."""
+    if isinstance(item, str):
+        verb, _, rest = item.strip().partition(" ")
+        opts, arg = {}, rest
+    elif isinstance(item, dict):
+        verb = next(iter(item), None)  # the first key is the verb; "shot: false" may follow
+        if verb not in VERBS:
+            raise ValueError(f"step must start with a verb of {sorted(VERBS)}: {item!r}")
+        arg = item[verb]
+        opts = {k: v for k, v in item.items() if k != verb}
+    else:
+        raise ValueError(f"bad step {item!r}")
+    if verb not in VERBS:
+        raise ValueError(f"unknown verb {verb!r} (known: {', '.join(sorted(VERBS))})")
+    kind = VERBS[verb]
+    if arg is None or arg == "":
+        args = []
+    elif isinstance(arg, list):
+        args = [str(a) for a in arg]
+    elif kind == "words":
+        args = str(arg).split()
+    elif isinstance(item, str):
+        args = [_unquote(arg)]
+    else:
+        args = [str(arg)]
+    if kind in ("one", "words") and not args and verb not in ("shot", "screenshot", "checkpoint", "boot"):
+        raise ValueError(f"{verb}: needs an argument")
+    return {"verb": verb, "args": args, "opts": opts}
+
+
+def parse_yaml_steps(text):
+    """The YAML subset journeys use: optional top-level 'key: value' lines, then '- step' items,
+    each either '- verb args' or '- verb: value' with indented 'option: value' lines under it."""
+    meta, items, cur = {}, [], None
+    for n, line in enumerate(text.splitlines(), 1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        s = line.strip()
+        if s.startswith("- ") or s == "-":
+            body = s[1:].strip()
+            m = re.match(r"^([A-Za-z][\w-]*):(?:\s+(.*))?$", body)
+            if m and m.group(1) in VERBS:
+                cur = {m.group(1): _scalar(m.group(2) or "")}
+                items.append(cur)
+            else:
+                cur = None
+                items.append(body)
+        elif line[:1] in (" ", "\t") and isinstance(cur, dict):
+            m = re.match(r"^([A-Za-z][\w-]*):\s*(.*)$", s)
+            if not m:
+                raise ValueError(f"line {n}: expected 'option: value'")
+            cur[m.group(1)] = _scalar(m.group(2))
+        else:
+            m = re.match(r"^([A-Za-z][\w-]*):\s*(.*)$", s)
+            if not m:
+                raise ValueError(f"line {n}: cannot parse {s!r}")
+            if m.group(1) != "steps":
+                meta[m.group(1)] = _scalar(m.group(2))
+    return meta, items
+
+
+def load_journey(path):
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    if text.lstrip()[:1] in ("[", "{"):
+        data = json.loads(text)
+        meta, items = ({}, data) if isinstance(data, list) else (
+            {k: v for k, v in data.items() if k != "steps"}, data.get("steps", []))
+    else:
+        meta, items = parse_yaml_steps(text)
+    return meta, [parse_step(i) for i in items]
+
+
+# ---------------------------------------------------------------- VM config and qemu command
+def find_fw(names, dirs=None):
+    env = os.environ.get("WOLVM_OVMF")
+    for d in ([env] if env else []) + (dirs or FW_DIRS):
+        for n in names:
+            p = os.path.join(d, n)
+            if os.path.isfile(p):
+                return p
+    return None
+
+
+def iso_label(path):
+    """ISO 9660 volume id (primary volume descriptor at 32 KiB, bytes 40..72)."""
+    with open(path, "rb") as f:
+        f.seek(16 * 2048)
+        pvd = f.read(2048)
+    if pvd[1:6] != b"CD001":
+        raise ValueError(f"{path}: not an ISO 9660 image")
+    return pvd[40:72].decode("ascii", "replace").strip()
+
+
+def default_append(cfg, live=True):
+    """Extra kernel cmdline: the serial console for every boot (ISO and installed system), so
+    wait-text, serial tail and logs work without changing the image; --append words only while the
+    VM boots the ISO (wolos.autoinstall must never reach the installed system). systemd-boot and
+    systemd-stub take it from SMBIOS type 11 (ignored with Secure Boot on)."""
+    a = "console=tty0 console=ttyS0,115200" if cfg.get("console", True) else ""
+    if live and cfg.get("append"):
+        a = (a + " " + cfg["append"]).strip()
+    return a
+
+
+def qemu_cmd(cfg, d, run=None):
+    """The full qemu-system-x86_64 argv for VM config cfg living in dir d."""
+    run = run or {}
+    p = lambda n: os.path.join(d, n)
+    x, y = (cfg.get("res") or "1280x800").split("x")
+    kvm = cfg.get("kvm", True)
+    sb = cfg.get("secureboot", False)
+    c = ["qemu-system-x86_64", "-name", f"wolvm-{cfg['name']}", "-machine", "q35" + (",smm=on" if sb else "")]
+    c += ["-accel", "kvm", "-cpu", "host"] if kvm else ["-accel", "tcg,thread=multi", "-cpu", "max"]
+    c += ["-smp", str(cfg.get("smp", 4)), "-m", str(cfg.get("mem", "6G"))]
+    if sb:
+        c += ["-global", "driver=cfi.pflash01,property=secure,value=on"]
+    c += ["-drive", f"if=pflash,format=raw,readonly=on,file={qemu_escape(cfg['fw_code'])}",
+          "-drive", f"if=pflash,format=qcow2,file={qemu_escape(p('vars.qcow2'))}"]
+    disk_first = cfg.get("boot", "cdrom") == "disk" or not cfg.get("iso")
+    direct = bool(cfg.get("iso") and cfg.get("direct") and not disk_first)
+    # -kernel takes bootindex 0 itself (QEMU's linuxboot option ROM): then no bootindex at all.
+    bi = (lambda n: "") if direct else (lambda n: f",bootindex={n}")
+    c += ["-drive", f"file={qemu_escape(p('disk.qcow2'))},if=none,id=disk0,format=qcow2,discard=unmap",
+          "-device", f"virtio-blk-pci,drive=disk0{bi(0 if disk_first else 1)}"]
+    for n, (path, mode) in enumerate(split_drive(x) for x in cfg.get("drives", [])):
+        # Extra disks as they are (raw, no conversion: tests compare their bytes): /dev/vdb, vdc...
+        flags = {"ro": ",readonly=on", "snapshot": ",snapshot=on"}.get(mode, "")
+        c += ["-drive", f"file={qemu_escape(path)},if=none,id=extra{n},format=raw{flags}",
+              "-device", f"virtio-blk-pci,drive=extra{n}"]
+    if cfg.get("iso") and cfg.get("iso_bus") == "virtio":
+        # The ISO as a USB-stick-like disk: writable, changes thrown away at exit (snapshot=on).
+        c += ["-drive", f"file={qemu_escape(cfg['iso'])},if=none,id=cdrom0,format=raw,snapshot=on",
+              "-device", f"virtio-blk-pci,id=cd0,drive=cdrom0{bi(1 if disk_first else 0)}"]
+    elif cfg.get("iso"):
+        c += ["-drive", f"file={qemu_escape(cfg['iso'])},if=none,id=cdrom0,media=cdrom,readonly=on",
+              "-device", f"ide-cd,id=cd0,drive=cdrom0{bi(1 if disk_first else 0)}"]
+    if cfg.get("iso"):
+        if direct:  # (inside: the ISO is attached)
+            k = cfg["direct"]
+            c += ["-kernel", k["kernel"], "-initrd", k["initrd"],
+                  "-append", f"archisobasedir={k['basedir']} archisolabel={k['label']} {default_append(cfg)}".strip()]
+    # Direct boot: the words are in -append already; SMBIOS only carries the console then.
+    extra = default_append(cfg, live=bool(cfg.get("iso")) and not disk_first and not direct)
+    if extra:  # systemd ignores it while Secure Boot is enforced; harmless then
+        for key in ("io.systemd.boot.kernel-cmdline-extra", "io.systemd.stub.kernel-cmdline-extra"):
+            c += ["-smbios", f"type=11,value={qemu_escape(key + '=' + extra)}"]
+    for cred in cfg.get("creds", []):
+        c += ["-smbios", f"type=11,value={qemu_escape('io.systemd.credential:' + cred)}"]
+    c += [a.format(x=x, y=y) for a in GPUS[cfg.get("gpu", "virtio")]]
+    if "-display" not in GPUS[cfg.get("gpu", "virtio")]:
+        c += ["-display", "none"]
+    if cfg.get("vnc"):
+        c += ["-vnc", cfg["vnc"]]
+    c += ["-device", "qemu-xhci", "-device", "usb-tablet"]
+    if cfg.get("net", True):
+        nic = "user,model=virtio-net-pci"
+        if run.get("ssh_port"):
+            nic += f",hostfwd=tcp:127.0.0.1:{run['ssh_port']}-:22"
+        c += ["-nic", nic]
+    else:
+        c += ["-nic", "none"]
+    c += ["-qmp", f"unix:{p('qmp.sock')},server=on,wait=off",
+          "-chardev", f"socket,id=ser0,path={p('serial.sock')},server=on,wait=off,logfile={p('serial.log')},logappend=on",
+          "-serial", "chardev:ser0",
+          "-chardev", f"socket,id=qga0,path={p('qga.sock')},server=on,wait=off",
+          "-device", "virtio-serial-pci", "-device", "virtserialport,chardev=qga0,name=org.qemu.guest_agent.0"]
+    if cfg.get("tpm"):
+        c += ["-chardev", f"socket,id=tpmc,path={p('tpm.sock')}", "-tpmdev", "emulator,id=tpm0,chardev=tpmc",
+              "-device", "tpm-tis,tpmdev=tpm0"]
+    c += ["-daemonize", "-pidfile", p("qemu.pid")]
+    return c
+
+
+def split_drive(spec):
+    """'FILE', 'FILE,ro' or 'FILE,snapshot' -> (FILE, mode)."""
+    path, _, mode = spec.rpartition(",") if spec.endswith((",ro", ",snapshot")) else (spec, "", "")
+    return path, mode
+
+
+def vars_secureboot_cmds(vars_qcow2, on, tmp):
+    """qemu-img + virt-fw-vars argv list that flips SecureBootEnable in a qcow2 vars file."""
+    raw, out = tmp + ".raw", tmp + ".sb.raw"
+    return [["qemu-img", "convert", "-f", "qcow2", "-O", "raw", vars_qcow2, raw],
+            ["virt-fw-vars", "--input", raw, "--output", out, "--set-true" if on else "--set-false", "SecureBootEnable"],
+            ["qemu-img", "convert", "-f", "raw", "-O", "qcow2", out, vars_qcow2]]
+
+
+def swtpm_cmd(d):
+    return ["swtpm", "socket", "--tpm2", "--tpmstate", f"dir={os.path.join(d, 'tpm')}",
+            "--ctrl", f"type=unixio,path={os.path.join(d, 'tpm.sock')}", "--daemon", "--terminate",
+            "--pid", f"file={os.path.join(d, 'swtpm.pid')}", "--log", f"file={os.path.join(d, 'swtpm.log')}"]
+
+
+# ---------------------------------------------------------------- QMP / guest agent clients
+class Qmp:
+    def __init__(self, sock_path, timeout=30):
+        if DRY:
+            self.f = None
+            return
+        if not os.path.exists(sock_path):
+            die(f"{sock_path}: not running (wolvm start)")
+        self.s = socket.socket(socket.AF_UNIX)
+        self.s.settimeout(timeout)
+        self.s.connect(sock_path)
+        self.f = self.s.makefile("rw")
+        self.f.readline()
+        self.call({"execute": "qmp_capabilities"})
+
+    def call(self, msg):
+        if DRY:
+            print(json.dumps(msg))
+            return {}
+        self.f.write(json.dumps(msg) + "\n")
+        self.f.flush()
+        while True:
+            line = self.f.readline()
+            if not line:
+                die("QMP closed the connection")
+            r = json.loads(line)
+            if "error" in r:
+                raise RuntimeError(f"{msg['execute']}: {r['error'].get('desc')}")
+            if "return" in r:
+                return r["return"]
+
+    def hmp(self, line):
+        out = self.call(qmp_hmp(line))
+        return out if isinstance(out, str) else ""
+
+
+class Agent:
+    """QEMU guest agent (qemu-guest-agent runs in the ISO and the installed system)."""
+
+    def __init__(self, sock_path, timeout=10):
+        self.s = socket.socket(socket.AF_UNIX)
+        self.s.settimeout(timeout)
+        self.s.connect(sock_path)
+        self.f = self.s.makefile("rwb")
+        sync = int(time.time() * 1000) % 2147483647
+        self.f.write(b"\xff" + json.dumps({"execute": "guest-sync-delimited", "arguments": {"id": sync}}).encode() + b"\n")
+        self.f.flush()
+        while True:  # skip stale replies until ours
+            line = self.f.readline()
+            if not line:
+                raise OSError("guest agent closed")
+            line = line.lstrip(b"\xff").strip()
+            if not line:
+                continue
+            try:
+                if json.loads(line).get("return") == sync:
+                    break
+            except ValueError:
+                continue
+
+    def call(self, cmd, **args):
+        self.f.write(json.dumps({"execute": cmd, **({"arguments": args} if args else {})}).encode() + b"\n")
+        self.f.flush()
+        r = json.loads(self.f.readline())
+        if "error" in r:
+            raise RuntimeError(f"{cmd}: {r['error'].get('desc')}")
+        return r.get("return")
+
+    def run(self, shell_cmd, timeout=300):
+        pid = self.call("guest-exec", path="/bin/sh", arg=["-c", shell_cmd], **{"capture-output": True})["pid"]
+        end = time.time() + timeout
+        while time.time() < end:
+            st = self.call("guest-exec-status", pid=pid)
+            if st.get("exited"):
+                dec = lambda k: base64.b64decode(st.get(k, "")).decode("utf-8", "replace")
+                return st.get("exitcode", -1), dec("out-data"), dec("err-data")
+            time.sleep(0.3)
+        raise TimeoutError(f"guest command still running after {timeout} s")
+
+
+# ---------------------------------------------------------------- the VM
+class VM:
+    def __init__(self, home, name):
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,40}", name):
+            die(f"bad VM name {name!r}")
+        self.name, self.dir = name, os.path.join(home, "vms", name)
+        self.cfg_path, self.run_path = self.p("vm.json"), self.p("run.json")
+
+    def p(self, n):
+        return os.path.join(self.dir, n)
+
+    @property
+    def cfg(self):
+        if not os.path.exists(self.cfg_path):
+            die(f"no VM {self.name!r} (wolvm new {self.name} --iso ...)")
+        with open(self.cfg_path) as f:
+            return json.load(f)
+
+    def save_cfg(self, cfg):
+        with open(self.cfg_path + ".tmp", "w") as f:
+            json.dump(cfg, f, indent=1)
+        os.replace(self.cfg_path + ".tmp", self.cfg_path)
+
+    @property
+    def run(self):
+        try:
+            with open(self.run_path) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+    def save_run(self, run):
+        with open(self.run_path, "w") as f:
+            json.dump(run, f)
+
+    def pid(self):
+        try:
+            pid = int(read_file(self.p("qemu.pid")).strip())
+            os.kill(pid, 0)
+            return pid
+        except (OSError, ValueError):
+            return None
+
+    def qmp(self):
+        return Qmp(self.p("qmp.sock"))
+
+    def agent(self, timeout=10):
+        return Agent(self.p("qga.sock"), timeout)
+
+
+def sh(cmd, **kw):
+    if DRY:
+        print(shlex.join(cmd))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    return subprocess.run(cmd, text=True, capture_output=True, stdin=subprocess.DEVNULL, **kw)
+
+
+def extract_direct(iso, d):
+    """Kernel + initramfs out of an archiso image, for --direct (cmdline under our control)."""
+    names = subprocess.run(["bsdtar", "-tf", iso], text=True, capture_output=True, check=True).stdout.split()
+    kern = next((n for n in names if re.search(r"(^|/)boot/x86_64/vmlinuz-[^/]+$", n)), None)
+    if not kern:
+        die(f"{iso}: no boot/x86_64/vmlinuz-* (not an archiso image?)")
+    base = kern.split("/boot/")[0]
+    flavour = kern.rsplit("vmlinuz-", 1)[1]
+    init = f"{base}/boot/x86_64/initramfs-{flavour}.img"
+    if init not in names:
+        die(f"{iso}: no {init}")
+    out = {}
+    for key, member in (("kernel", kern), ("initrd", init)):
+        dst = os.path.join(d, os.path.basename(member))
+        with open(dst, "wb") as f:
+            subprocess.run(["bsdtar", "-xOf", iso, member], stdout=f, check=True)
+        out[key] = dst
+    out["basedir"], out["label"] = base, iso_label(iso)
+    return out
+
+
+def cmd_new(a):
+    vm = VM(a.home, a.name)
+    if os.path.exists(vm.cfg_path):
+        if not a.force:
+            die(f"{vm.name} exists (--force replaces it)")
+        if vm.pid():
+            die(f"{vm.name} is running; stop it first")
+        if not DRY:
+            shutil.rmtree(vm.dir)
+    gpu = "vmsvga" if a.vmsvga else "virtio" if a.virtio else a.gpu
+    fw_code = find_fw(FW_CODE_SB if a.secureboot else FW_CODE)
+    fw_vars = find_fw(FW_VARS)
+    if not fw_code or not fw_vars:
+        die("no OVMF firmware found (pacman -S edk2-ovmf, or set WOLVM_OVMF=dir)")
+    iso = os.path.abspath(a.iso) if a.iso else None
+    if a.from_image and not os.path.isfile(a.from_image):
+        die(f"{a.from_image}: no such disk image")
+    if iso and not os.path.isfile(iso):
+        die(f"{iso}: no such ISO")
+    cfg = {"name": vm.name, "iso": iso, "disk": a.disk, "mem": a.mem, "smp": a.smp, "tpm": a.tpm,
+           "secureboot": a.secureboot, "gpu": gpu, "res": a.res, "boot": "cdrom" if iso else "disk",
+           "append": a.append or "", "creds": list(a.cred or []), "ssh": a.ssh, "fw_code": fw_code,
+           "kvm": os.access("/dev/kvm", os.R_OK | os.W_OK), "vnc": a.vnc, "console": not a.no_console,
+           "drives": [f"{os.path.abspath(p)}{(',' + m) if m else ''}" for p, m in (split_drive(x) for x in a.drive or [])],
+           "net": not a.no_net, "iso_bus": a.iso_bus}
+    for path, _ in (split_drive(x) for x in cfg["drives"]):
+        if not os.path.isfile(path) and not DRY:
+            die(f"--drive {path}: no such file")
+    if DRY:
+        print(json.dumps(cfg, indent=1))
+        print(shlex.join(qemu_cmd(cfg, vm.dir, {"ssh_port": 2222 if a.ssh else None})))
+        return 0
+    os.makedirs(os.path.join(vm.dir, "shots"), exist_ok=True)
+    if a.from_image:  # an existing disk (raw or qcow2): an installed system, a prepared ESP
+        r = sh(["qemu-img", "convert", "-O", "qcow2", os.path.abspath(a.from_image), vm.p("disk.qcow2")])
+        if not r.returncode:
+            sh(["qemu-img", "resize", "-q", vm.p("disk.qcow2"), a.disk])  # grow only; a smaller size fails harmlessly
+    else:
+        r = sh(["qemu-img", "create", "-q", "-f", "qcow2", vm.p("disk.qcow2"), a.disk])
+    if r.returncode:
+        die(r.stderr.strip())
+    vars_src = fw_vars
+    if a.secureboot:
+        tmp = vm.p("vars-sb.fd")
+        r = sh(["virt-fw-vars", "--input", fw_vars, "--output", tmp, "--enroll-redhat", "--secure-boot"])
+        if r.returncode:
+            die("--secureboot needs virt-fw-vars (pacman -S virt-firmware): " + r.stderr.strip()[-300:])
+        vars_src = tmp
+    r = sh(["qemu-img", "convert", "-f", "raw", "-O", "qcow2", vars_src, vm.p("vars.qcow2")])
+    if r.returncode:
+        die(r.stderr.strip())
+    if a.ssh:
+        key = vm.p("id_ed25519")
+        sh(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"wolvm-{vm.name}", "-f", key], check=True)
+        pub = read_file(key + ".pub").strip()
+        cfg["creds"].append("ssh.authorized_keys.root=" + pub)
+    if a.direct:
+        if not iso:
+            die("--direct needs --iso")
+        cfg["direct"] = extract_direct(iso, vm.dir)
+    vm.save_cfg(cfg)
+    print(f"{vm.name}: {vm.dir} ({a.disk} disk, {gpu}, tpm={a.tpm}, secureboot={a.secureboot}, kvm={cfg['kvm']})")
+    return 0
+
+
+def free_port():
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def cmd_start(a):
+    vm = VM(a.home, a.name)
+    cfg = vm.cfg
+    if vm.pid():
+        print(f"{vm.name}: already running (pid {vm.pid()})")
+        return 0
+    run = {"ssh_port": (free_port() if not DRY else 2222) if cfg.get("ssh") else None}
+    if cfg.get("tpm"):
+        if not DRY:
+            os.makedirs(vm.p("tpm"), exist_ok=True)
+        r = sh(swtpm_cmd(vm.dir))
+        if r.returncode:
+            die("swtpm: " + r.stderr.strip())
+        for _ in range(50):
+            if DRY or os.path.exists(vm.p("tpm.sock")):
+                break
+            time.sleep(0.1)
+    cmd = qemu_cmd(cfg, vm.dir, run)
+    if DRY:
+        print(shlex.join(cmd))
+        return 0
+    for s in ("qmp.sock", "serial.sock", "qga.sock"):
+        if os.path.exists(vm.p(s)):
+            os.remove(vm.p(s))
+    run["serial_offset"] = os.path.getsize(vm.p("serial.log")) if os.path.exists(vm.p("serial.log")) else 0
+    run["started"] = time.time()
+    vm.save_run(run)
+    with open(vm.p("qemu.log"), "a") as log:
+        log.write(f"--- {time.ctime()}\n{shlex.join(cmd)}\n")
+        log.flush()
+        # stdin from /dev/null: a daemonized qemu must not hold the caller's terminal or ssh session
+        r = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+    if r.returncode:
+        try:  # a swtpm nobody connected to does not end by itself
+            os.kill(int(read_file(vm.p("swtpm.pid")).strip()), 15)
+        except (OSError, ValueError):
+            pass
+        last = read_file(vm.p("qemu.log")).strip().splitlines()[-1:]
+        die(f"qemu failed (exit {r.returncode}): {last[0] if last else ''} ({vm.p('qemu.log')})")
+    print(f"{vm.name}: started pid {vm.pid()}" + (f", ssh port {run['ssh_port']}" if run.get("ssh_port") else ""))
+    return 0
+
+
+def cmd_stop(a):
+    vm = VM(a.home, a.name)
+    pid = vm.pid()
+    if not pid and not DRY:
+        print(f"{vm.name}: not running")
+        return 0
+    q = vm.qmp()
+    if not a.force:
+        q.call({"execute": "system_powerdown"})
+        end = time.time() + a.timeout
+        while not DRY and time.time() < end and vm.pid():
+            time.sleep(0.5)
+    if DRY:
+        q.call({"execute": "quit"})
+        return 0
+    if vm.pid():
+        try:
+            vm.qmp().call({"execute": "quit"})
+        except (OSError, RuntimeError, SystemExit):
+            pass
+        time.sleep(1)
+    if vm.pid():
+        os.kill(pid, 9)
+    print(f"{vm.name}: stopped")
+    return 0
+
+
+def nudge(vm, q):
+    """Hyprland on virtio-vga without GL only flushes damaged regions; until something changes the
+    scanout can stay an old frame (seen on the v0.11.5 installer: black for 30 s, whole after one
+    pointer move). Moving the pointer one pixel and back makes it repaint, without a click."""
+    run = vm.run
+    w, h = run.get("screen") or (1280, 800)
+    x, y = run.get("pointer") or (w // 2, h // 2)
+    q.call(qmp_abs_move(x + 1 if x + 1 < w else x - 1, y, w, h))
+    q.call(qmp_abs_move(x, y, w, h))
+    if not DRY:
+        time.sleep(0.4)
+
+
+def screenshot(vm, out, do_nudge=True):
+    out = os.path.abspath(out)
+    q = vm.qmp()
+    if do_nudge:
+        nudge(vm, q)
+    if DRY:
+        q.call(qmp_screendump(out))
+        return 0, 0
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    if os.path.exists(out):
+        os.remove(out)
+    try:
+        q.call(qmp_screendump(out, "png"))
+    except RuntimeError as e:
+        if "format" not in str(e).lower() and "png" not in str(e).lower():
+            raise
+        tmp = out + ".ppm"
+        q.call(qmp_screendump(tmp, "ppm"))
+        png, _ = ppm_to_png(read_file(tmp, "rb"))
+        os.remove(tmp)
+        write_file(out, png, "wb")
+    size = png_size(out)
+    run = vm.run
+    run["screen"] = list(size)
+    vm.save_run(run)
+    return size
+
+
+def cmd_screenshot(a):
+    vm = VM(a.home, a.name)
+    try:
+        w, h = screenshot(vm, a.out, not a.no_nudge)
+    except RuntimeError as e:  # e.g. virtio-gl "no surface": never reuse an old frame
+        die(f"screendump: {e}")
+    print(f"{os.path.abspath(a.out)} {w}x{h}")
+    return 0
+
+
+def wait_stable(vm, timeout, interval=2.0):
+    q, last, end = vm.qmp(), None, time.time() + timeout
+    tmp = vm.p("stable.ppm")
+    while time.time() < end:
+        nudge(vm, q)
+        q.call(qmp_screendump(tmp, "ppm"))
+        cur = read_file(tmp, "rb")
+        if cur == last:
+            return True
+        last = cur
+        time.sleep(interval)
+    return False
+
+
+def cmd_wait_stable(a):
+    vm = VM(a.home, a.name)
+    if DRY:
+        vm.qmp().call(qmp_screendump(vm.p("stable.ppm"), "ppm"))
+        return 0
+    ok = wait_stable(vm, a.timeout)
+    print("stable" if ok else f"still changing after {a.timeout} s")
+    return 0 if ok else 1
+
+
+def type_text(vm, text, delay=0.06):
+    q = vm.qmp()
+    for chord in text_keys(text):
+        q.call(qmp_send_key(chord))
+        if not DRY:
+            time.sleep(delay)
+
+
+def press(vm, combos, delay=0.2):
+    q = vm.qmp()
+    for c in combos:
+        q.call(qmp_send_key(combo_keys(c)))
+        if not DRY:
+            time.sleep(delay)
+
+
+def click(vm, x, y, button="left", double=False):
+    size = vm.run.get("screen")
+    if not size and not DRY:
+        size = screenshot(vm, vm.p("click-size.png"))
+    w, h = size or (1280, 800)
+    q = vm.qmp()
+    q.call(qmp_abs_move(x, y, w, h))
+    if not DRY:
+        run = vm.run
+        run["pointer"] = [x, y]
+        vm.save_run(run)
+    if not DRY:
+        time.sleep(0.3)
+    for _ in range(2 if double else 1):
+        for down in (True, False):
+            q.call(qmp_button(button, down))
+            if not DRY:
+                time.sleep(0.08)
+
+
+def cmd_type(a):
+    type_text(VM(a.home, a.name), a.text.encode().decode("unicode_escape") if a.escapes else a.text)
+    return 0
+
+
+def cmd_key(a):
+    press(VM(a.home, a.name), a.combo)
+    return 0
+
+
+def cmd_click(a):
+    click(VM(a.home, a.name), a.x, a.y, a.button, a.double)
+    return 0
+
+
+ANSI = re.compile(r"\x1b\[[0-9;=?]*[A-Za-z]|\x1b[()][0-9A-B]|\x1b[=>]|\r")
+
+
+def serial_text(vm, since=None):
+    try:
+        with open(vm.p("serial.log"), "rb") as f:
+            f.seek(vm.run.get("serial_offset", 0) if since is None else since)
+            return ANSI.sub("", f.read().decode("utf-8", "replace"))
+    except OSError:
+        return ""
+
+
+def wait_text(vm, text, timeout, regex=False, new=False):
+    start = os.path.getsize(vm.p("serial.log")) if new and os.path.exists(vm.p("serial.log")) else None
+    end = time.time() + timeout
+    pat = re.compile(text) if regex else None
+    while True:
+        s = serial_text(vm, start)
+        if (pat.search(s) if pat else text in s):
+            return True, s
+        if time.time() > end or not vm.pid():
+            return False, s
+        time.sleep(0.5)
+
+
+def cmd_wait_text(a):
+    vm = VM(a.home, a.name)
+    if DRY:
+        print(f"wait for {a.text!r} in {vm.p('serial.log')}")
+        return 0
+    ok, s = wait_text(vm, a.text, a.timeout, a.regex, a.new)
+    if ok:
+        print(f"found {a.text!r}")
+        return 0
+    sys.stderr.write(f"timeout after {a.timeout} s waiting for {a.text!r}" +
+                     ("" if vm.pid() else " (VM stopped)") + "; serial tail:\n" + "\n".join(s.splitlines()[-25:]) + "\n")
+    return 1
+
+
+def cmd_serial(a):
+    vm = VM(a.home, a.name)
+    if a.action == "tail":
+        print("\n".join(serial_text(vm, 0 if a.all else None).splitlines()[-a.n:]))
+        return 0
+    if DRY:
+        print(f"serial send {a.text!r}")
+        return 0
+    s = socket.socket(socket.AF_UNIX)
+    s.connect(vm.p("serial.sock"))
+    for ch in a.text.encode().decode("unicode_escape").replace("\n", "\r"):
+        s.sendall(ch.encode("latin-1"))
+        time.sleep(0.02)
+    s.close()
+    return 0
+
+
+def wait_agent(vm, timeout):
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            vm.agent(timeout=3).call("guest-ping")
+            return True
+        except (OSError, ValueError, RuntimeError):
+            if not vm.pid():
+                return False
+            time.sleep(2)
+    return False
+
+
+def cmd_wait_agent(a):
+    vm = VM(a.home, a.name)
+    if DRY:
+        print(json.dumps({"execute": "guest-ping"}))
+        return 0
+    ok = wait_agent(vm, a.timeout)
+    print("agent up" if ok else f"no guest agent after {a.timeout} s")
+    return 0 if ok else 1
+
+
+def guest(vm, command, timeout=300, user="root", via="auto"):
+    """Run a shell command in the guest: ssh when the VM has --ssh and sshd answers, else the agent.
+    via: auto | ssh (fail rather than fall back) | agent."""
+    cfg, run = vm.cfg, vm.run
+    if via == "ssh" and not (cfg.get("ssh") and run.get("ssh_port")):
+        raise RuntimeError("this VM was made without --ssh")
+    if via != "agent" and cfg.get("ssh") and run.get("ssh_port"):
+        r = subprocess.run(["ssh", "-i", vm.p("id_ed25519"), "-p", str(run["ssh_port"]), "-o", "BatchMode=yes",
+                            "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+                            "-o", "ConnectTimeout=5", "-o", "LogLevel=ERROR", f"{user}@127.0.0.1", command],
+                           text=True, capture_output=True, timeout=timeout)
+        if r.returncode != 255 or via == "ssh":
+            return r.returncode, r.stdout, r.stderr
+    if user != "root":
+        command = f"runuser -u {shlex.quote(user)} -- sh -c {shlex.quote(command)}"
+    return vm.agent().run(command, timeout)
+
+
+def cmd_ssh(a):
+    vm = VM(a.home, a.name)
+    command = " ".join(a.cmd)
+    if DRY:
+        print(json.dumps({"execute": "guest-exec", "arguments": {"path": "/bin/sh", "arg": ["-c", command],
+                                                                 "capture-output": True}}))
+        return 0
+    try:
+        rc, out, err = guest(vm, command, a.timeout, a.user, a.via)
+    except (OSError, RuntimeError, TimeoutError, ValueError) as e:
+        die(f"no way into the guest yet ({e}); wolvm wait-agent {vm.name}")
+    sys.stdout.write(out)
+    sys.stderr.write(err)
+    return rc
+
+
+# The WolOS image ships sshd disabled and an nftables input policy of drop (table inet wolos):
+# for this boot only, start sshd and accept port 22. Nothing is written to the guest's disk.
+SSH_OPEN = ("systemctl start sshd.service && "
+            "{ nft list table inet wolos >/dev/null 2>&1 && nft insert rule inet wolos input tcp dport 22 accept || :; } && "
+            "systemctl is-active sshd.service")
+
+
+def cmd_ssh_open(a):
+    vm = VM(a.home, a.name)
+    if DRY:
+        print(SSH_OPEN)
+        return 0
+    if not vm.cfg.get("ssh"):
+        die(f"{vm.name} was made without --ssh (no key, no port forward)")
+    rc, out, err = guest(vm, SSH_OPEN, 60, via="agent")
+    if rc:
+        die(f"could not open sshd: {(out + err).strip()}")
+    rc, out, err = guest(vm, "true", 30, via="ssh")
+    print(f"ssh up on 127.0.0.1:{vm.run.get('ssh_port')}" if rc == 0 else f"sshd started but ssh failed: {err.strip()}")
+    return rc
+
+
+def logs(vm, n=300, unit=None):
+    jc = f"journalctl -b --no-pager -o short-monotonic -n {int(n)}" + (f" -u {shlex.quote(unit)}" if unit else "")
+    try:
+        rc, out, err = guest(vm, jc, 120)
+        return out + err
+    except (OSError, RuntimeError, TimeoutError, ValueError) as e:
+        return f"(guest unreachable: {e}; serial log instead)\n" + "\n".join(serial_text(vm).splitlines()[-n:])
+
+
+def cmd_logs(a):
+    vm = VM(a.home, a.name)
+    if DRY:
+        print(f"journalctl -b -n {a.n}" + (f" -u {a.unit}" if a.unit else ""))
+        return 0
+    text = logs(vm, a.n, a.unit)
+    if a.out:
+        write_file(a.out, text)
+        print(f"{a.out}: {len(text.splitlines())} lines")
+    else:
+        sys.stdout.write(text)
+    return 0
+
+
+def snapshot(vm, action, tag=None):
+    running = vm.pid() is not None
+    if action in ("save", "restore", "delete") and not tag:
+        die(f"snapshot {action} needs a TAG")
+    if running or DRY:
+        hmp = {"save": f"savevm {tag}", "restore": f"loadvm {tag}", "delete": f"delvm {tag}",
+               "list": "info snapshots"}[action]
+        out = vm.qmp().hmp(hmp)
+        if action != "list" and out.strip():
+            die(f"{hmp}: {out.strip()}")
+        return out or f"{action} {tag}: ok (whole VM)"
+    flag = {"save": "-c", "restore": "-a", "delete": "-d", "list": "-l"}[action]
+    out = []
+    for disk in ("disk.qcow2", "vars.qcow2"):
+        r = sh(["qemu-img", "snapshot", flag] + ([tag] if tag else []) + [vm.p(disk)])
+        if r.returncode:
+            die(f"qemu-img snapshot {flag} {disk}: {r.stderr.strip()}")
+        out.append(r.stdout if action == "list" else f"{disk}: {action} {tag} ok (disks only, VM stopped)")
+    return "\n".join(out)
+
+
+def cmd_snapshot(a):
+    print(snapshot(VM(a.home, a.name), a.action, a.tag))
+    return 0
+
+
+def cmd_eject(a):
+    VM(a.home, a.name).qmp().call({"execute": "eject", "arguments": {"id": "cd0", "force": True}})
+    print("ejected")
+    return 0
+
+
+def cmd_set(a):
+    vm = VM(a.home, a.name)
+    cfg = vm.cfg
+    if a.boot:
+        cfg["boot"] = a.boot
+    if a.no_iso:
+        cfg["iso"], cfg["boot"] = None, "disk"
+    if a.iso:
+        cfg["iso"] = os.path.abspath(a.iso)
+    for k in ("append", "mem", "gpu", "res", "vnc"):
+        if getattr(a, k) is not None:
+            cfg[k] = getattr(a, k)
+    if a.net:
+        cfg["net"] = a.net == "on"
+    if a.secureboot:
+        if not cfg.get("secureboot"):
+            die(f"{vm.name} was made without --secureboot (no secure firmware, no keys)")
+        if vm.pid() and not DRY:
+            die(f"{vm.name} is running; stop it first")
+        for cmd in vars_secureboot_cmds(vm.p("vars.qcow2"), a.secureboot == "on", vm.p("vars-edit")):
+            r = sh(cmd)
+            if r.returncode:
+                die(f"{cmd[0]}: {r.stderr.strip()[-300:]}")
+        for f in ("vars-edit.raw", "vars-edit.sb.raw"):
+            if os.path.exists(vm.p(f)):
+                os.remove(vm.p(f))
+        cfg["secureboot_enforce"] = a.secureboot == "on"
+    if DRY:
+        print(json.dumps(cfg, indent=1))
+        return 0
+    vm.save_cfg(cfg)
+    print(f"{vm.name}: boot={cfg['boot']} iso={cfg['iso']} (takes effect at the next start)")
+    return 0
+
+
+def cmd_status(a):
+    vm = VM(a.home, a.name)
+    cfg, run, pid = vm.cfg, vm.run, vm.pid()
+    agent = False
+    if pid:
+        try:
+            vm.agent(timeout=2).call("guest-ping")
+            agent = True
+        except (OSError, ValueError, RuntimeError):
+            pass
+    print(json.dumps({"name": vm.name, "dir": vm.dir, "running": bool(pid), "pid": pid, "agent": agent,
+                      "boot": cfg.get("boot"), "iso": cfg.get("iso"), "screen": run.get("screen"),
+                      "ssh_port": run.get("ssh_port") if pid else None}, indent=1))
+    return 0
+
+
+def cmd_list(a):
+    root = os.path.join(a.home, "vms")
+    for n in sorted(os.listdir(root)) if os.path.isdir(root) else []:
+        vm = VM(a.home, n)
+        print(f"{n}\t{'running' if vm.pid() else 'stopped'}\t{vm.dir}")
+    return 0
+
+
+def cmd_rm(a):
+    vm = VM(a.home, a.name)
+    if vm.pid():
+        die(f"{vm.name} is running; stop it first")
+    shutil.rmtree(vm.dir)
+    print(f"{vm.name}: removed")
+    return 0
+
+
+# ---------------------------------------------------------------- journey and report
+def run_step(vm, st, out_dir, idx):
+    """Runs one parsed step. Returns (ok, detail)."""
+    v, args, o = st["verb"], st["args"], st["opts"]
+    t = float(o.get("timeout", 120))
+    if v == "start":
+        return cmd_start(argparse.Namespace(home=os.path.dirname(os.path.dirname(vm.dir)), name=vm.name)) == 0, ""
+    if v == "stop":
+        cmd_stop(argparse.Namespace(home=os.path.dirname(os.path.dirname(vm.dir)), name=vm.name,
+                                    force=bool(o.get("force")), timeout=t))
+        return True, ""
+    if v in ("shot", "screenshot"):
+        return True, ""  # the runner takes the picture
+    if v == "type":
+        type_text(vm, args[0])
+        return True, ""
+    if v == "key":
+        press(vm, args)
+        return True, ""
+    if v == "click":
+        click(vm, int(args[0]), int(args[1]), o.get("button", "left"), bool(o.get("double")))
+        return True, ""
+    if v == "wait-text":
+        ok, s = wait_text(vm, args[0], t, bool(o.get("regex")), bool(o.get("new")))
+        return ok, "" if ok else "timeout; serial tail:\n" + "\n".join(s.splitlines()[-15:])
+    if v == "wait-agent":
+        return wait_agent(vm, t), ""
+    if v == "wait-stable":
+        return wait_stable(vm, t), ""
+    if v == "sleep":
+        time.sleep(float(args[0]))
+        return True, ""
+    if v in ("ssh", "exec"):
+        rc, out, err = guest(vm, args[0], t, o.get("user", "root"), o.get("via", "auto"))
+        text = out + err
+        if o.get("save"):
+            write_file(os.path.join(out_dir, os.path.basename(str(o["save"]))), text)
+        want = o.get("rc", 0)
+        ok = (want == "any" or rc == int(want)) and (str(o["expect"]) in text if "expect" in o else True)
+        return ok, f"rc={rc}\n{text[-2000:]}"
+    if v == "logs":
+        text = logs(vm, int(o.get("n", 300)), o.get("unit"))
+        name = f"{idx:02d}-logs.txt"
+        write_file(os.path.join(out_dir, name), text)
+        return True, f"saved {name} ({len(text.splitlines())} lines)"
+    if v in ("checkpoint", "snapshot-save"):
+        return True, snapshot(vm, "save", args[0] if args else f"step{idx}")
+    if v == "snapshot-restore":
+        return True, snapshot(vm, "restore", args[0])
+    if v == "eject":
+        vm.qmp().call({"execute": "eject", "arguments": {"id": "cd0", "force": True}})
+        return True, ""
+    if v == "boot":
+        cfg = vm.cfg
+        cfg["boot"] = args[0] if args else "disk"
+        vm.save_cfg(cfg)
+        return True, f"next start boots {cfg['boot']}"
+    if v == "note":
+        return True, args[0]
+    if v == "serial-send":
+        cmd_serial(argparse.Namespace(home=os.path.dirname(os.path.dirname(vm.dir)), name=vm.name,
+                                      action="send", text=args[0]))
+        return True, ""
+    return False, f"unhandled verb {v}"
+
+
+def slug(s):
+    return re.sub(r"[^A-Za-z0-9]+", "-", s).strip("-")[:40] or "step"
+
+
+def cmd_journey(a):
+    vm = VM(a.home, a.name)
+    meta, steps = load_journey(a.file)
+    if DRY:
+        for i, st in enumerate(steps, 1):
+            print(f"{i:02d} {st['verb']} {json.dumps(st['args'])} {json.dumps(st['opts'])}")
+        return 0
+    vm.cfg  # exists?
+    out = os.path.abspath(a.out or os.path.join(vm.dir, "journeys", time.strftime("%Y%m%d-%H%M%S")))
+    os.makedirs(out, exist_ok=True)
+    with open(os.path.join(out, "journey.jsonl"), "a") as jl:
+        title = meta.get("name") or os.path.basename(a.file)
+        jl.write(json.dumps({"journey": title, "vm": vm.name, "file": os.path.abspath(a.file), "time": time.ctime()}) + "\n")
+        failed = 0
+        for i, st in enumerate(steps, 1):
+            if i < a.frm:
+                continue
+            label = " ".join([st["verb"]] + st["args"])
+            t0 = time.time()
+            tries = int(st["opts"].get("retry", 0)) + 1
+            for attempt in range(tries):
+                try:
+                    ok, detail = run_step(vm, st, out, i)
+                except (OSError, RuntimeError, TimeoutError, ValueError) as e:
+                    ok, detail = False, f"{type(e).__name__}: {e}"
+                except SystemExit as e:  # die() inside a step fails the step, not the journey
+                    ok, detail = False, f"exit {e.code}"
+                if ok:
+                    break
+                if st["opts"].get("on-fail-restore"):
+                    snapshot(vm, "restore", st["opts"]["on-fail-restore"])
+            shot = None
+            want_shot = st["opts"].get("shot", True) and st["verb"] not in ("stop", "note", "boot", "logs")
+            if want_shot and vm.pid():
+                name = (st["args"][0] if st["verb"] in ("shot", "screenshot") and st["args"] else "-".join([st["verb"]] + ([slug(" ".join(st["args"]))] if st["args"] else [])))
+                shot = f"{i:02d}-{slug(name)}.png"
+                try:
+                    screenshot(vm, os.path.join(out, shot))
+                except (OSError, RuntimeError, ValueError) as e:
+                    detail += f"\n(screenshot failed: {e})"
+                    shot = None
+            rec = {"n": i, "step": label, "opts": st["opts"], "ok": ok, "secs": round(time.time() - t0, 1),
+                   "shot": shot, "detail": detail, "caption": st["opts"].get("caption", "")}
+            jl.write(json.dumps(rec) + "\n")
+            jl.flush()
+            print(f"{'ok  ' if ok else 'FAIL'} {i:02d} {label[:70]}" + (f"  [{shot}]" if shot else ""), flush=True)
+            if not ok:
+                failed += 1
+                if detail:
+                    print("     " + detail.replace("\n", "\n     ")[:1500])
+                if not a.keep_going:
+                    print(f"stopped at step {i}; fix and rerun with --from {i} (snapshots: wolvm snapshot {vm.name} list)")
+                    break
+        shutil.copy(vm.p("serial.log"), os.path.join(out, "serial.log")) if os.path.exists(vm.p("serial.log")) else None
+    write_report(out)
+    print(f"{out}: {'all steps passed' if not failed else f'{failed} failed'}; report {os.path.join(out, 'index.html')}")
+    return 1 if failed else 0
+
+
+def write_report(d):
+    recs, head = [], {}
+    jp = os.path.join(d, "journey.jsonl")
+    if os.path.exists(jp):
+        for line in read_file(jp).splitlines():
+            r = json.loads(line)
+            if "journey" in r:
+                head, recs = r, []  # the last run in this dir
+            else:
+                recs.append(r)
+    else:
+        for n, f in enumerate(sorted(x for x in os.listdir(d) if x.endswith(".png")), 1):
+            recs.append({"n": n, "step": f, "ok": True, "shot": f, "detail": "", "caption": ""})
+    texts = sorted(f for f in os.listdir(d) if f.endswith((".txt", ".log")))
+    serial_tail = ""
+    if os.path.exists(os.path.join(d, "serial.log")):
+        serial_tail = ANSI.sub("", read_file(os.path.join(d, "serial.log"), "rb").decode("utf-8", "replace"))
+        serial_tail = "\n".join(serial_tail.splitlines()[-80:])
+    title = head.get("journey", os.path.basename(d.rstrip("/")))
+    passed = sum(1 for r in recs if r["ok"])
+    md = [f"# {title}", "", f"VM `{head.get('vm', '?')}`, {head.get('time', '')}: {passed}/{len(recs)} steps ok.", ""]
+    for r in recs:
+        md.append(f"## {r['n']:02d} {'ok' if r['ok'] else 'FAIL'}: `{r['step']}` ({r.get('secs', 0)} s)")
+        if r.get("caption"):
+            md.append(r["caption"])
+        if r.get("shot"):
+            md.append(f"![{r['step']}]({r['shot']})")
+        if r.get("detail"):
+            md += ["```", r["detail"], "```"]
+        md.append("")
+    md += ["## Files", ""] + [f"- [{t}]({t})" for t in texts]
+    if serial_tail:
+        md += ["", "## Serial (last 80 lines)", "```", serial_tail, "```"]
+    write_file(os.path.join(d, "report.md"), "\n".join(md) + "\n")
+    e = html.escape
+    h = [f"<!doctype html><meta charset=utf-8><title>{e(title)}</title><style>body{{font:14px sans-serif;"
+         "max-width:1400px;margin:2em auto;background:#111;color:#ddd}}.s{{margin:1.5em 0;padding:1em;"
+         "background:#1b1b1b;border-left:4px solid #3a3}}.f{{border-color:#d33}}img{{max-width:100%;"
+         "border:1px solid #333}}pre{{white-space:pre-wrap;background:#000;padding:.6em;max-height:24em;"
+         "overflow:auto}}a{{color:#8cf}}</style>",
+         f"<h1>{e(title)}</h1><p>VM <code>{e(head.get('vm', '?'))}</code>, {e(head.get('time', ''))}: "
+         f"<b>{passed}/{len(recs)}</b> steps ok.</p>"]
+    for r in recs:
+        h.append(f"<div class='s{'' if r['ok'] else ' f'}'><h3>{r['n']:02d} {'ok' if r['ok'] else 'FAIL'}: "
+                 f"<code>{e(r['step'])}</code> <small>{r.get('secs', 0)} s</small></h3>")
+        if r.get("caption"):
+            h.append(f"<p>{e(r['caption'])}</p>")
+        if r.get("shot"):
+            h.append(f"<a href='{e(r['shot'])}'><img src='{e(r['shot'])}' loading=lazy></a>")
+        if r.get("detail"):
+            h.append(f"<pre>{e(r['detail'])}</pre>")
+        h.append("</div>")
+    h.append("<h2>Files</h2><ul>" + "".join(f"<li><a href='{e(t)}'>{e(t)}</a></li>" for t in texts) + "</ul>")
+    if serial_tail:
+        h.append(f"<h2>Serial (last 80 lines)</h2><pre>{e(serial_tail)}</pre>")
+    write_file(os.path.join(d, "index.html"), "\n".join(h) + "\n")
+    return os.path.join(d, "index.html")
+
+
+def cmd_report(a):
+    print(write_report(os.path.abspath(a.dir)))
+    return 0
+
+
+# ---------------------------------------------------------------- doctor
+def cmd_doctor(a):
+    checks = []
+    kvm = os.path.exists("/dev/kvm")
+    checks.append(("kvm", kvm and os.access("/dev/kvm", os.R_OK | os.W_OK),
+                   "/dev/kvm usable" if kvm else "no /dev/kvm: falls back to TCG (10x slower)", False))
+    for tool, need, hint in (("qemu-system-x86_64", True, "pacman -S qemu-base"), ("qemu-img", True, "qemu-img"),
+                             ("swtpm", False, "--tpm needs it: pacman -S swtpm"),
+                             ("virt-fw-vars", False, "--secureboot needs it: pacman -S virt-firmware"),
+                             ("bsdtar", False, "--direct needs it: pacman -S libarchive"),
+                             ("ssh", False, "--ssh needs openssh"), ("ssh-keygen", False, "--ssh needs openssh")):
+        p = shutil.which(tool)
+        checks.append((tool, bool(p), p or hint, need))
+    for label, names, need in (("ovmf-code", FW_CODE, True), ("ovmf-code-secboot", FW_CODE_SB, False),
+                               ("ovmf-vars", FW_VARS, True)):
+        p = find_fw(names)
+        checks.append((label, bool(p), p or "pacman -S edk2-ovmf (or WOLVM_OVMF=dir)", need))
+    if shutil.which("qemu-system-x86_64"):
+        v = subprocess.run(["qemu-system-x86_64", "--version"], text=True, capture_output=True).stdout.split("\n")[0]
+        checks.append(("qemu-version", True, v, False))
+    checks.append(("home", True, a.home, False))
+    bad = 0
+    for name, ok, info, need in checks:
+        print(f"{'ok  ' if ok else ('MISS' if need else 'warn')} {name:18} {info}")
+        bad += (not ok and need)
+    return 1 if bad else 0
+
+
+# ---------------------------------------------------------------- CLI
+def parser():
+    ap = argparse.ArgumentParser(prog="wolvm", description="Drive a QEMU test VM step by step (see tests/README-wolvm.md).")
+    ap.add_argument("--home", default=os.environ.get("WOLVM_HOME", HOME_DEFAULT))
+    ap.add_argument("--dry-run", action="store_true", help="print the qemu command / QMP JSON, run nothing")
+    sp = ap.add_subparsers(dest="cmd", required=True)
+    sp.add_parser("doctor").set_defaults(fn=cmd_doctor)
+    n = sp.add_parser("new")
+    n.add_argument("name"); n.add_argument("--iso"); n.add_argument("--disk", default="40G")
+    n.add_argument("--mem", default="6G"); n.add_argument("--smp", type=int, default=4)
+    n.add_argument("--tpm", action="store_true"); n.add_argument("--secureboot", action="store_true")
+    n.add_argument("--gpu", choices=sorted(GPUS), default="virtio")
+    n.add_argument("--vmsvga", action="store_true"); n.add_argument("--virtio", action="store_true")
+    n.add_argument("--res", default="1280x800"); n.add_argument("--ssh", action="store_true")
+    n.add_argument("--direct", action="store_true", help="boot the ISO's kernel directly (cmdline under our control)")
+    n.add_argument("--append", help="extra kernel cmdline (e.g. wolos.try)")
+    n.add_argument("--cred", action="append", help="systemd credential NAME=VALUE via SMBIOS")
+    n.add_argument("--vnc", help="e.g. unix:/path/vnc.sock or 127.0.0.1:5 for a person to watch")
+    n.add_argument("--no-console", action="store_true", help="do not add console=ttyS0")
+    n.add_argument("--drive", action="append", metavar="FILE[,ro|,snapshot]",
+                   help="an extra raw virtio disk (/dev/vdb, vdc... in order), bytes untouched by wolvm")
+    n.add_argument("--no-net", action="store_true", help="no network card (offline install)")
+    n.add_argument("--iso-bus", choices=["ide", "virtio"], default="ide",
+                   help="virtio: the ISO as a writable throwaway disk (snapshot=on), like a USB stick")
+    n.add_argument("--from-image", help="start from a copy of this raw/qcow2 disk instead of an empty one")
+    n.add_argument("--force", action="store_true"); n.set_defaults(fn=cmd_new)
+    for name, fn in (("start", cmd_start), ("status", cmd_status), ("rm", cmd_rm), ("eject", cmd_eject)):
+        s = sp.add_parser(name); s.add_argument("name"); s.set_defaults(fn=fn)
+    sp.add_parser("list").set_defaults(fn=cmd_list)
+    s = sp.add_parser("stop"); s.add_argument("name"); s.add_argument("--force", action="store_true")
+    s.add_argument("--timeout", type=float, default=60); s.set_defaults(fn=cmd_stop)
+    s = sp.add_parser("set"); s.add_argument("name"); s.add_argument("--boot", choices=["disk", "cdrom"])
+    s.add_argument("--iso"); s.add_argument("--no-iso", action="store_true"); s.add_argument("--append")
+    s.add_argument("--mem"); s.add_argument("--gpu", choices=sorted(GPUS)); s.add_argument("--res"); s.add_argument("--vnc")
+    s.add_argument("--secureboot", choices=["on", "off"], help="SecureBootEnable in the vars (VM made with --secureboot, stopped)")
+    s.add_argument("--net", choices=["on", "off"])
+    s.set_defaults(fn=cmd_set)
+    s = sp.add_parser("screenshot", aliases=["shot"]); s.add_argument("name"); s.add_argument("out")
+    s.add_argument("--no-nudge", action="store_true", help="do not wiggle the pointer to force a repaint")
+    s.set_defaults(fn=cmd_screenshot)
+    s = sp.add_parser("wait-stable"); s.add_argument("name"); s.add_argument("--timeout", type=float, default=60)
+    s.set_defaults(fn=cmd_wait_stable)
+    s = sp.add_parser("type"); s.add_argument("name"); s.add_argument("text")
+    s.add_argument("-e", "--escapes", action="store_true", help="read \\n \\t in TEXT"); s.set_defaults(fn=cmd_type)
+    s = sp.add_parser("key"); s.add_argument("name"); s.add_argument("combo", nargs="+"); s.set_defaults(fn=cmd_key)
+    s = sp.add_parser("click"); s.add_argument("name"); s.add_argument("x", type=int); s.add_argument("y", type=int)
+    s.add_argument("--button", default="left", choices=["left", "right", "middle"])
+    s.add_argument("--double", action="store_true"); s.set_defaults(fn=cmd_click)
+    s = sp.add_parser("serial"); s.add_argument("name"); s.add_argument("action", choices=["tail", "send"])
+    s.add_argument("text", nargs="?", default=""); s.add_argument("-n", type=int, default=40)
+    s.add_argument("--all", action="store_true", help="tail across earlier boots too"); s.set_defaults(fn=cmd_serial)
+    s = sp.add_parser("wait-text"); s.add_argument("name"); s.add_argument("text")
+    s.add_argument("--timeout", type=float, default=120); s.add_argument("--regex", action="store_true")
+    s.add_argument("--new", action="store_true", help="only text that arrives from now on"); s.set_defaults(fn=cmd_wait_text)
+    s = sp.add_parser("wait-agent"); s.add_argument("name"); s.add_argument("--timeout", type=float, default=300)
+    s.set_defaults(fn=cmd_wait_agent)
+    s = sp.add_parser("ssh", aliases=["exec"]); s.add_argument("name"); s.add_argument("cmd", nargs="+")
+    s.add_argument("--timeout", type=float, default=300); s.add_argument("--user", default="root")
+    s.add_argument("--via", choices=["auto", "ssh", "agent"], default="auto"); s.set_defaults(fn=cmd_ssh)
+    s = sp.add_parser("ssh-open"); s.add_argument("name"); s.set_defaults(fn=cmd_ssh_open)
+    s = sp.add_parser("logs"); s.add_argument("name"); s.add_argument("-n", type=int, default=300)
+    s.add_argument("-u", "--unit"); s.add_argument("-o", "--out"); s.set_defaults(fn=cmd_logs)
+    s = sp.add_parser("snapshot"); s.add_argument("name"); s.add_argument("action", choices=["save", "restore", "list", "delete"])
+    s.add_argument("tag", nargs="?"); s.set_defaults(fn=cmd_snapshot)
+    s = sp.add_parser("journey"); s.add_argument("name"); s.add_argument("file"); s.add_argument("--out")
+    s.add_argument("--from", dest="frm", type=int, default=1); s.add_argument("--keep-going", action="store_true")
+    s.set_defaults(fn=cmd_journey)
+    s = sp.add_parser("report"); s.add_argument("dir"); s.set_defaults(fn=cmd_report)
+    return ap
+
+
+def main(argv=None):
+    global DRY
+    a = parser().parse_args(argv)
+    DRY = a.dry_run
+    try:
+        return a.fn(a) or 0
+    except ValueError as e:
+        die(str(e), 2)
+    except (RuntimeError, OSError, TimeoutError) as e:
+        die(str(e))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

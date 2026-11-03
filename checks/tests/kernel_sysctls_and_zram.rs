@@ -9,8 +9,7 @@ mod siblings;
 
 use std::{fs, path::PathBuf, process::Command};
 fn repo(p: &str) -> PathBuf {
-    siblings::root()
-        .join(p)
+    siblings::root().join(p)
 }
 
 fn read(p: &str) -> String {
@@ -35,12 +34,12 @@ fn image_ships_memory_and_latency_sysctls_and_zram() {
     }
     let z = read("files/usr/lib/systemd/zram-generator.conf");
     assert!(z.contains("[zram0]") && z.contains("compression-algorithm = zstd"));
-    for f in ["profile/packages.x86_64", "profile/packages-base.txt"] {
-        assert!(
-            read(f).lines().any(|l| l == "zram-generator"),
-            "{f} lacks zram-generator"
-        );
-    }
+    assert!(
+        read("profile/packages.x86_64")
+            .lines()
+            .any(|l| l == "zram-generator"),
+        "profile/packages.x86_64 lacks zram-generator"
+    );
     let t = read("files/usr/lib/tmpfiles.d/70-wolos-performance.conf");
     assert!(
         t.contains("/sys/kernel/mm/lru_gen/min_ttl_ms")

@@ -8,8 +8,7 @@ mod siblings;
 
 use std::{fs, path::PathBuf, process::Command};
 fn repo(p: &str) -> PathBuf {
-    siblings::root()
-        .join(p)
+    siblings::root().join(p)
 }
 
 fn read(p: &str) -> String {
@@ -56,7 +55,10 @@ fn keyring_package_carries_repo_and_cachyos_keys_fully_trusted() {
     assert_eq!(cachy, [CACHY_KEY], "one pinned CachyOS key");
     let keys = fingerprints("wolos-keyring/wolos.gpg");
     assert!(keys.iter().any(|k| k == WOLOS_KEY), "{keys:?}");
-    assert_eq!(fingerprints("wolos-keyring/wolos-repo.pub.asc"), [WOLOS_KEY]);
+    assert_eq!(
+        fingerprints("wolos-keyring/wolos-repo.pub.asc"),
+        [WOLOS_KEY]
+    );
     for c in &cachy {
         assert!(keys.iter().any(|k| k == c), "{c} missing from {keys:?}");
     }
@@ -71,7 +73,10 @@ fn keyring_package_carries_repo_and_cachyos_keys_fully_trusted() {
     assert!(pb.contains("$pkgdir/usr/share/pacman/keyrings/wolos.gpg"));
     assert!(pb.contains("$pkgdir/usr/share/pacman/keyrings/wolos-trusted"));
     assert!(pb.contains("install=wolos-keyring.install"));
-    assert!(pb.contains("cachy-trusted"), "the PKGBUILD names the pin file");
+    assert!(
+        pb.contains("cachy-trusted"),
+        "the PKGBUILD names the pin file"
+    );
     let inst = read("wolos-keyring/wolos-keyring.install");
     assert!(inst.contains("post_install()") && inst.contains("post_upgrade()"));
     assert!(inst.contains("pacman-key --populate wolos"));
@@ -95,7 +100,11 @@ fn keyring_is_built_before_base_and_installed_first() {
 /// scripts, the workflow and the image build know nothing of a republished repo.
 #[test]
 fn nothing_republishes_cachyos_packages() {
-    for gone in ["release/mirror-cachy.sh", "release/cachy-extra", "release/cachy-trusted"] {
+    for gone in [
+        "release/mirror-cachy.sh",
+        "release/cachy-extra",
+        "release/cachy-trusted",
+    ] {
         assert!(!repo(gone).exists(), "{gone} is back");
     }
     for f in [
@@ -109,5 +118,8 @@ fn nothing_republishes_cachyos_packages() {
         assert!(!t.contains("[wolos-cachy]"), "{f}: [wolos-cachy]");
         assert!(!t.contains("wolos_cachy_"), "{f}: WOLOS_CACHY_*");
     }
-    assert!(!read("release/release-manifest.sh").contains("cachy\""), "no cachy field");
+    assert!(
+        !read("release/release-manifest.sh").contains("cachy\""),
+        "no cachy field"
+    );
 }

@@ -1,22 +1,27 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# A WolOS release: on a tag v*, build the ISO with mkarchiso on the ECS cluster from the published
-# [wolos-testing] repo (wolos-build iso
-# --ecs; never from a source tree), boot and install it in a VM, sign release.json, and publish the
-# ISO, its .sha256 and release.json (+ release.json.sig) as the latest release of
+# A WolOS release. The ISO is built and VM-tested where it is built, on the forge (BF-9; never in a
+# rolling container on this runner), from the published [wolos-testing] repo, and left in
+# s3://$BUCKET/runs/release-<tag>/iso/ (BUILD.md "Release"):
+#   wolos-build iso --out DIR && WOLOS_VM=V sh wolos-iso/tests/test-install.sh --release DIR &&
+#   cp V/test/checks.txt DIR/ && aws s3 sync DIR/ s3://$BUCKET/runs/release-<tag>/iso/
+# Here: that ISO (its checks.txt must say BOOT PASS and no FAIL), Secure Boot signing and its OVMF
+# boot when the keys are set, then `wolos-build release --do --iso` (lib/publish.sh in wolos-build):
+# release.json (image URL on the release, sha256 and size of the image as published), its Ed25519
+# signature (release/sign-release.sh), the .sha256, and the latest release of
 # vars.WOLOS_RELEASES_REPO: release.json is what `update-check` and `wol update` read.
 # Reusable: called only by wonderlandos/wolos .github/workflows/publish.yml (what=iso, run=<tag>),
 # the one repo that holds the keys (explicit secrets); OIDC subject = wolos main, so vars.* are
-# wolos's. The tag (vX.Y.Z) is a tag of wolos-iso; calling again re-runs its release (same checks).
-# The runner never builds: it signs, tests and publishes. Then promote the packages to [wolos]
-# (what=promote, wolos-pkgbuilds promote.yml).
-# Every result also lands in s3://$BUCKET/runs/release-<tag>/dist/ (+ release.sh: the release
-# writes). With secrets.WOLOS_RELEASES_TOKEN they run here; without it (the documented
-# hand mode) nothing is written to the releases repo and a ::notice:: gives main the command to run
-# with the lead's gh login. A missing signing key is always an error.
+# wolos's. The tag (vX.Y.Z) is the release tag `wolos-build release vX.Y.Z` put on all four repos
+# (ADR 0029); calling again re-runs its release (same checks). The runner never builds: it signs and
+# publishes. Then promote the packages to [wolos] (what=promote, wolos-pkgbuilds promote.yml).
+# Every result also lands in s3://$BUCKET/runs/release-<tag>/dist/. With secrets.WOLOS_RELEASES_TOKEN
+# the release is written here; without it (hand mode, WOLOS_GH_RECORD) the writes go to
+# s3://$BUCKET/runs/release-<tag>/release.sh and a ::notice:: gives main the command to run with
+# the lead's gh login. A missing signing key is always an error.
 # Secrets: WOLOS_RELEASE_KEY (Ed25519 PEM, the package key: release.json.sig), WOLOS_SB_KEY /
 # WOLOS_SB_CERT (PEM, Secure Boot, ADR 0025; with
 # vars.WOLOS_SB_LAYOUT=1), WOLOS_RELEASES_TOKEN (optional: writes the releases repo). Variables:
-# AWS_ROLE_ARN, AWS_REGION, CLUSTER, TASK_DEF_ISO, CAPACITY, BUCKET (the cluster, OIDC), WOLOS_RELEASES_REPO.
+# AWS_ROLE_ARN, AWS_REGION, BUCKET (S3 and ECR over OIDC), WOLOS_RELEASES_REPO, WOLOS_SB_LAYOUT.
 # The tool runs from the builder image (.github/builder, .github/builder-image; ECR over OIDC).
 name: release
 
@@ -39,7 +44,12 @@ on:
 
 permissions:
   contents: read
-  id-token: write   # AWS build cluster (OIDC)
+  id-token: write   # S3 and ECR (the builder image) over OIDC
+
+# Every run: script is bash -eo pipefail (a failing stage of a pipeline fails the step).
+defaults:
+  run:
+    shell: bash
 
 jobs:
   release:
@@ -47,7 +57,7 @@ jobs:
     # Required reviewers: the lead configures them on the `release` environment of the caller
     # repo (wolos, Settings > Environments > release). Signing secrets are passed explicitly.
     environment: release
-    timeout-minutes: 360
+    timeout-minutes: 120
     env:
       TAG: ${{ inputs.tag }}
       RUN: release-${{ inputs.tag }}
@@ -79,99 +89,47 @@ jobs:
       - name: Builder registry
         uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
 
-      # mkarchiso (archlinux, privileged task) on a whole host, from [wolos-testing] as published.
-      - name: ISO on the build cluster
-        env:
-          CLUSTER: ${{ vars.CLUSTER }}
-          TASK_DEF_ISO: ${{ vars.TASK_DEF_ISO }}
-          CAPACITY: ${{ vars.CAPACITY }}
-          BUCKET: ${{ vars.BUCKET }}
-          WOLOS_REPO_NAME: wolos-testing
-          WOLOS_IMAGE_URL: https://github.com/${{ vars.WOLOS_RELEASES_REPO || 'wonderlandos/wolos-packages' }}/releases/download/${{ inputs.tag || github.ref_name }}
-        run: WOLOS_ISO=$PWD/wolos-iso wolos-iso/.github/builder wolos-build iso --ecs --out out/iso
-
-      - name: Release files
+      # The ISO built and VM-tested on the forge, with the manifest build.sh wrote next to it.
+      - name: The tested ISO
         run: |
-          mkdir -p dist
-          iso=$(ls -t out/iso/wolos-*.iso | head -1)
-          mv "$iso" dist/
-          cp "${iso%.iso}.json" dist/release.json   # release/release-manifest.sh, written by build.sh
-          (cd dist && sha256sum "$(basename "$iso")" > "$(basename "$iso").sha256")
-          cat dist/release.json
-
-      # Unattended install in QEMU/KVM, then the installed disk boots on its own (tests/test-install.sh).
-      - name: VM boot test
-        run: |
-          iso=$(ls dist/*.iso)
-          docker run --rm --device /dev/kvm -v "$PWD:/src" -w /src archlinux:latest bash -euo pipefail -c "
-            pacman -Sy --noconfirm --needed qemu-base edk2-ovmf libarchive util-linux python python-pillow mtools dosfstools swtpm >/dev/null
-            WOLOS_VM=/src/out/vm sh wolos-iso/tests/test-install.sh $iso || true
-            cat /src/out/vm/test/checks.txt"
-          grep -q 'BOOT PASS' out/vm/test/checks.txt && ! grep -q 'FAIL' out/vm/test/checks.txt
+          mkdir -p dist && aws s3 sync --quiet --exclude '*' --include '*.iso' --include '*.json' --include 'checks.txt' "s3://$BUCKET/runs/$RUN/iso/" dist/
+          [ -f dist/checks.txt ] || { echo "::error::no s3://$BUCKET/runs/$RUN/iso/checks.txt: the ISO was not VM-tested (BUILD.md Release)"; exit 1; }
+          grep -q 'BOOT PASS' dist/checks.txt && ! grep -q 'FAIL' dist/checks.txt || { echo "::error::the VM test of the ISO did not pass"; cat dist/checks.txt; exit 1; }
+          rm -f dist/checks.txt dist/release.json; ls -l dist | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Secure Boot: sign systemd-boot and the UKI of the shim layout, then boot the image in OVMF
-      # with Secure Boot on. The image changes, so its hash, size and manifest follow.
+      # with Secure Boot on. The image changes: `release --rehash` takes its hash and size as it is then.
       - name: Secure Boot
         env:
           SB_KEY: ${{ secrets.WOLOS_SB_KEY }}
           SB_CERT: ${{ secrets.WOLOS_SB_CERT }}
         run: |
-          iso=$(python3 -c 'import json; print(json.load(open("dist/release.json"))["image"].rsplit("/", 1)[1])')
+          iso=$(cd dist && ls *.iso)
           if [ -n "$SB_KEY" ] && [ -n "$SB_CERT" ]; then
             (umask 077; printf '%s\n' "$SB_KEY" > "$RUNNER_TEMP/sb.key"; printf '%s\n' "$SB_CERT" > "$RUNNER_TEMP/sb.crt")
             docker run --rm --device /dev/kvm -v "$PWD:/src" -v "$RUNNER_TEMP:/keys" -w /src archlinux:latest bash -euo pipefail -c "
               pacman -Sy --noconfirm --needed mtools sbsigntools openssl python util-linux qemu-base edk2-ovmf virt-firmware >/dev/null
               wolos-iso/release/sb-layout.sh sign dist/$iso /keys/sb.key /keys/sb.crt
               wolos-iso/tests/test-secureboot.sh dist/$iso /keys/sb.crt"
-            rm -f "$RUNNER_TEMP/sb.key"
-            sudo chown -R "$(id -u)" dist
-            (cd dist && sha256sum "$iso" > "$iso.sha256")
-            python3 - "dist/$iso" <<'PY'
-          import hashlib, json, os, sys
-          f = sys.argv[1]; m = json.load(open("dist/release.json")); h = hashlib.sha256()
-          with open(f, "rb") as r:
-              for b in iter(lambda: r.read(1 << 20), b""): h.update(b)
-          m["sha256"], m["size"] = h.hexdigest(), os.path.getsize(f)
-          json.dump(m, open("dist/release.json", "w"), separators=(",", ":"))
-          PY
+            rm -f "$RUNNER_TEMP/sb.key"; sudo chown -R "$(id -u)" dist
+            echo "SB_SIGNED=1" >> "$GITHUB_ENV"
           elif [ "$WOLOS_SB_LAYOUT" = 1 ]; then
             # Unsigned, the shim layout is an image that fails on every PC with Secure Boot on: not a release.
             echo "::error::WOLOS_SB_LAYOUT=1 without WOLOS_SB_KEY/WOLOS_SB_CERT: the image would not boot with Secure Boot on; add the secrets or set WOLOS_SB_LAYOUT=0"
             exit 1
           fi
 
-      - name: Sign release.json
+      # release.json + signature + .sha256 + the signed stable feed (stable.json + .sig), then the
+      # release of $GH_REPO (here, or recorded for main in hand mode), and dist/ to
+      # s3://$BUCKET/runs/release-<tag>/: all `wolos-build release`.
+      - name: Sign and publish the release
         env:
-          KEY: ${{ secrets.WOLOS_RELEASE_KEY }}
+          WOLOS_RELEASE_KEY: ${{ secrets.WOLOS_RELEASE_KEY }}
         run: |
-          [ -n "$KEY" ] || { echo "::error::no WOLOS_RELEASE_KEY: release.json unsigned, updates would not offer it"; exit 1; }
-          printf '%s\n' "$KEY" > "$RUNNER_TEMP/release.pem"
-          wolos-iso/release/sign-release.sh dist/release.json "$RUNNER_TEMP/release.pem"
-          rm -f "$RUNNER_TEMP/release.pem"
-
-      # In $GH_REPO, where update-check reads releases/latest/download/release.json and the CDN
-      # pulls <tag>/<file> from. The writes, run in dist/: here (token) or by main (hand mode).
-      - name: Publish the release
-        run: |
-          snap=$(tr -d '[:space:]' < wolos-iso/profile/snapshot)
-          mkdir -p out/publish
-          printf 'TAG=%s\nsnap=%s\n' "$TAG" "$snap" > out/publish/release.sh
-          cat >> out/publish/release.sh <<'SH'
-          gh release view "$TAG" >/dev/null 2>&1 ||
-            gh release create "$TAG" --title "WolOS ${TAG#v}" --latest \
-              --notes "WolOS ${TAG#v}: the ISO, its .sha256 and release.json. Packages: release wolos-$snap ([wolos]) and wolos-testing."
-          gh release upload "$TAG" --clobber ./*.iso ./*.sha256 release.json release.json.sig
-          gh release edit "$TAG" --latest
-          SH
-          s3=s3://$BUCKET/runs/$RUN
-          aws s3 sync --quiet --delete dist/ "$s3/dist/"
-          aws s3 cp --quiet out/publish/release.sh "$s3/release.sh"
-          echo "release files: $s3/dist/" | tee -a "$GITHUB_STEP_SUMMARY"
-          if [ "$UPLOAD" = 1 ]; then (cd dist && sh -eu ../out/publish/release.sh); exit 0; fi
-          d=wolos-$RUN
-          cmd="mkdir -p $d && aws s3 sync $s3/ $d/ && (cd $d/dist && GH_REPO=$GH_REPO sh -eux ../release.sh)"
-          { echo "### Not published: no WOLOS_RELEASES_TOKEN (hand mode)"; echo '```'; echo "$cmd"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-          echo "::notice title=Release built and signed, not published (no WOLOS_RELEASES_TOKEN)::Publish with your gh login: $cmd"
+          export WOLOS_ISO=$PWD/wolos-iso WOLOS_SUMMARY=$PWD/out/summary.md WOLOS_WORK=$PWD/out/work
+          [ "$UPLOAD" = 1 ] || export WOLOS_GH_RECORD=$PWD/out/release.sh
+          wolos-iso/.github/builder wolos-build release --do --iso dist ${SB_SIGNED:+--rehash} --run "$RUN" "$TAG"
+          [ ! -f out/summary.md ] || cat out/summary.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-${{ inputs.tag }}
@@ -179,5 +137,8 @@ jobs:
             dist/*.sha256
             dist/release.json
             dist/release.json.sig
-            out/publish/
+            dist/stable.json
+            dist/stable.json.sig
+            out/release.sh
+          if-no-files-found: ignore
           retention-days: 14

@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Unattended install (wolos.autoinstall, files/usr/lib/wolos/autoinstall in the wolos repo), then
+# the installed disk. The VM must be made with the cmdline words, e.g.
+#   wolvm new inst --iso wolos.iso --tpm --direct --append "wolos.autoinstall=/dev/vda wolos.autologin=yes"
+name: unattended install, then first boot of the disk
+steps:
+- start
+- wait-text: "wolos-install: done"
+  timeout: 1800
+  caption: the installer finished on the console
+- wait-text: "reboot: Power down"
+  timeout: 300
+  shot: false
+- stop
+- boot disk
+- start
+- shot firmware
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+  caption: first boot of the installed system
+- ssh: "bootctl status --no-pager; cat /proc/cmdline; systemctl --failed --no-legend"
+  rc: any
+  save: installed.txt
+- ssh: "cat /proc/cmdline"
+  expect: "rootflags=subvol=@wolos-a"
+  caption: the installed slot A, read-only root
+- ssh: "grep -qw ro /proc/cmdline && echo root-ro"
+  expect: "root-ro"
+- ssh: "bootctl status --no-pager"
+  expect: "Current Entry: wolos-a"
+- ssh: "timeout 120 systemctl is-system-running --wait"
+  expect: "running"
+  save: system-state.txt
+- ssh: "n=$(systemctl --failed --no-legend --plain | wc -l); echo failed=$n; test $n = 0 && echo no-failed-units"
+  expect: "no-failed-units"
+  save: failed-units.txt
+- ssh: "systemctl is-active wold.service boot-complete.target multi-user.target && echo services-up"
+  expect: "services-up"
+  caption: the login window (wold) is up and the boot counted as good
+- ssh: "ls /efi/loader/entries"
+  expect: "wolos-a.conf"
+  caption: the entry is blessed (try counter gone)
+- logs:
+  n: 800
+- checkpoint: installed-up

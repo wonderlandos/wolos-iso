@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Legitimate heavy use for the limits test: make -j16 over 1500 small C files while a browser-like
 # tree (40 processes of 100 threads, 64 MB each) stays alive. Prints the build time.
-d=$(mktemp -d /home/wol/build.XXXX); cd "$d"
+d=$(mktemp -d /home/wol/build.XXXX); cd "$d" || exit 1
 for i in $(seq 1500); do
 	printf '#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\nint f%d(int x){char b[64];snprintf(b,64,"%%d",x);return atoi(b)+%d;}\n' "$i" "$i" > "f$i.c"
 done
