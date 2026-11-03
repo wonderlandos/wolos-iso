@@ -714,6 +714,12 @@ fn dual_boot_e2e_checks_clock_bitlocker_and_reinstall() {
         r#"slot_file "$d" lib/wolos/modules-pending "$d/pending" @var"#,
         r#"slot_file "$d" lib/wolos/modules-attempts "$d/attempts" @var"#,
         r#"mount -o "ro,subvol=$sv""#,
+        // A pre-release build's repo is not published: served from this machine, its key trusted,
+        // both set in the guest while it is still offline (the drain then runs on connection up).
+        "WOLOS_E2E_REPO",
+        "python3 -u -m http.server 0",
+        "Server = http://10.0.2.2:$port",
+        "pacman-key --lsign-key $fpr",
     ] {
         assert!(i.contains(want), "test-installer.sh lacks {want}");
     }

@@ -12,7 +12,9 @@
 # VMs: wolvm (tests/wolvm/wolvm, tests/README-wolvm.md), one per scenario (e2e-<scenario> in
 #      $WOLOS_E2E/wolvm): the scenario's raw disk goes in (--from-image) and comes back out raw for
 #      the checks; KVM when /dev/kvm is usable, TCG otherwise.
-# Env: WOLOS_E2E (work dir), WOLOS_E2E_INSTALL_S, WOLOS_E2E_BOOT_S (longer without /dev/kvm).
+# Env: WOLOS_E2E (work dir), WOLOS_E2E_INSTALL_S, WOLOS_E2E_BOOT_S (longer without /dev/kvm),
+#      WOLOS_E2E_MODULES_S; WOLOS_E2E_REPO (+ WOLOS_E2E_REPO_KEY): offline-modules installs from
+#      this local repo, signed with that key (a build not yet published).
 # Needs: wolvm's tools (qemu, qemu-img, edk2-ovmf, bsdtar, swtpm), sudo, squashfs-tools, xorriso.
 set -u
 REPO=$(cd "$(dirname "$0")/.." && pwd); H=$REPO/tests/test
@@ -216,6 +218,39 @@ slot_file() {
   with_loop "$1/disk.raw" read_slot_file "$1" "$2" "$3"
 }
 
+# serve_repo DIR: $WOLOS_E2E_REPO over HTTP on a free port; prints "PID PORT".
+serve_repo() {
+  local log=$1/repo-http.log pid port t=0
+  (cd "$WOLOS_E2E_REPO" && exec python3 -u -m http.server 0 --bind 0.0.0.0) > "$log" 2>&1 &
+  pid=$!
+  until port=$(sed -n 's/.* port \([0-9]*\) .*/\1/p' "$log" | head -n 1); [ -n "$port" ] || [ "$t" -ge 20 ]; do
+    sleep 1; t=$((t + 1))
+  done
+  [ -n "$port" ] || { kill "$pid" 2>/dev/null; return 1; }
+  echo "$pid $port"
+}
+
+# repo_in_guest VM PORT: an offline start of the installed system to put the served repo first in
+# its WolOS mirror list (the guest reaches this machine at 10.0.2.2) and to trust
+# $WOLOS_E2E_REPO_KEY, the build's own signing key; then the VM is off again.
+repo_in_guest() {
+  local n=$1 port=$2 key='' fpr='' rc=0
+  if [ -n "${WOLOS_E2E_REPO_KEY:-}" ]; then
+    key=$(base64 -w0 "$WOLOS_E2E_REPO_KEY") || return 1
+    fpr=$(gpg --with-colons --show-keys "$WOLOS_E2E_REPO_KEY" | awk -F: '$1 == "fpr" { print $10; exit }')
+    [ -n "$fpr" ] || return 1
+  fi
+  w start "$n" >/dev/null || return 1
+  w wait-agent "$n" --timeout "${WOLOS_E2E_BOOT_S:-150}" >/dev/null || rc=1
+  [ "$rc" = 1 ] || w ssh "$n" "sed -i '1i Server = http://10.0.2.2:$port' /etc/pacman.d/wolos-mirrorlist && sync" >/dev/null 2>&1 || rc=1
+  if [ "$rc" = 0 ] && [ -n "$key" ]; then
+    w ssh "$n" "echo $key | base64 -d > /run/e2e-key.asc && pacman-key --add /run/e2e-key.asc && pacman-key --lsign-key $fpr && sync" >/dev/null 2>&1 || rc=1
+  fi
+  w stop "$n" >/dev/null 2>&1 || :
+  wait_off "$n" 120
+  return "$rc"
+}
+
 # offline_modules DIR: installed with no network and a module ticked (audit6 I6-6). The module waits
 # in modules-pending, the offline boot leaves it there (no tries used up, I6-3), and the first
 # start WITH a network installs it and empties the file (firstboot / 50-wolos-online, I6-2).
@@ -233,6 +268,16 @@ offline_modules() {
   say "the offline start counted no try" "[ ! -s '$d/attempts' ]"
   slot_file "$d" lib/wolos/modules-gave-up "$d/gave-up" @var
   say "nothing given up offline" "[ ! -s '$d/gave-up' ]"
+  # A build not yet published (pre-release): its repo and signing key come from this machine. The
+  # guest is told while still offline (its own start, guest agent), so the online start drains
+  # through the real path: the connection coming up (50-wolos-online).
+  local srv=''
+  if [ -n "${WOLOS_E2E_REPO:-}" ]; then
+    srv=$(serve_repo "$d") || { echo "E2E FAIL $S: could not serve $WOLOS_E2E_REPO"; return; }
+    if ! repo_in_guest "$n" "${srv#* }"; then
+      kill "${srv%% *}" 2>/dev/null; echo "E2E FAIL $S: could not point the guest at the local repo"; return
+    fi
+  fi
   w set "$n" --net on >/dev/null 2>&1 || { echo "E2E FAIL $S: wolvm set --net on failed"; return; }
   w start "$n" >/dev/null || { echo "E2E FAIL $S: the online start failed"; return; }
   until w ssh "$n" "test ! -e /var/lib/wolos/modules-pending && pacman -Q wolos-module-$id" >/dev/null 2>&1 || [ "$t" -ge "$q" ]; do
@@ -240,6 +285,7 @@ offline_modules() {
   done
   w ssh "$n" "test ! -e /var/lib/wolos/modules-pending && echo pending-empty; pacman -Q wolos-module-$id; systemctl --failed --no-legend --plain; echo end" > "$d/online.txt" 2>&1 || :
   w stop "$n" --force >/dev/null 2>&1
+  [ -z "$srv" ] || kill "${srv%% *}" 2>/dev/null
   say "the pending file emptied once online" "grep -qx pending-empty '$d/online.txt'"
   say "the module is installed" "grep -q '^wolos-module-$id ' '$d/online.txt'"
   say "no unit failed after the drain" "grep -qx end '$d/online.txt' && ! grep -q 'failed' '$d/online.txt'"
