@@ -355,11 +355,31 @@ class Expect(unittest.TestCase):
     def test_boot_journeys_assert(self):
         for f, want in (("live-boot.yaml", ["running", "no-failed-units", "services-up"]),
                         ("install-auto.yaml", ["rootflags=subvol=@wolos-a", "Current Entry: wolos-a",
-                                               "running", "no-failed-units", "wolos-a.conf"])):
+                                               "running", "no-failed-units", "wolos-a.conf",
+                                               "bind-ok", "no-failed-units-again",
+                                               "second-start-unlocked", "success"])):
             _, steps = W.load_journey(os.path.join(HERE, "journeys", f))
             got = [st["opts"]["expect"] for st in steps if "expect" in st["opts"]]
             for w in want:
                 self.assertIn(w, got, f)
+
+    def test_install_auto_starts_the_installed_disk_twice(self):
+        """I6-4: the second start (the re-bound policy) is walked, and nobody types in it."""
+        _, steps = W.load_journey(os.path.join(HERE, "journeys", "install-auto.yaml"))
+        verbs = [st["verb"] for st in steps]
+        starts = [i for i, v in enumerate(verbs) if v == "start"]
+        self.assertEqual(len(starts), 3, verbs)
+        after = verbs[starts[-1]:]
+        self.assertEqual(after[0], "start")
+        self.assertIn("wait-agent", after)
+        self.assertNotIn("type", after)
+        self.assertNotIn("key", after)
+        # the stop before the second start, with the checkpoint taken first
+        self.assertEqual(verbs[starts[-1] - 1], "stop")
+        self.assertLess(verbs.index("checkpoint"), starts[-1])
+        # the reseal unit is asked on the second start
+        seen = [st["args"][0] for st in steps[starts[-1]:] if st["verb"] == "ssh"]
+        self.assertTrue(any("wolos-tpm-reseal" in a for a in seen), seen)
 
 
 if __name__ == "__main__":

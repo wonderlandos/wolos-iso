@@ -11,7 +11,7 @@ steps:
 - start
 - wait-text: "Security Violation"
   timeout: 90
-  caption: shim's ERROR box, "Verification failed: (0x1A) Security Violation", one OK button
+  caption: "shim's ERROR box, \"Verification failed: (0x1A) Security Violation\", one OK button"
 - key: ret
   caption: OK; shim opens MokManager
 - wait-text: "Press any key to perform MOK management"

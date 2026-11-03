@@ -26,7 +26,16 @@
 #      enforcement off for the install, on for the boot: the mok tier, whose first boot is
 #      MokManager; its screens are driven by key presses (WOLOS_MOK_KEYS). Default (plain OVMF vars,
 #      Setup Mode): the own-keys tier.
+#      WOLOS_PLAN=auto (needs WOLOS_INSTALL_SCENARIO=<the install_scenario example binary of the wolos
+#      repo>, WOLOS_ENCRYPT=no): instead of a plain erase the live system reads a plan the app would
+#      have written (wolos.plan=WOLOSKEY:plan, autoinstall:50-56), made here for the blank 32G
+#      /dev/vda (its fingerprint is that of a blank disk). Proves the plan was used: its account
+#      (Alice Liddell) exists in the booted system.
 #      WOLOS_BOOT_S (240): seconds the installed disk gets to boot (and enroll, and boot again).
+#      Encrypted variants also ask the booted system whether any unit failed (a passphrase disk must
+#      not run the chip's reseal, audit I6-1). tpm and mok boot the disk a SECOND time without
+#      typing anything: the policy the first boot re-bound (PCR 7, +14 behind shim) must open the
+#      disk on its own and no unlock prompt may reach the serial console (audit I6-4).
 #      WOLOS_WOLVM: another wolvm (the checks run this script on a stub).
 # Needs: wolvm's tools (qemu-system-x86_64, qemu-img, edk2-ovmf, bsdtar; swtpm for tpm,
 #        virt-firmware for mok), blkid, sfdisk, mtools; python3 + Pillow for the screenshot check;
@@ -34,7 +43,7 @@
 set -u
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 VM=${WOLOS_VM:-$HOME/WolOS-vm}; T=$VM/test
-ENC=${WOLOS_ENCRYPT:-no}; SB=${WOLOS_SECBOOT:-0}
+ENC=${WOLOS_ENCRYPT:-no}; SB=${WOLOS_SECBOOT:-0}; PLAN=${WOLOS_PLAN:-no}
 N=install
 WOLVM=${WOLOS_WOLVM:-$REPO/tests/wolvm/wolvm}   # WOLOS_WOLVM: tests only (a stub wolvm)
 w() { "$WOLVM" --home "$T/wolvm" "$@"; }
@@ -50,6 +59,14 @@ command -v qemu-system-x86_64 >/dev/null || { echo "$0: qemu-system-x86_64 missi
 command -v qemu-img >/dev/null || { echo "$0: qemu-img missing (pacman -S qemu-img)" >&2; exit 1; }
 command -v mdir >/dev/null || { echo "$0: mtools missing (pacman -S mtools): the boot check reads the ESP with it" >&2; exit 1; }
 case $ENC in no | tpm | passphrase) ;; *) echo "$0: WOLOS_ENCRYPT=$ENC: no, tpm or passphrase" >&2; exit 1 ;; esac
+case $PLAN in
+  no) ;;
+  auto)
+    [ "$ENC" = no ] || { echo "$0: WOLOS_PLAN=auto: the plan decides the protection: WOLOS_ENCRYPT=no" >&2; exit 1; }
+    [ -x "${WOLOS_INSTALL_SCENARIO:-}" ] || { echo "$0: WOLOS_PLAN=auto needs WOLOS_INSTALL_SCENARIO=<install_scenario binary> (cargo build -p shell --example install_scenario)" >&2; exit 1; }
+    command -v mkfs.vfat >/dev/null && command -v mcopy >/dev/null && command -v mmd >/dev/null || { echo "$0: WOLOS_PLAN=auto: dosfstools and mtools needed" >&2; exit 1; } ;;
+  *) echo "$0: WOLOS_PLAN=$PLAN: auto or nothing" >&2; exit 1 ;;
+esac
 [ "$ENC" != tpm ] || command -v swtpm >/dev/null || { echo "$0: swtpm missing (pacman -S swtpm)" >&2; exit 1; }
 [ "$SB" != mok ] || command -v virt-fw-vars >/dev/null || { echo "$0: virt-fw-vars missing (pacman -S virt-firmware)" >&2; exit 1; }
 mkdir -p "$T"
@@ -81,7 +98,7 @@ echo "test-install: $ISO ($(sha256sum "$ISO" | cut -d' ' -f1))"
 # unattended entry).
 bsdtar -tf "$ISO" wolos/boot/x86_64/vmlinuz-linux-wolos >/dev/null 2>&1 || { echo "test-install: no kernel in $ISO" >&2; exit 1; }
 cd "$T" || exit 1
-rm -f serial-install.log serial-boot.log checks.txt install.raw other.raw keys.raw shot*.png mok*.png unlock*.png
+rm -rf plan; rm -f probe.json plan-scenario.log serial-install.log serial-boot.log serial-boot2.log checks.txt install.raw other.raw keys.raw shot*.png mok*.png unlock*.png facts-boot*.txt sb-state*.txt
 w stop "$N" --force >/dev/null 2>&1; w rm "$N" >/dev/null 2>&1
 truncate -s 17G other.raw
 head -c 64M /dev/urandom | dd of=other.raw conv=notrunc status=none
@@ -98,6 +115,22 @@ case $ENC in
     words="wolos.encrypt=passphrase wolos.passphrase=WOLOSKEY:passphrase wolos.recovery=console"
     opts="--drive $T/keys.raw" ;;
 esac
+if [ "$PLAN" = auto ]; then
+  # The plan the app would write for the blank /dev/vda (32 GiB): install_scenario walks the
+  # installer's pages on that disk's probe (no table, no partitions), then the plan directory goes
+  # on the WOLOSKEY disk, where the live system finds it by label.
+  rm -rf plan && mkdir plan || exit 1
+  python3 -c '
+import json
+b = 32 << 30
+print(json.dumps({"path": "/dev/vda", "model": "", "bytes": b, "sector": 512, "table": "None", "id": "",
+                  "first": 2048, "last": b // 512 - 34, "parts": []}))' > probe.json &&
+    "$WOLOS_INSTALL_SCENARIO" erase probe.json plan > plan-scenario.log 2>&1 &&
+    [ -s plan/plan.json ] || { echo "test-install: install_scenario made no plan (plan-scenario.log)" >&2; exit 1; }
+  truncate -s 32M keys.raw && mkfs.vfat -n WOLOSKEY keys.raw >/dev/null && mmd -i keys.raw ::plan || { echo "test-install: mkfs.vfat/mmd failed" >&2; exit 1; }
+  for f in plan/*; do mcopy -i keys.raw "$f" "::plan/${f##*/}" || { echo "test-install: mcopy $f failed" >&2; exit 1; }; done
+  words="wolos.plan=WOLOSKEY:plan"; opts="--drive $T/keys.raw"
+fi
 # mok: Secure Boot firmware, Microsoft's keys in, enforcement off for the install (the unsigned
 # live kernel must start) and on for the boot (what the person's PC does).
 [ "$SB" != mok ] || opts="$opts --secureboot"
@@ -144,12 +177,45 @@ if [ "$ENC" = passphrase ]; then
 fi
 sleep "$BOOT_S"
 shot shot.png
+# guest_facts FILE: what the booted installed system says about itself, as "== section" blocks (the
+# guest agent; no network needed). failed: units in the failed state. bind: wolos-tpm-bind (first
+# boot: seals the disk key to PCR 7, +14 behind shim) and whether its install key is gone. reseal:
+# wolos-tpm-reseal started by hand (a no-op unless the chip refused the disk; never a failure).
+guest_facts() {
+  w ssh "$N" 'echo "== state"; timeout 120 systemctl is-system-running --wait
+echo "== failed"; systemctl --failed --no-legend --plain
+echo "== bind"; systemctl show -p ConditionResult -p Result wolos-tpm-bind
+test -e /var/lib/wolos/secureboot/rebind.key && echo rebind-key-left || echo rebind-key-gone
+journalctl -b -u wolos-tpm-bind --no-pager -o cat
+echo "== reseal"; systemctl start wolos-tpm-reseal; echo "start-rc=$?"
+systemctl show -p Result wolos-tpm-reseal
+journalctl -b -u wolos-tpm-reseal --no-pager -o cat
+echo "== account"; getent passwd | grep -c "Alice Liddell"
+echo "== end"' > "$1" 2>&1 || :
+}
+# sect FILE NAME: the lines of one "== NAME" block.
+sect() { awk -v s="== $2" '/^== /{on=($0==s);next} on' "$1"; }
+rm -f facts-boot1.txt
+{ [ "$ENC" = no ] && [ "$PLAN" = no ]; } || guest_facts facts-boot1.txt
 # mok: Secure Boot really on in the booted system (the guest agent; no network needed). Without
 # it the mok tier would pass with shim starting anything.
 rm -f sb-state.txt
 [ "$SB" != mok ] || w ssh "$N" "mokutil --sb-state" > sb-state.txt 2>&1 || :
 w stop "$N" --force >/dev/null 2>&1
 w serial "$N" tail -n 1000000 > serial-boot.log
+# 2b. tpm and mok: boot the disk AGAIN, typing nothing. The first start used the install-time policy
+# (PCR 11), rebind then sealed the key to PCR 7 (+14): only a second start proves that policy opens
+# the disk, and that MokManager has nothing left to ask. Waits for the guest agent, not a fixed time.
+second=0; { [ "$ENC" = tpm ] || [ "$SB" = mok ]; } && second=1
+if [ "$second" = 1 ]; then
+  w start "$N" >/dev/null || { echo "test-install: the second start did not work" >&2; exit 1; }
+  t=0; until w ssh "$N" true >/dev/null 2>&1 || [ "$t" -ge "$BOOT_S" ]; do sleep 5; t=$((t + 5)); done
+  shot shot2.png
+  guest_facts facts-boot2.txt
+  [ "$SB" != mok ] || w ssh "$N" "mokutil --sb-state" > sb-state2.txt 2>&1 || :
+  w stop "$N" --force >/dev/null 2>&1
+  w serial "$N" tail -n 1000000 > serial-boot2.log
+fi
 # shellcheck disable=SC2034
 other_after=$(sha256sum other.raw | cut -d' ' -f1)
 # The installed disk as raw, read from outside below.
@@ -179,6 +245,29 @@ b() { if eval "$2"; then echo "BOOT PASS $1"; else echo "BOOT FAIL $1"; fi; }
       b "disk encrypted ($ENC)" "grep -aq 'wolos-install: encrypt 45' serial-install.log && grep -aq 'wolos-install: recovery ' serial-install.log" ;;
     no) b "disk not encrypted (default autoinstall)" "! grep -aq 'wolos-install: encrypt 45' serial-install.log" ;;
   esac
+  # No unit failed on an encrypted disk. The passphrase variant is the one that used to fail
+  # (the chip's reseal ran on every encrypted start and found no chip), audit I6-1.
+  if [ "$ENC" != no ]; then
+    b "no failed unit after the first boot ($ENC)" "grep -q '^== end' facts-boot1.txt && [ -z \"\$(sect facts-boot1.txt failed)\" ]"
+    b "wolos-tpm-reseal does not fail ($ENC)" "sect facts-boot1.txt reseal | grep -qx 'Result=success'"
+  fi
+  if [ "$PLAN" = auto ]; then
+    b "the plan was used (its account exists)" "sect facts-boot1.txt account | grep -qx 1"
+    b "plan install said done (wolos.plan=)" "grep -aq 'wolos-install: done' serial-install.log && ! grep -aq 'wolos-install: fail' serial-install.log"
+  fi
+  if [ "$ENC" = tpm ]; then
+    b "first boot: wolos-tpm-bind ran and finished" "sect facts-boot1.txt bind | grep -qx 'Result=success' && sect facts-boot1.txt bind | grep -qx 'ConditionResult=yes' && sect facts-boot1.txt bind | grep -q 'Finished Bind the disk key'"
+    b "first boot: the install key is gone after the bind" "sect facts-boot1.txt bind | grep -qx rebind-key-gone"
+  fi
+  if [ "$second" = 1 ]; then
+    b "second boot: the guest answered without anyone typing" "grep -q '^== end' facts-boot2.txt"
+    b "second boot: no unlock prompt on the console" "! grep -aiq 'enter passphrase\|enter recovery' serial-boot2.log"
+    b "second boot: no failed unit" "grep -q '^== end' facts-boot2.txt && [ -z \"\$(sect facts-boot2.txt failed)\" ]"
+    b "second boot: wolos-tpm-reseal ran clean" "sect facts-boot2.txt reseal | grep -qx 'start-rc=0' && sect facts-boot2.txt reseal | grep -qx 'Result=success'"
+    b "second boot: the entry stayed blessed" "grep -q '/wolos-a.conf$' entries.txt"
+    [ "$ENC" != tpm ] || b "second boot: the chip unlocked the disk (install key gone)" "sect facts-boot2.txt bind | grep -qx rebind-key-gone"
+    [ "$SB" != mok ] || b "second boot: Secure Boot still on (no MokManager round)" "grep -q 'SecureBoot enabled' sb-state2.txt"
+  fi
   [ "$SB" != mok ] || b "mok tier: shim first" "grep -q 'shimx64.efi' efi-wolos.txt && grep -q 'wolos-key.cer' efi-wolos.txt"
   [ "$SB" != mok ] || b "mok tier: Secure Boot enabled in the booted system" "grep -q 'SecureBoot enabled' sb-state.txt"
   # Informative: a UI screenshot has thousands of colours (firmware and text screens a handful).

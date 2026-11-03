@@ -6,7 +6,7 @@
 # Usage: tests/test-installer.sh remaster BASE.iso BIN_DIR | tests/test-installer.sh run SCENARIO...
 #        tests/test-installer.sh layouts BIN_DIR NAME...   (real partitioning on loop devices, no VM)
 # Scenarios: erase alongside-windows alongside-linux manual manual-ext4 password encrypted-alongside tpm medium
-#            bitlocker-windows reinstall-windows
+#            bitlocker-windows reinstall-windows replace offline-modules
 # Exit status of `run`: 1 when any E2E FAIL line came out or a scenario left no E2E PASS line
 # (tests/test/verdict.sh), else 0.
 # VMs: wolvm (tests/wolvm/wolvm, tests/README-wolvm.md), one per scenario (e2e-<scenario> in
@@ -184,6 +184,7 @@ boot_in_vm() { # dir scenario: up, a screenshot, a clean stop
 
 adjtime() { # dir: the installed slot's /etc/adjtime (empty when it has none) in $dir/adjtime
   local m=$1/mnt p; mkdir -p "$m"; : > "$1/adjtime"
+  # shellcheck disable=SC2317,SC2329  # run through with_loop, by name
   read_adjtime() {
     for p in "${LOOP}"p*; do
       sudo mount -o ro,subvol=@wolos-a "$p" "$m" 2>/dev/null || continue
@@ -195,12 +196,53 @@ adjtime() { # dir: the installed slot's /etc/adjtime (empty when it has none) in
   with_loop "$1/disk.raw" read_adjtime "$1"
 }
 
+# slot_file DIR PATH OUT: PATH of the installed slot (empty OUT when it has none).
+slot_file() {
+  local m=$1/mnt; mkdir -p "$m"; : > "$3"
+  # shellcheck disable=SC2317,SC2329  # run through with_loop, by name
+  read_slot_file() {
+    local p
+    for p in "${LOOP}"p*; do
+      sudo mount -o ro,subvol=@wolos-a "$p" "$m" 2>/dev/null || continue
+      # shellcheck disable=SC2024  # the copy is the caller's file on purpose; only reading needs root
+      [ ! -f "$m/$2" ] || sudo cat "$m/$2" > "$3"
+      sudo umount "$m"
+    done
+  }
+  with_loop "$1/disk.raw" read_slot_file "$1" "$2" "$3"
+}
+
+# offline_modules DIR: installed with no network and a module ticked (audit6 I6-6). The module waits
+# in modules-pending, the offline boot leaves it there (no tries used up, I6-3), and the first
+# start WITH a network installs it and empties the file (firstboot / 50-wolos-online, I6-2).
+offline_modules() {
+  local d=$1 n=e2e-offline-modules t=0 q=${WOLOS_E2E_MODULES_S:-900}
+  slot_file "$d" var/lib/wolos/modules-pending "$d/pending"
+  say "the module was queued at install (no network)" "grep -qx ai-sessions '$d/pending'"
+  slot_file "$d" var/lib/wolos/modules-attempts "$d/attempts"
+  say "the offline start counted no try" "[ ! -s '$d/attempts' ]"
+  slot_file "$d" var/lib/wolos/modules-gave-up "$d/gave-up"
+  say "nothing given up offline" "[ ! -s '$d/gave-up' ]"
+  w set "$n" --net on >/dev/null 2>&1 || { echo "E2E FAIL $S: wolvm set --net on failed"; return; }
+  w start "$n" >/dev/null || { echo "E2E FAIL $S: the online start failed"; return; }
+  until w ssh "$n" 'test ! -e /var/lib/wolos/modules-pending && pacman -Q wolos-module-ai-sessions' >/dev/null 2>&1 || [ "$t" -ge "$q" ]; do
+    sleep 10; t=$((t + 10))
+  done
+  w ssh "$n" 'test ! -e /var/lib/wolos/modules-pending && echo pending-empty; pacman -Q wolos-module-ai-sessions; systemctl --failed --no-legend --plain; echo end' > "$d/online.txt" 2>&1 || :
+  w stop "$n" --force >/dev/null 2>&1
+  say "the pending file emptied once online" "grep -qx pending-empty '$d/online.txt'"
+  say "the module is installed" "grep -q '^wolos-module-ai-sessions ' '$d/online.txt'"
+  say "no unit failed after the drain" "grep -qx end '$d/online.txt' && ! grep -q 'failed' '$d/online.txt'"
+}
+
 blessed() { # dir: the boot entry lost its counter
   local m=$1/mnt rc=1 p; mkdir -p "$m"
+  # shellcheck disable=SC2317,SC2329  # run through with_loop, by name
   check_esp() {
     for p in "${LOOP}"p*; do
       sudo mount -o ro "$p" "$m" 2>/dev/null || continue
       if [ -d "$m/loader/entries" ]; then
+        # shellcheck disable=SC2012  # entry names are ours (wolos-*.conf): plain names, one per line
         ls "$m/loader/entries" | tee "$1/entries"
         [ -e "$m/loader/entries/wolos-a.conf" ] && rc=0
       fi
@@ -218,6 +260,7 @@ untouched() { # the partitions this scenario must never write
     alongside-windows | encrypted-alongside) echo 1 2 ;;
     bitlocker-windows) echo 1 2 3 ;;   # refused: nothing at all is written
     alongside-linux) echo 2 4 ;;   # its startup partition is shared on purpose: see kept_checks
+    replace) echo 3 4 ;;   # Replace takes partition 2 only: the home and the swap stay (audit6 I6-6)
     manual*) echo 4 ;;
   esac
 }
@@ -230,6 +273,7 @@ file_hash() { # dir partition fs-tool path-inside
   local d=$1 n=$2 mnt=$3 f=$4 m=$1/m
   read_file() {
     mkdir -p "$m"
+    # shellcheck disable=SC2086  # $mnt is the mount command and its options ("ntfs-3g -o ro"), split on purpose
     sudo $mnt "${LOOP}p$n" "$m" && sudo sha256sum "$m/$f" | cut -d' ' -f1 > "$d/keep.after"
     sudo umount "$m"
   }
@@ -241,7 +285,7 @@ kept_checks() { # dir hashes-before: what the person kept is still there
   [ -z "$(untouched)" ] || say "partitions nobody chose byte-identical" "[ \"$2\" = \"\$(kept_hashes '$d')\" ]"
   case $S in
     alongside-windows | encrypted-alongside) file_hash "$d" 3 "ntfs-3g -o ro" Users/Alice/keep.bin ;;
-    alongside-linux | manual*)
+    alongside-linux | replace | manual*)
       file_hash "$d" 1 "mount -o ro" EFI/fedora/grubx64.efi
       say "the other system's startup files intact" "cmp -s '$d/disk.raw.esp' '$d/keep.after'"
       file_hash "$d" 3 "mount -o ro" alice/keep.bin ;;
@@ -251,7 +295,7 @@ kept_checks() { # dir hashes-before: what the person kept is still there
 }
 
 scenario() { # name
-  S=$1; local d=$W/$S plan=$S before=
+  S=$1; local d=$W/$S plan=$S before='' old_root=''
   rm -rf "$d"; mkdir -p "$d"
   case $S in
     erase|password|tpm) mk_disk blank "$d/disk.raw" ;;
@@ -259,9 +303,11 @@ scenario() { # name
     encrypted-alongside) mk_disk windows "$d/disk.raw" ;;
     bitlocker-windows) mk_disk bitlocker "$d/disk.raw"; plan=alongside ;;
     alongside-linux) mk_disk linux "$d/disk.raw"; plan=alongside ;;
-    manual|manual-ext4) mk_disk linux "$d/disk.raw" ;;
+    manual|manual-ext4|replace) mk_disk linux "$d/disk.raw" ;;
+    offline-modules) mk_disk blank "$d/disk.raw"; plan=modules ;;
   esac
   before=$(kept_hashes "$d")
+  [ "$S" != replace ] || old_root=$(part_hash "$d/disk.raw" 2)
   install_in_vm "$d" "$S" "$plan" || { echo "E2E FAIL $S: wolvm could not start the VM"; return; }
   grep -a 'summary:' "$d/install.log" | sed 's/.*summary: /  /' | sort -u
   if [ "$S" = bitlocker-windows ]; then
@@ -278,8 +324,15 @@ scenario() { # name
   # Windows stays: the hardware clock in local time (install-run, audit3 R2B-12); else UTC.
   case $S in
     alongside-windows) adjtime "$d"; say "clock in local time (/etc/adjtime LOCAL)" "grep -qx LOCAL '$d/adjtime'" ;;
-    alongside-linux) adjtime "$d"; say "clock in UTC (no Windows)" "! grep -qx LOCAL '$d/adjtime'" ;;
+    alongside-linux | replace) adjtime "$d"; say "clock in UTC (no Windows)" "! grep -qx LOCAL '$d/adjtime'" ;;
   esac
+  # Replace on a non-WolOS Linux (audit6 I6-6): the old root is now WolOS (rewritten), the other
+  # system's startup files, home and swap are as they were (kept_checks), and one WolOS entry.
+  if [ "$S" = replace ]; then
+    say "the replaced partition was rewritten" "[ \"$old_root\" != \"\$(part_hash '$d/disk.raw' 2)\" ]"
+    say "one WolOS entry, none from the replaced system" "[ \"\$(grep -c '^wolos-' '$d/entries')\" = 1 ]"
+  fi
+  [ "$S" != offline-modules ] || offline_modules "$d"
   [ "$S" != manual-ext4 ] || say "one copy, no second slot" "! grep -q wolos-b '$d/entries'"
 }
 
@@ -310,6 +363,7 @@ layouts() { # bin_dir names...: the real partitioning on loop devices, no VM and
 
 boot_files() { # dir: the sha256 of every file under EFI/wolos on the disk, in $dir/boot-files
   local m=$1/mnt p; mkdir -p "$m"; : > "$1/boot-files"
+  # shellcheck disable=SC2317,SC2329  # run through with_loop, by name
   list_boot() {
     for p in "${LOOP}"p*; do
       sudo mount -o ro "$p" "$m" 2>/dev/null || continue

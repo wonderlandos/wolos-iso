@@ -2,6 +2,10 @@
 # Unattended install (wolos.autoinstall, files/usr/lib/wolos/autoinstall in the wolos repo), then
 # the installed disk. The VM must be made with the cmdline words, e.g.
 #   wolvm new inst --iso wolos.iso --tpm --direct --append "wolos.autoinstall=/dev/vda wolos.autologin=yes"
+# The TPM variant (audit6 I6-4): the same VM with "wolos.encrypt=tpm wolos.recovery=console" added
+# to --append. The steps keyed on the kernel command line then check that wolos-tpm-bind sealed the
+# key on the first start and that the SECOND start opens the disk with nobody typing (wait-agent
+# would time out on a passphrase prompt). Passphrase disks must show no failed unit (audit6 I6-1).
 name: unattended install, then first boot of the disk
 steps:
 - start
@@ -42,6 +46,35 @@ steps:
 - ssh: "ls /efi/loader/entries"
   expect: "wolos-a.conf"
   caption: the entry is blessed (try counter gone)
+- ssh: "if grep -q tpm2-device /proc/cmdline; then journalctl -b -u wolos-tpm-bind --no-pager -o cat | grep -q 'Finished Bind the disk key' && test ! -e /var/lib/wolos/secureboot/rebind.key && echo bind-ok; else echo bind-ok; fi"
+  expect: "bind-ok"
+  caption: a chip disk sealed its key to this computer on the first start (a passphrase or plain disk has nothing to bind)
 - logs:
   n: 800
 - checkpoint: installed-up
+# The second start: the policy the first start re-bound (PCR 7, +14 behind shim) has to open the
+# disk by itself.
+- stop
+- start
+- wait-agent:
+  timeout: 600
+  caption: second start, nobody typed anything
+- wait-stable:
+  timeout: 180
+- ssh: "timeout 120 systemctl is-system-running --wait"
+  expect: "running"
+  caption: the second start is a clean one
+- ssh: "n=$(systemctl --failed --no-legend --plain | wc -l); echo failed=$n; test $n = 0 && echo no-failed-units-again"
+  expect: "no-failed-units-again"
+  save: failed-units-second-start.txt
+- ssh: "if grep -q tpm2-device /proc/cmdline; then test ! -e /var/lib/wolos/secureboot/rebind.key && echo second-start-unlocked; else echo second-start-unlocked; fi"
+  expect: "second-start-unlocked"
+- ssh: "systemctl start wolos-tpm-reseal && systemctl show -p Result --value wolos-tpm-reseal"
+  expect: "success"
+  caption: wolos-tpm-reseal is a clean no-op (nothing typed, or no chip in this install)
+  save: tpm-reseal-second-start.txt
+- ssh: "ls /efi/loader/entries"
+  expect: "wolos-a.conf"
+  caption: the entry stayed blessed
+- logs:
+  n: 800

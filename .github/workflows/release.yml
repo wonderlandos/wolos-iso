@@ -94,8 +94,8 @@ jobs:
         run: |
           mkdir -p dist && aws s3 sync --quiet --exclude '*' --include '*.iso' --include '*.json' --include 'checks.txt' "s3://$BUCKET/runs/$RUN/iso/" dist/
           [ -f dist/checks.txt ] || { echo "::error::no s3://$BUCKET/runs/$RUN/iso/checks.txt: the ISO was not VM-tested (BUILD.md Release)"; exit 1; }
-          grep -q 'BOOT PASS' dist/checks.txt && ! grep -q 'FAIL' dist/checks.txt || { echo "::error::the VM test of the ISO did not pass"; cat dist/checks.txt; exit 1; }
-          rm -f dist/checks.txt dist/release.json; ls -l dist | tee -a "$GITHUB_STEP_SUMMARY"
+          if ! grep -q 'BOOT PASS' dist/checks.txt || grep -q 'FAIL' dist/checks.txt; then echo "::error::the VM test of the ISO did not pass"; cat dist/checks.txt; exit 1; fi
+          rm -f dist/checks.txt dist/release.json; find dist -maxdepth 1 -type f -printf '%s %f\n' | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Secure Boot: sign systemd-boot and the UKI of the shim layout, then boot the image in OVMF
       # with Secure Boot on. The image changes: `release --rehash` takes its hash and size as it is then.
@@ -104,7 +104,7 @@ jobs:
           SB_KEY: ${{ secrets.WOLOS_SB_KEY }}
           SB_CERT: ${{ secrets.WOLOS_SB_CERT }}
         run: |
-          iso=$(cd dist && ls *.iso)
+          iso=$(cd dist && find . -maxdepth 1 -name '*.iso' -printf '%f')
           if [ -n "$SB_KEY" ] && [ -n "$SB_CERT" ]; then
             (umask 077; printf '%s\n' "$SB_KEY" > "$RUNNER_TEMP/sb.key"; printf '%s\n' "$SB_CERT" > "$RUNNER_TEMP/sb.crt")
             docker run --rm --device /dev/kvm -v "$PWD:/src" -v "$RUNNER_TEMP:/keys" -w /src archlinux:latest bash -euo pipefail -c "

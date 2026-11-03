@@ -451,6 +451,198 @@ exit 0"#,
     let _ = fs::remove_dir_all(&d);
 }
 
+/// audit6 I6-1/I6-4: an encrypted disk is asked whether any unit failed (a passphrase disk used to
+/// run the chip's reseal on every start), and a tpm or mok disk is started a SECOND time without
+/// anyone typing: no unlock prompt on the console, the re-bound policy opens it. The script itself
+/// on a stub wolvm whose guest answers from a file, a good and a bad guest and serial log.
+#[test]
+fn tpm_and_mok_disks_boot_twice_and_encrypted_ones_have_no_failed_unit() {
+    let t = read("tests/test-install.sh");
+    for want in [
+        "guest_facts facts-boot1.txt",
+        "guest_facts facts-boot2.txt",
+        "wolos-tpm-reseal",
+        "w serial \"$N\" tail -n 1000000 > serial-boot2.log",
+        r#"b "no failed unit after the first boot ($ENC)""#,
+        r#"b "second boot: no unlock prompt on the console""#,
+        r#"b "first boot: wolos-tpm-bind ran and finished""#,
+    ] {
+        assert!(t.contains(want), "test-install.sh lacks {want}");
+    }
+    let d = std::env::temp_dir().join(format!("wol-twice-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&d);
+    let bin = d.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let stub = |name: &str, body: &str| {
+        let p = bin.join(name);
+        fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    for ok in [
+        "qemu-system-x86_64",
+        "mdir",
+        "virt-fw-vars",
+        "bsdtar",
+        "swtpm",
+        "mkfs.vfat",
+        "mcopy",
+        "mmd",
+    ] {
+        stub(ok, "exit 0");
+    }
+    stub("qemu-img", "exit 1");
+    stub("pgrep", "exit 1");
+    stub("sha256sum", r#"echo "0  $1""#);
+    // install_scenario <scenario> <probe.json> <plan dir>: a plan for the blank disk it is probed on
+    stub(
+        "install_scenario",
+        r#"echo "$*" >> "$LOG"; grep -q '"/dev/vda"' "$2" && mkdir -p "$3" && echo '{}' > "$3/plan.json""#,
+    );
+    stub(
+        "wolvm",
+        r#"echo "$*" >> "$LOG"
+case "$*" in
+  *"status install") echo '{"running": false}' ;;
+  *"== state"*) cat "$FACTS" ;;
+  *mokutil*) echo "SecureBoot enabled" ;;
+  *"serial install tail"*) cat "$SERIAL" ;;
+esac
+exit 0"#,
+    );
+    let iso = d.join("wolos-test.iso");
+    fs::write(&iso, "iso").unwrap();
+    let good = "== state\nrunning\n== failed\n== bind\nConditionResult=yes\nResult=success\n\
+rebind-key-gone\nFinished Bind the disk key to this computer's firmware state (first boot).\n\
+== reseal\nstart-rc=0\nResult=success\n== account\n1\n== end\n";
+    let bad = good.replace(
+        "== failed\n",
+        "== failed\nwolos-tpm-reseal.service loaded failed failed Let the chip\n",
+    );
+    let run_p = |enc: &str, sb: &str, facts: &str, serial: &str, plan: &str| {
+        let log = d.join("wolvm.log");
+        let _ = fs::remove_file(&log);
+        fs::write(d.join("facts"), facts).unwrap();
+        fs::write(d.join("serial"), serial).unwrap();
+        let _ = fs::remove_dir_all(d.join("vm"));
+        let o = Command::new("sh")
+            .arg(repo("tests/test-install.sh"))
+            .arg(&iso)
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .env("WOLOS_VM", d.join("vm"))
+            .env("WOLOS_WOLVM", bin.join("wolvm"))
+            .env("WOLOS_ENCRYPT", enc)
+            .env("WOLOS_SECBOOT", sb)
+            .env("WOLOS_BOOT_S", "1")
+            .env("WOLOS_TCG_SCALE", "1")
+            .env("LOG", &log)
+            .env("FACTS", d.join("facts"))
+            .env("SERIAL", d.join("serial"))
+            .env("WOLOS_PLAN", plan)
+            .env("WOLOS_INSTALL_SCENARIO", bin.join("install_scenario"))
+            .output()
+            .unwrap();
+        let calls = fs::read_to_string(&log).unwrap_or_default();
+        (
+            String::from_utf8_lossy(&o.stdout).into_owned(),
+            String::from_utf8_lossy(&o.stderr).into_owned(),
+            calls.matches("start install").count(),
+            calls,
+        )
+    };
+    let run = |enc: &str, sb: &str, facts: &str, serial: &str| {
+        let (out, err, starts, _) = run_p(enc, sb, facts, serial, "no");
+        (out, err, starts)
+    };
+    let (out, err, starts) = run("tpm", "0", &good, "login:\n");
+    assert_eq!(starts, 3, "install, boot, second boot: {err}\n{out}");
+    for want in [
+        "BOOT PASS no failed unit after the first boot (tpm)",
+        "BOOT PASS wolos-tpm-reseal does not fail (tpm)",
+        "BOOT PASS first boot: wolos-tpm-bind ran and finished",
+        "BOOT PASS first boot: the install key is gone after the bind",
+        "BOOT PASS second boot: the guest answered without anyone typing",
+        "BOOT PASS second boot: no unlock prompt on the console",
+        "BOOT PASS second boot: no failed unit",
+        "BOOT PASS second boot: wolos-tpm-reseal ran clean",
+        "BOOT PASS second boot: the chip unlocked the disk (install key gone)",
+    ] {
+        assert!(out.contains(want), "{want}\n{out}\n{err}");
+    }
+    // The chip asked for the password on the second start, a unit failed: both are caught.
+    let (out, _, _) = run(
+        "tpm",
+        "0",
+        &bad,
+        "Please enter passphrase for disk wolosroot:\n",
+    );
+    assert!(
+        out.contains("BOOT FAIL second boot: no unlock prompt on the console"),
+        "{out}"
+    );
+    assert!(
+        out.contains("BOOT FAIL second boot: no failed unit"),
+        "{out}"
+    );
+    assert!(
+        out.contains("BOOT FAIL no failed unit after the first boot (tpm)"),
+        "{out}"
+    );
+    // mok without encryption: a second start too, and Secure Boot still on in it.
+    let (out, err, starts) = run("no", "mok", &good, "login:\n");
+    assert_eq!(starts, 3, "{err}\n{out}");
+    assert!(
+        out.contains("BOOT PASS second boot: Secure Boot still on"),
+        "{out}"
+    );
+    assert!(
+        !out.contains("no failed unit after the first boot"),
+        "{out}"
+    );
+    // A plain unencrypted install is started once for the boot, as before.
+    let (out, err, starts) = run("no", "0", &good, "login:\n");
+    assert_eq!(starts, 2, "{err}\n{out}");
+    assert!(!out.contains("second boot"), "{out}");
+    // WOLOS_PLAN=auto: the plan the app would write goes on the key disk and the live kernel is told
+    // where it is; the booted system's account proves it was used. Without the example binary the
+    // run refuses before any VM exists.
+    let (out, err, starts, calls) =
+        run_p("no", "0", &good, "wolos-install: done\nlogin:\n", "auto");
+    assert_eq!(starts, 2, "{err}\n{out}\n{calls}");
+    assert!(calls.contains("wolos.plan=WOLOSKEY:plan"), "{calls}");
+    assert!(calls.contains("probe.json"), "{calls}");
+    assert!(
+        out.contains("BOOT PASS the plan was used (its account exists)"),
+        "{out}"
+    );
+    assert!(
+        out.contains("BOOT PASS plan install said done (wolos.plan=)"),
+        "{out}\n{err}"
+    );
+    let no_account = good.replace("== account\n1\n", "== account\n0\n");
+    let (out, _, _, _) = run_p("no", "0", &no_account, "login:\n", "auto");
+    assert!(
+        out.contains("BOOT FAIL the plan was used (its account exists)"),
+        "{out}"
+    );
+    let o = Command::new("sh")
+        .arg(repo("tests/test-install.sh"))
+        .arg(&iso)
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .env("WOLOS_VM", d.join("vm"))
+        .env("WOLOS_WOLVM", bin.join("wolvm"))
+        .env("WOLOS_PLAN", "auto")
+        .env_remove("WOLOS_INSTALL_SCENARIO")
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("WOLOS_INSTALL_SCENARIO"),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let _ = fs::remove_dir_all(&d);
+}
+
 /// audit5 I6-7: the dual-boot e2e checks the clock, a BitLocker disk blkid really names so, and
 /// a reinstall beside Windows over the old WolOS.
 #[test]
@@ -475,6 +667,15 @@ fn dual_boot_e2e_checks_clock_bitlocker_and_reinstall() {
         "Windows partitions byte-identical",
         "the old WolOS startup files replaced",
         "one WolOS entry, none left from the old install",
+        // audit6 I6-6: plain Replace over another Linux, and the offline module queue
+        "manual|manual-ext4|replace) mk_disk linux",
+        "replace) echo 3 4",
+        "the replaced partition was rewritten",
+        "offline-modules) mk_disk blank",
+        "offline_modules()",
+        "the pending file emptied once online",
+        "the offline start counted no try",
+        "--net on",
     ] {
         assert!(i.contains(want), "test-installer.sh lacks {want}");
     }
@@ -488,6 +689,12 @@ fn dual_boot_e2e_checks_clock_bitlocker_and_reinstall() {
     assert!(
         sc.contains("\"replace-wolos\" =>") && sc.contains("p.is_wolos_root()"),
         "install_scenario lacks the replace-wolos scenario"
+    );
+    assert!(
+        sc.contains("\"replace\" =>")
+            && sc.contains("\"modules\"")
+            && sc.contains("tick_module(\"ai-sessions\""),
+        "install_scenario lacks replace or the modules scenario"
     );
     // The fixture's header is one blkid calls BitLocker (the installer's probe reads blkid).
     let have_blkid = Command::new("sh")
