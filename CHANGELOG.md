@@ -4,6 +4,21 @@ The user-facing changes of a WolOS release are in the wolos repository's `CHANGE
 lists what changed in the image, its checks and its tests. The four repositories are tagged together
 (wolos ADR 0029).
 
+## 0.12.1 (unreleased)
+
+Image
+- Package snapshot 2026-11-02: `linux-firmware` 20261019 (the 0.12.0 image had 20260916) and 31 other package updates; `profile/snapshot` and both `pacman.conf` files point at it.
+- The builder image is pinned to a new digest in `.github/builder-image`.
+- `linux-wolos` is 1:1.0+7.3.1-1 (stable Linux 7.3.1); the image checks that pin the kernel version (`checks/tests/image_profile.rs`) follow it.
+
+Release
+- `release.yml` keeps the build box's Secure Boot signature: an ISO already signed with the pinned live key is checked, not signed again, so the bytes the build box tested are the bytes released. Otherwise the signing secrets must be that pinned key (the certificate's fingerprint is compared with `release/wolos-live-2026.cer`, and the key must belong to the certificate); a stray pair stops the release.
+- The runner's Secure Boot boot test prints the qemu and serial logs when it fails, and counts as a warning, not a failure, when the build box's `checks.txt` says it already booted the same image with Secure Boot on (a runner whose KVM cannot run the firmware says nothing about the image). The test container installs `qemu-hw-display-virtio-vga`.
+- `checks.txt` is kept out of the uploaded files but available to that step; `out/` is created before the hand-mode release record is written.
+
+Tests
+- `tests/wolvm`: `stop` treats a guest that already powered itself off (a closed or resetting monitor) as going down, so the install-auto journey no longer reports a failure there; the wait for the process stays and the journey's stop step reports the real status.
+
 ## 0.12.0 (unreleased)
 
 Image

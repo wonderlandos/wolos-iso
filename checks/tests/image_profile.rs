@@ -283,7 +283,7 @@ fn fake_repo(d: &Path, snap: Option<&str>) -> (String, PathBuf) {
     fs::create_dir_all(&repo_dir).unwrap();
     // A sync database: one `<name>-<ver>/desc` per package, as repo-add writes it.
     let t = d.join("db");
-    for (n, v) in [("wolos-base", "0.11.4-1"), ("linux-wolos", "1:1.0+7.3-5")] {
+    for (n, v) in [("wolos-base", "0.11.4-1"), ("linux-wolos", "1:1.0+7.3.1-1")] {
         let e = t.join(format!("{n}-{v}"));
         fs::create_dir_all(&e).unwrap();
         fs::write(
@@ -539,7 +539,7 @@ fn release_manifest_names_snapshot_repo_image_and_hash() {
         .arg("r42")
         .arg("https://example.org/img")
         .arg("0.11.4")
-        .arg("1:1.0+7.3-5")
+        .arg("1:1.0+7.3.1-1")
         .output()
         .unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
@@ -566,7 +566,7 @@ fn release_manifest_names_snapshot_repo_image_and_hash() {
         !out.contains("\"cachy\""),
         "no cachy field since ADR 0030: {out}"
     );
-    assert_eq!(v("kernel"), "1:1.0+7.3-5");
+    assert_eq!(v("kernel"), "1:1.0+7.3.1-1");
     assert_eq!(v("image"), "https://example.org/img/wolos-0.11-x86_64.iso");
     assert_eq!(v("size"), "9"); // "iso bytes"
     // sha256("iso bytes")
