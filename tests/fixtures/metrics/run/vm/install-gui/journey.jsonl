@@ -1,0 +1,6 @@
+{"journey": "the installer, page by page (fixture)", "vm": "gui", "file": "/x/tests/wolvm/journeys/install-gui.yaml", "time": "Tue Nov  3 16:10:00 2026"}
+{"n": 1, "step": "start", "opts": {}, "ok": true, "secs": 0.6, "shot": null, "detail": "", "caption": ""}
+{"n": 2, "step": "shot page-language", "opts": {}, "ok": true, "secs": 0.4, "shot": null, "detail": "", "caption": ""}
+{"n": 3, "step": "shot page-disk", "opts": {}, "ok": true, "secs": 0.4, "shot": null, "detail": "", "caption": ""}
+{"n": 4, "step": "shot page-disk", "opts": {}, "ok": true, "secs": 0.4, "shot": null, "detail": "", "caption": ""}
+{"n": 5, "step": "shot page-account", "opts": {}, "ok": true, "secs": 0.4, "shot": null, "detail": "", "caption": ""}

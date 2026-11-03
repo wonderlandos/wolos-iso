@@ -1,0 +1,5 @@
+{"journey": "unattended install, then first boot of the disk", "vm": "inst", "file": "/scratch/rel012/src/wolos-iso/tests/wolvm/journeys/install-auto.yaml", "time": "Tue Nov  3 15:47:58 2026"}
+{"n": 1, "step": "start", "opts": {}, "ok": true, "secs": 0.6, "shot": "01-start.png", "detail": "", "caption": ""}
+{"n": 2, "step": "wait-text wolos-install: done", "opts": {"timeout": 1800}, "ok": true, "secs": 190.7, "shot": "02.png", "detail": "", "caption": ""}
+{"n": 3, "step": "wait-text reboot: Power down", "opts": {"timeout": 300}, "ok": true, "secs": 9.0, "shot": null, "detail": "", "caption": ""}
+{"n": 4, "step": "stop", "opts": {}, "ok": false, "secs": 0.0, "shot": null, "detail": "ConnectionResetError: [Errno 104] Connection reset by peer", "caption": ""}

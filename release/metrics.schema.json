@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wonderlandos/wolos-iso/release/metrics.schema.json",
+  "title": "WolOS release metrics",
+  "description": "What one release run measured (tests/metrics.sh RUN_DIR). Frozen keys: boot_s, install_s, pages, idle_cpu_ms_s, shell_map_ms. A number is null when the run did not measure it; it is never estimated. Every non-null number has an evidence row naming the file it was read from and the command that produced that file. The webapps block belongs to the web-app benchmark (WA-1) and is null until that bench fills it.",
+  "type": "object",
+  "required": ["schema", "run", "boot_s", "install_s", "pages", "idle_cpu_ms_s", "shell_map_ms", "iso_bytes", "journeys", "vms", "evidence", "webapps"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": 1 },
+    "run": {
+      "type": "object",
+      "required": ["id", "date", "version", "iso", "sha256", "kernel"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "description": "The run directory's name (rel012)." },
+        "date": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "description": "Day of the first journey (UTC on the forge)." },
+        "version": { "type": ["string", "null"], "description": "VERSION_ID of the image, or the ISO's json." },
+        "iso": { "type": ["string", "null"] },
+        "sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+        "kernel": { "type": ["string", "null"] }
+      }
+    },
+    "boot_s": { "type": ["number", "null"], "minimum": 0, "description": "Seconds from VM start to the live image's first screen (journey live-boot, through its first wait-text)." },
+    "boot_systemd_s": { "type": ["number", "null"], "minimum": 0, "description": "systemd's own 'Startup finished ... = N s' of the same boot (kernel + userspace, no firmware)." },
+    "install_s": { "type": ["number", "null"], "minimum": 0, "description": "Seconds from 'wolos-install: prepare' to 'wolos-install: done' on the installer's console (journey install-auto)." },
+    "pages": { "type": ["integer", "null"], "minimum": 0, "description": "Installer pages a person sees on the default path: 'shot page-*' steps of journey install-gui." },
+    "idle_cpu_ms_s": { "type": ["number", "null"], "minimum": 0, "description": "CPU ms per second of the compositor plus wol-shell at rest: idle.txt (design/tools/perf/idle.py output) of any journey." },
+    "shell_map_ms": { "type": ["number", "null"], "minimum": 0, "description": "wol-shell start to its first window mapped: 'wol-shell: first map' (WOL_SHELL_TIMING) in a journey's logs." },
+    "iso_bytes": { "type": ["integer", "null"], "minimum": 0 },
+    "journeys": {
+      "type": "object",
+      "required": ["total", "passed", "list"],
+      "additionalProperties": false,
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "passed": { "type": "integer", "minimum": 0 },
+        "list": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "title", "steps", "ok", "passed", "failed_step"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string" },
+              "title": { "type": "string" },
+              "steps": { "type": "integer", "minimum": 0 },
+              "ok": { "type": "integer", "minimum": 0 },
+              "passed": { "type": "boolean" },
+              "failed_step": { "type": ["string", "null"] }
+            }
+          }
+        }
+      }
+    },
+    "vms": {
+      "type": "array",
+      "description": "The VM configurations the journeys ran in (wolvm vm.json).",
+      "items": {
+        "type": "object",
+        "required": ["name", "journeys", "smp", "mem", "disk", "gpu", "res", "tpm", "secureboot", "kvm", "boot"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "journeys": { "type": "array", "items": { "type": "string" } },
+          "smp": { "type": ["integer", "null"], "minimum": 1 },
+          "mem": { "type": ["string", "null"] },
+          "disk": { "type": ["string", "null"] },
+          "gpu": { "type": ["string", "null"] },
+          "res": { "type": ["string", "null"] },
+          "tpm": { "type": "boolean" },
+          "secureboot": { "type": "boolean" },
+          "kvm": { "type": "boolean" },
+          "boot": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["from", "command"],
+        "additionalProperties": false,
+        "properties": {
+          "from": { "type": "string", "description": "File in the run directory the number was read from." },
+          "command": { "type": "string", "description": "The command that produced that file." },
+          "what": { "type": "string" }
+        }
+      }
+    },
+    "webapps": { "type": ["object", "null"], "description": "Reserved for WA-1 (web-app benchmark): per-app PSS/RSS, cold start, frame times, idle wakeups, runtime bundled|wolos." }
+  }
+}

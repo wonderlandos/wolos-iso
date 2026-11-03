@@ -1,0 +1,3 @@
+process               cpu ms/s kids ms/s  wakeups/s   rss MB
+Hyprland                  0.06      0.00       1.14     98.2
+wol-shell                 0.28      1.00       1.78    120.5

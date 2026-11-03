@@ -1,0 +1,1 @@
+{"name": "inst", "disk": "40G", "mem": "6G", "smp": 4, "tpm": true, "secureboot": false, "gpu": "virtio", "res": "1280x800", "boot": "cdrom", "kvm": true}

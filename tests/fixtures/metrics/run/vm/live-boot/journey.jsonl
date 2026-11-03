@@ -1,0 +1,6 @@
+{"journey": "live ISO boots to the installer session", "vm": "live", "file": "/scratch/rel012/src/wolos-iso/tests/wolvm/journeys/live-boot.yaml", "time": "Tue Nov  3 15:47:00 2026"}
+{"n": 1, "step": "start", "opts": {}, "ok": true, "secs": 0.6, "shot": "01-start.png", "detail": "", "caption": ""}
+{"n": 2, "step": "shot firmware", "opts": {}, "ok": true, "secs": 0.4, "shot": "02-firmware.png", "detail": "", "caption": ""}
+{"n": 3, "step": "wait-text Install WolOS: the first screen of the live image", "opts": {"timeout": 240}, "ok": true, "secs": 36.0, "shot": "03.png", "detail": "", "caption": ""}
+{"n": 4, "step": "wait-agent", "opts": {"timeout": 300}, "ok": true, "secs": 0.6, "shot": "04.png", "detail": "", "caption": ""}
+{"n": 5, "step": "stop", "opts": {}, "ok": true, "secs": 5.0, "shot": null, "detail": "", "caption": ""}

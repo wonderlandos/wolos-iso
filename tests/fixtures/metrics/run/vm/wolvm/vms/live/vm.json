@@ -1,0 +1,1 @@
+{"name": "live", "iso": "/scratch/rel012/iso/wolos-2026.11.03-x86_64.iso", "disk": "40G", "mem": "6G", "smp": 4, "tpm": false, "secureboot": false, "gpu": "virtio", "res": "1280x800", "boot": "cdrom", "kvm": true}

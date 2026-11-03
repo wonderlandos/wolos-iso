@@ -1,0 +1,4 @@
+[   33.337035] autoinstall[668]: wolos-install: prepare 0 Preparing to install on /dev/vda
+[   34.172157] autoinstall[668]: wolos-install: files 15 Copying WolOS
+[  178.329770] autoinstall[668]: wolos-install: boot 95 Making /dev/vda start WolOS
+[  184.716915] autoinstall[668]: wolos-install: done 100 WolOS is installed on /dev/vda
