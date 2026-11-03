@@ -4,6 +4,7 @@
 # afterwards, what the person kept checked from outside. `install_scenario` walks the same steps
 # as the app. Boot counting proves the boot: the entry is blessed only when the system came up.
 # Usage: tests/test-installer.sh remaster BASE.iso BIN_DIR | tests/test-installer.sh run SCENARIO...
+#        (BIN_DIR: wol, wol-installer, wol-shell, install_scenario; wol-xguard when it is there)
 #        tests/test-installer.sh layouts BIN_DIR NAME...   (real partitioning on loop devices, no VM)
 # Scenarios: erase alongside-windows alongside-linux manual manual-ext4 password encrypted-alongside tpm medium
 #            bitlocker-windows reinstall-windows replace offline-modules
@@ -29,16 +30,23 @@ remaster() { # base.iso bin_dir: this tree's installer on the base image
   sudo rm -rf "$r"; xorriso -osirrox on -indev "$base" -extract /wolos/x86_64/airootfs.sfs "$W/base.sfs" 2>/dev/null
   sudo unsquashfs -q -f -d "$r" "$W/base.sfs" >/dev/null || exit 1
   sudo install -m 755 "$bin/wol" "$bin/wol-installer" "$bin/wol-shell" "$bin/install_scenario" "$r/usr/bin/"
+  # The malware guard too when BIN_DIR has it (cargo build --release -p xguard --features yara).
+  [ ! -x "$bin/wol-xguard" ] || sudo install -m 755 "$bin/wol-xguard" "$r/usr/bin/" || exit 1
+  # This tree's desktop/overlay and files/ as wolos-system packages them (overlay first, files/
+  # over it, usr/local left out), so hook and config changes reach the image without a package
+  # build. Directories already in the image keep their owner and mode.
+  (cd "$SRC/desktop/overlay" && tar --exclude ./usr/local -cf - .) |
+    sudo tar -C "$r" --no-same-owner --no-overwrite-dir -xf - || exit 1
   sudo cp -r "$SRC"/files/. "$r/"
   sudo chmod 755 "$r"/usr/lib/wolos/*
-  sudo cp "$SRC"/desktop/overlay/usr/share/wolos/hypr/{installer,hyprland}.conf "$r/usr/share/wolos/hypr/"
+  local f
+  for f in "$SRC"/desktop/overlay/usr/bin/*; do sudo chmod 755 "$r/usr/bin/${f##*/}"; done
+  sudo chmod 440 "$r/etc/sudoers" "$r/etc/sudoers.d/wolos"
   sudo cp -r "$REPO"/profile/airootfs/etc/systemd/system/. "$r/etc/systemd/system/"
   sudo cp "$H/installer/wolos-e2e" "$r/usr/lib/wolos/wolos-e2e"
   sudo cp "$H/installer/wolos-e2e.service" "$r/etc/systemd/system/"
   sudo ln -sf ../wolos-e2e.service "$r/etc/systemd/system/multi-user.target.wants/wolos-e2e.service"
   sudo sed -i '$a m live seat' "$r/etc/sysusers.d/wolos-live.conf"
-  sudo install -m 440 "$SRC/desktop/overlay/etc/sudoers" "$r/etc/sudoers"
-  sudo cp "$SRC"/desktop/overlay/etc/pam.d/sudo* "$r/etc/pam.d/"
   echo 'live ALL=(root) NOPASSWD: /usr/lib/wolos/install-run, /usr/lib/wolos/install-check, /usr/bin/systemctl reboot, /usr/bin/systemctl poweroff' | sudo tee "$r/etc/sudoers.d/wolos-live" >/dev/null
   # An image older than the package list: the newer tools, without moving what it already has.
   local db=$r/var/lib/pacman
@@ -377,6 +385,9 @@ scenario() { # name
   kept_checks "$d" "$before"
   boot_in_vm "$d" "$S"
   say "booted (entry blessed)" "blessed '$d'"
+  # The boot's seal check passed: a failed one leaves verity-failed-<slot> in /var (@var).
+  slot_file "$d" lib/wolos/verity-failed-wolos-a "$d/verity-failed" @var
+  say "the seal check passed (no verity-failed mark)" "[ ! -s '$d/verity-failed' ]"
   # Windows stays: the hardware clock in local time (install-run, audit3 R2B-12); else UTC.
   case $S in
     alongside-windows) adjtime "$d"; say "clock in local time (/etc/adjtime LOCAL)" "grep -qx LOCAL '$d/adjtime'" ;;

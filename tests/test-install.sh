@@ -1,6 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Unattended install test of the newest WolOS ISO in a throwaway VM (UEFI, no network), driven by
+# Unattended install test of the newest WolOS ISO in a throwaway VM (UEFI, no network but for
+# WOLOS_ENCRYPT=tpm, see the VM below), driven by
 # wolvm (tests/wolvm/wolvm, tests/README-wolvm.md): this script only says what to make, start,
 # press and check; wolvm owns the qemu command line, OVMF, swtpm and KVM-or-TCG. The ISO's kernel
 # boots with wolos.autoinstall=/dev/vda (installs and powers off), then the installed disk boots on
@@ -24,8 +25,9 @@
 #      and boot; passphrase puts the passphrase on a labelled key disk and types it at the unlock prompt.
 #      WOLOS_SECBOOT=mok: OVMF's Secure Boot firmware with Microsoft's keys (wolvm --secureboot),
 #      enforcement off for the install, on for the boot: the mok tier, whose first boot is
-#      MokManager; its screens are driven by key presses (WOLOS_MOK_KEYS). Default (plain OVMF vars,
-#      Setup Mode): the own-keys tier.
+#      MokManager; its screens are driven by the text the firmware mirrors to the serial console
+#      (as tests/wolvm/journeys/mok-screen.yaml), WOLOS_MOK_KEYS="k1 k2 ..." replaces that with
+#      fixed key presses after 12 s. Default (plain OVMF vars, Setup Mode): the own-keys tier.
 #      WOLOS_PLAN=auto (needs WOLOS_INSTALL_SCENARIO=<the install_scenario example binary of the wolos
 #      repo>, WOLOS_ENCRYPT=no): instead of a plain erase the live system reads a plan the app would
 #      have written (wolos.plan=WOLOSKEY:plan, autoinstall:50-56), made here for the blank 32G
@@ -70,8 +72,15 @@ esac
 [ "$ENC" != tpm ] || command -v swtpm >/dev/null || { echo "$0: swtpm missing (pacman -S swtpm)" >&2; exit 1; }
 [ "$SB" != mok ] || command -v virt-fw-vars >/dev/null || { echo "$0: virt-fw-vars missing (pacman -S virt-firmware)" >&2; exit 1; }
 mkdir -p "$T"
-# One VM at a time: another VM on the same disk and sockets starves the install (15 GB hosts).
-pgrep -x qemu-system-x86 >/dev/null && { echo "test-install: another QEMU VM is running" >&2; exit 1; }
+# One run per $WOLOS_VM: a second run in the same home would reuse this run's VM, disks and
+# sockets. Runs in other homes, and any other QEMU on the host (other harnesses, people's VMs),
+# are not this run's business: the pidfile names the run that owns $T.
+lock=$T/test-install.pid
+if [ -f "$lock" ] && owner=$(cat "$lock" 2>/dev/null) && [ -n "$owner" ] && [ "$owner" != $$ ] && kill -0 "$owner" 2>/dev/null; then
+  echo "test-install: another test-install run (pid $owner) uses $T: set WOLOS_VM to another directory" >&2; exit 1
+fi
+echo $$ > "$lock"
+trap 'rm -f "$lock"' EXIT
 # release_iso DIR: the one ISO of a release directory, whose bytes match its manifest's sha256.
 release_iso() {
   set -- "$1" "$1"/wolos-*.iso
@@ -145,8 +154,12 @@ sb_enforce() { # on|off, VM stopped
 }
 # vda = the VM's disk (32G qcow2), vdb = the bystander (raw, so its bytes are compared as they are).
 # 2D virtio-vga (--gpu virtio): QMP screendump cannot read a GL scanout.
-# shellcheck disable=SC2086  # opts are separate words
-w new "$N" --iso "$ISO" --disk 32G --mem 4G --smp 4 --gpu virtio --direct --no-net \
+# Offline (--no-net), except tpm: with no network card the TPM first boot falls back to the
+# recovery prompt (prerelease run 2026-11-03, B6; the product side is tracked apart), and a PC has
+# one. The install itself never uses the network.
+net=--no-net; [ "$ENC" != tpm ] || net=
+# shellcheck disable=SC2086  # opts and net are separate words
+w new "$N" --iso "$ISO" --disk 32G --mem 4G --smp 4 --gpu virtio --direct $net \
   --drive "$T/other.raw" $opts --append "wolos.autoinstall=/dev/vda $words quiet" --force >/dev/null ||
   { echo "test-install: wolvm new failed" >&2; exit 1; }
 [ "$SB" != mok ] || sb_enforce off || { echo "test-install: could not turn Secure Boot enforcement off" >&2; exit 1; }
@@ -161,15 +174,36 @@ w set "$N" --boot disk --no-iso >/dev/null
 [ "$SB" != mok ] || sb_enforce on || { echo "test-install: could not turn Secure Boot enforcement on" >&2; exit 1; }
 w start "$N" >/dev/null
 shot() { w screenshot "$N" "$T/$1" >/dev/null 2>&1 || :; }
-if [ "$SB" = mok ]; then
-  # MokManager (shim's blue screen): any key, Enroll MOK, Continue, Yes, the password, Reboot. The
-  # firmware shows it within seconds of the first boot; one shot per step keeps the evidence.
-  sleep $((12 * scale)); shot mok1.png
+# MOK_MENU: MokManager's main menu with the pending request: Enroll MOK, View key, Continue, Yes,
+# the password, Reboot (shim 16.1). Its first line is "Perform MOK management"; shim's countdown
+# before it says "Press any key to perform MOK management" (lower case p).
+MOK_MENU="down ret down ret down ret b o o t ret ret"
+mok_keys() { # the keys, one shot per three
   i=0
-  for k in ${WOLOS_MOK_KEYS:-ret down ret down ret down ret b o o t ret ret}; do
+  for k in $1; do
     w key "$N" "$k" >/dev/null 2>&1; sleep $((2 * scale))
     i=$((i + 1)); [ $((i % 3)) != 0 ] || shot "mok$((i / 3 + 1)).png"
   done
+}
+if [ "$SB" = mok ]; then
+  # MokManager (shim's blue screen) comes within seconds of the first boot; the firmware mirrors
+  # its text to the serial console, so the run waits for the screen it names, not for a clock.
+  if [ -n "${WOLOS_MOK_KEYS:-}" ]; then
+    sleep $((12 * scale)); shot mok1.png; mok_keys "$WOLOS_MOK_KEYS"
+  elif w wait-text "$N" 'Perform MOK management|Press any key to perform MOK management' --regex --timeout $((90 * scale)) >/dev/null 2>&1; then
+    sleep 1; shot mok1.png
+    if ! w serial "$N" tail -n 400 2>/dev/null | grep -q 'Perform MOK management'; then
+      # The countdown: any key opens the menu.
+      w key "$N" spc >/dev/null 2>&1
+      w wait-text "$N" 'Perform MOK management' --new --timeout $((30 * scale)) >/dev/null 2>&1 ||
+        echo "test-install: MokManager: no menu after the countdown key; sending the menu keys anyway" >&2
+      sleep 1
+    fi
+    mok_keys "$MOK_MENU"
+  else
+    echo "test-install: MokManager: its screen never reached the serial console in $((90 * scale)) s; sending the menu keys anyway" >&2
+    shot mok1.png; mok_keys "$MOK_MENU"
+  fi
 fi
 if [ "$ENC" = passphrase ]; then
   # The unlock prompt comes before any desktop; a few tries, as a person would, 15 s apart.

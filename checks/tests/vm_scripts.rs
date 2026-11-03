@@ -553,7 +553,7 @@ rebind-key-gone\nFinished Bind the disk key to this computer's firmware state (f
         let (out, err, starts, _) = run_p(enc, sb, facts, serial, "no");
         (out, err, starts)
     };
-    let (out, err, starts) = run("tpm", "0", &good, "login:\n");
+    let (out, err, starts) = run("tpm", "0", good, "login:\n");
     assert_eq!(starts, 3, "install, boot, second boot: {err}\n{out}");
     for want in [
         "BOOT PASS no failed unit after the first boot (tpm)",
@@ -588,7 +588,7 @@ rebind-key-gone\nFinished Bind the disk key to this computer's firmware state (f
         "{out}"
     );
     // mok without encryption: a second start too, and Secure Boot still on in it.
-    let (out, err, starts) = run("no", "mok", &good, "login:\n");
+    let (out, err, starts) = run("no", "mok", good, "login:\n");
     assert_eq!(starts, 3, "{err}\n{out}");
     assert!(
         out.contains("BOOT PASS second boot: Secure Boot still on"),
@@ -599,14 +599,13 @@ rebind-key-gone\nFinished Bind the disk key to this computer's firmware state (f
         "{out}"
     );
     // A plain unencrypted install is started once for the boot, as before.
-    let (out, err, starts) = run("no", "0", &good, "login:\n");
+    let (out, err, starts) = run("no", "0", good, "login:\n");
     assert_eq!(starts, 2, "{err}\n{out}");
     assert!(!out.contains("second boot"), "{out}");
     // WOLOS_PLAN=auto: the plan the app would write goes on the key disk and the live kernel is told
     // where it is; the booted system's account proves it was used. Without the example binary the
     // run refuses before any VM exists.
-    let (out, err, starts, calls) =
-        run_p("no", "0", &good, "wolos-install: done\nlogin:\n", "auto");
+    let (out, err, starts, calls) = run_p("no", "0", good, "wolos-install: done\nlogin:\n", "auto");
     assert_eq!(starts, 2, "{err}\n{out}\n{calls}");
     assert!(calls.contains("wolos.plan=WOLOSKEY:plan"), "{calls}");
     assert!(calls.contains("probe.json"), "{calls}");
@@ -723,7 +722,10 @@ fn dual_boot_e2e_checks_clock_bitlocker_and_reinstall() {
     ] {
         assert!(i.contains(want), "test-installer.sh lacks {want}");
     }
-    assert!(!i.contains("ai-sessions"), "test-installer.sh names a module");
+    assert!(
+        !i.contains("ai-sessions"),
+        "test-installer.sh names a module"
+    );
     // The Windows fixture's NTFS boot sector carries its start and geometry, as Windows writes it
     // (mkntfs on a loop partition can not read them and warns that Windows would not boot).
     assert!(
@@ -760,4 +762,95 @@ fn dual_boot_e2e_checks_clock_bitlocker_and_reinstall() {
         String::from_utf8_lossy(&o.stderr)
     );
     let _ = fs::remove_dir_all(&d);
+}
+
+/// The e2e image tests this tree, not only what its packages carried (F10): remaster lays
+/// desktop/overlay down as wolos-system packages it (overlay, then files/ over it, usr/local
+/// left out), so a hook such as NetworkManager's 50-wolos-online reaches the image. Run here on
+/// a scratch root with the real overlay.
+#[test]
+fn remaster_copies_the_desktop_overlay_as_the_package_does() {
+    let i = read("tests/test-installer.sh");
+    let body = i
+        .split("remaster() {")
+        .nth(1)
+        .and_then(|b| b.split("\n}\n").next())
+        .expect("remaster() in test-installer.sh");
+    let ov = body
+        .find(r#"(cd "$SRC/desktop/overlay" && tar --exclude ./usr/local -cf - .)"#)
+        .expect("remaster copies desktop/overlay whole");
+    let files = body
+        .find(r#"sudo cp -r "$SRC"/files/. "$r/""#)
+        .expect("remaster copies files/");
+    assert!(
+        ov < files,
+        "files/ goes over the overlay, as in the package"
+    );
+    assert!(
+        !body.contains("desktop/overlay/usr/share/wolos/hypr/"),
+        "no hand-picked overlay files left"
+    );
+    for want in [
+        "--no-same-owner --no-overwrite-dir",
+        r#"sudo chmod 440 "$r/etc/sudoers" "$r/etc/sudoers.d/wolos""#,
+    ] {
+        assert!(body.contains(want), "remaster lacks {want}");
+    }
+    // The overlay copy itself, on a scratch root, sudo a no-op.
+    let overlay = siblings::root()
+        .join("desktop/overlay")
+        .canonicalize()
+        .expect("desktop/overlay (the wolos sibling)");
+    let src = overlay.parent().and_then(|p| p.parent()).unwrap();
+    let d = std::env::temp_dir().join(format!("wol-remaster-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&d);
+    fs::create_dir_all(d.join("etc")).unwrap();
+    fs::set_permissions(d.join("etc"), fs::Permissions::from_mode(0o750)).unwrap();
+    let start = &body[ov..];
+    let copy = &start[..start
+        .find("|| exit 1")
+        .expect("the overlay copy stops on failure")];
+    let o = Command::new("bash")
+        .arg("-c")
+        .arg(format!("set -o pipefail; sudo() {{ \"$@\"; }}; {copy}"))
+        .env("SRC", src)
+        .env("r", &d)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let hook = d.join("etc/NetworkManager/dispatcher.d/50-wolos-online");
+    assert_eq!(
+        fs::read(&hook).expect("the dispatcher hook reached the image"),
+        fs::read(overlay.join("etc/NetworkManager/dispatcher.d/50-wolos-online")).unwrap()
+    );
+    assert_eq!(
+        fs::metadata(&hook).unwrap().permissions().mode() & 0o111,
+        0o111,
+        "the hook stays executable"
+    );
+    assert!(d.join("usr/share/wolos/hypr/installer.conf").is_file());
+    assert!(!d.join("usr/local").exists(), "usr/local left out");
+    assert_eq!(
+        fs::metadata(d.join("etc")).unwrap().permissions().mode() & 0o777,
+        0o750,
+        "a directory already in the image keeps its mode"
+    );
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// Every booted scenario proves its seal check passed (F10: a check that could not see
+/// /usr/lib/modules marked every fresh slot failed, and no scenario looked).
+#[test]
+fn booted_scenarios_check_the_seal_mark() {
+    let i = read("tests/test-installer.sh");
+    let after_boot = i
+        .split(r#"say "booted (entry blessed)" "blessed '$d'""#)
+        .nth(1)
+        .expect("scenario() checks the boot");
+    let next: String = after_boot.lines().take(4).collect::<Vec<_>>().join("\n");
+    assert!(
+        next.contains(r#"slot_file "$d" lib/wolos/verity-failed-wolos-a "$d/verity-failed" @var"#)
+            && next.contains("[ ! -s '$d/verity-failed' ]"),
+        "{next}"
+    );
 }

@@ -5,9 +5,9 @@ name: live ISO boots to the installer session
 steps:
 - start
 - shot firmware
-- wait-text: "Welcome to"
+- wait-text: "Install WolOS: the first screen of the live image"
   timeout: 240
-  caption: systemd reached the console (console=ttyS0 from SMBIOS)
+  caption: the live system is up on the console (console=ttyS0 from SMBIOS; no "Welcome to" greeting)
 - wait-agent:
   timeout: 300
 - wait-stable:

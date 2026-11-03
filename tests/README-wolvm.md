@@ -68,7 +68,7 @@ How the guest is reached without changing the ISO:
   The image ships sshd disabled and an input policy of drop, so after `wait-agent` run
   `wolvm ssh-open NAME` (tested on v0.11.5: root over ssh, key from the credential in
   `/root/.ssh/authorized_keys`). Without it the forwarded port times out at the banner.
-- **Kernel words**: `--append "wolos.try"`, `--append "wolos.autoinstall=/dev/vda"` (disk is virtio: `/dev/vda`). They reach only boots from the ISO; after `set --boot disk` / `boot disk` the installed system gets the console words alone.
+- **Kernel words**: `--append "wolos.try"`, `--append "wolos.autoinstall=/dev/vda"` (disk is virtio: `/dev/vda`). They reach only boots from the ISO; after `set --boot disk` / `boot disk` the installed system gets the console words alone. An autoinstall without `wolos.plan=` makes no user (the installed disk shows only the login window), `wolos.autologin=yes` is live-only, and a user added by hand must be in group `seat` (`docs/modules/vm-e2e.md` of the wolos repo, step 2).
 
 ## The agent loop
 
@@ -103,7 +103,7 @@ or `any`), `save: file.txt`, `user`; `wait-text`: `regex`, `new`; `click`: `butt
 name: live ISO boots to the installer
 steps:
 - start
-- wait-text: "Welcome to"
+- wait-text: "Install WolOS: the first screen of the live image"
   timeout: 240
 - wait-agent:
   timeout: 300

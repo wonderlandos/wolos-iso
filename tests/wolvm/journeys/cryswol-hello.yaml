@@ -1,7 +1,12 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Cryswol hello through the REAL Kit host: examples/hello.cr runs on the installed desktop,
-# against the live wold (not the fake). Needs the image to ship crystal, libwol and the shard
-# (CRYSTAL_PATH below). Run on an installed disk: wolvm journey <vm> tests/wolvm/journeys/cryswol-hello.yaml
+# Cryswol hello through the REAL Kit host: the shard's examples/hello.cr runs on the installed
+# desktop as the person (uid 1000), against the live wold (not the fake). Cryswol ships in the
+# Developer module (wolos-module-dev: crystal, libwol, the cryswol shard; docs/modules/cryswol.md),
+# not in the base image, so the journey installs it first through the root helper the installer
+# and firstboot use (/usr/lib/wolos/modules-install dev; needs the network and a mirror holding
+# [wolos], e.g. test-installer.sh's served repo for a pre-release build).
+# Run on an installed disk: wolvm journey <vm> tests/wolvm/journeys/cryswol-hello.yaml
+# The program is written inline (base64) because the package installs the shard's src/ only.
 name: Cryswol hello on the installed desktop
 steps:
 - start
@@ -10,22 +15,32 @@ steps:
 - wait-stable:
   timeout: 180
   caption: the installed desktop is up
+- ssh: "pacman -Q wolos-module-dev >/dev/null 2>&1 || /usr/lib/wolos/modules-install dev; pacman -Q wolos-module-dev crystal libwol cryswol && echo dev-module-present"
+  expect: "dev-module-present"
+  timeout: 1800
+  save: dev-module.txt
+  caption: the Developer module brings crystal, libwol and the cryswol shard
+- ssh: "crystal --version"
+  expect: "Crystal"
+  save: crystal-version.txt
+  caption: crystal answers
 - ssh: "test -e /usr/lib/libwol.so.1 && echo libwol-present"
   expect: "libwol-present"
   caption: libwol is installed
-- ssh: "test -d /usr/lib/wolos/crystal/cryswol && echo shard-present"
+- ssh: "test -f /usr/lib/wolos/crystal/cryswol/src/cryswol.cr && echo shard-present"
   expect: "shard-present"
   caption: the cryswol shard is installed
-- ssh: "mkdir -p /tmp/cr && cp /usr/lib/wolos/crystal/cryswol/examples/hello.cr /tmp/cr/hello.cr && sed -i 's#\"../src/cryswol\"#\"cryswol\"#' /tmp/cr/hello.cr && cd /tmp/cr && CRYSTAL_PATH=\"/usr/lib/wolos/crystal:$(crystal env CRYSTAL_PATH)\" crystal build hello.cr -o hello && echo built"
+- ssh: "u=$(id -nu 1000) && h=$(getent passwd 1000 | cut -d: -f6) && runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 sh -c 'mkdir -p \"$HOME/cr\" && cd \"$HOME/cr\" && echo IyBTUERYLUxpY2Vuc2UtSWRlbnRpZmllcjogQlNELTItQ2xhdXNlCiMgVGhlIHNoYXJkJ3MgZXhhbXBsZXMvaGVsbG8uY3Igd2l0aCB0aGUgaW5zdGFsbGVkIHJlcXVpcmUgKHRoZSBwYWNrYWdlIHNoaXBzIHNyYy8gb25seSkuCnJlcXVpcmUgImNyeXN3b2wiCgpXb2w6OkNvbnRleHQub3Blbigib3JnLmV4YW1wbGUuaGVsbG8iKSBkbyB8Y3R4fAogIHB1dHMgInZlcnNpb246ICN7V29sLnZlcnNpb25fc3RyaW5nfSIKICBwdXRzICJvczogI3tXb2w6OlN5c3RlbS5pbmZvKGN0eCkub3NfbmFtZX0iCiAgV29sOjpOb3RpZmljYXRpb24ucG9zdChjdHgsICJIZWxsbyIsICJmcm9tIGhlbGxvIikKICBwdXRzICJwb3N0ZWQiCiAgc2VlbiA9IGZhbHNlCiAgY3R4LnN1YnNjcmliZSgidGhlbWUiKSBkbyB8ZXZlbnR8CiAgICBwdXRzICJ0aGVtZTogI3tldmVudC5qc29ufSIKICAgIHNlZW4gPSB0cnVlCiAgICBXb2w6Okxvb3Auc3RvcChjdHgpCiAgZW5kCiAgV29sOjpMb29wLnJ1bihjdHgsIDEwLnNlY29uZHMpCiAgYWJvcnQgIm5vIHRoZW1lIGV2ZW50IGFycml2ZWQiIHVubGVzcyBzZWVuCmVuZAo= | base64 -d > hello.cr && CRYSTAL_PATH=\"/usr/lib/wolos/crystal:$(crystal env CRYSTAL_PATH)\" crystal build hello.cr -o hello' && echo built"
   expect: "built"
-  timeout: 300
+  timeout: 600
   save: cryswol-build.txt
-  caption: hello.cr compiles against the installed shard and libwol
-- ssh: "cd /tmp/cr && (sleep 3; wol-notify-theme-event 2>/dev/null || true) & cd /tmp/cr && timeout 30 ./hello; echo rc=$?"
+  caption: hello.cr compiles as the person against the installed shard and libwol
+- ssh: "u=$(id -nu 1000) && h=$(getent passwd 1000 | cut -d: -f6) && runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 sh -c 'cd \"$HOME/cr\" && { (sleep 3; wol theme light; sleep 1; wol theme dark) >theme-flip.txt 2>&1 & } ; timeout 30 ./hello; echo rc=$?; wait; echo flip:; cat theme-flip.txt'"
   rc: any
+  timeout: 90
   save: cryswol-hello.txt
   expect: "posted"
-  caption: version, OS and a notification through the live wold (a theme event ends the run; a person may toggle the theme)
+  caption: version, OS and a notification through the live wold; the person flips the theme (wol theme light, then dark) while hello listens for the theme event
 - shot notification
 - ssh: "journalctl -b --no-pager -n 80 -t wold"
   rc: any
