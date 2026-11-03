@@ -168,6 +168,7 @@ VERBS = {  # verb -> how its argument string splits: "one" (whole), "words", "no
     "click": "words", "wait-text": "one", "wait-agent": "none", "wait-stable": "none", "sleep": "one",
     "ssh": "one", "exec": "one", "logs": "none", "checkpoint": "one", "snapshot-save": "one",
     "snapshot-restore": "one", "eject": "none", "boot": "one", "note": "one", "serial-send": "one",
+    "put": "one",
 }
 
 
@@ -457,6 +458,16 @@ class Agent:
         if "error" in r:
             raise RuntimeError(f"{cmd}: {r['error'].get('desc')}")
         return r.get("return")
+
+    def put(self, path, data, mode="0644"):
+        """Write bytes to a file in the guest (guest-file-*), replacing it."""
+        h = self.call("guest-file-open", path=path, mode="w")
+        try:
+            for i in range(0, len(data), 32768):
+                self.call("guest-file-write", handle=h, **{"buf-b64": base64.b64encode(data[i:i + 32768]).decode()})
+        finally:
+            self.call("guest-file-close", handle=h)
+        self.run(f"chmod {shlex.quote(mode)} {shlex.quote(path)}", 30)
 
     def run(self, shell_cmd, timeout=300):
         pid = self.call("guest-exec", path="/bin/sh", arg=["-c", shell_cmd], **{"capture-output": True})["pid"]
@@ -1076,6 +1087,19 @@ def cmd_rm(a):
 
 
 # ---------------------------------------------------------------- journey and report
+def host_file(name):
+    """A file a journey sends into the guest: an absolute path, else under $WOLOS_SRC, else under the
+    wolos checkout next to this repo (the layout tests/test-installer.sh uses), else the cwd."""
+    if os.path.isabs(name):
+        return name
+    here = os.path.dirname(os.path.abspath(__file__))
+    roots = [os.environ.get("WOLOS_SRC"), os.path.join(here, "..", "..", "..", "wolos"), os.getcwd()]
+    for r in roots:
+        if r and os.path.isfile(os.path.join(r, name)):
+            return os.path.join(r, name)
+    raise RuntimeError(f"put: {name} not found under $WOLOS_SRC, ../wolos or the current directory")
+
+
 def run_step(vm, st, out_dir, idx):
     """Runs one parsed step. Returns (ok, detail)."""
     v, args, o = st["verb"], st["args"], st["opts"]
@@ -1134,6 +1158,13 @@ def run_step(vm, st, out_dir, idx):
         return True, f"next start boots {cfg['boot']}"
     if v == "note":
         return True, args[0]
+    if v == "put":  # put: /guest/path   file: host/path (relative: see host_file)   mode: 0755
+        if "file" not in o:
+            raise ValueError("put: needs file: the host file to send")
+        with open(host_file(str(o["file"])), "rb") as f:
+            data = f.read()
+        vm.agent().put(args[0], data, str(o.get("mode", "0644")))
+        return True, f"sent {o['file']} ({len(data)} bytes) to {args[0]}"
     if v == "serial-send":
         cmd_serial(argparse.Namespace(home=os.path.dirname(os.path.dirname(vm.dir)), name=vm.name,
                                       action="send", text=args[0]))

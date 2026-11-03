@@ -10,6 +10,7 @@
 .github/builder
 build.sh
 profile/profiledef.sh
+release/metrics-publish.sh
 release/release-manifest.sh
 release/sb-key.sh
 release/sb-layout.sh

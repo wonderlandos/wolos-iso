@@ -174,7 +174,7 @@ for f in sorted(glob.glob(J("vm", "*", "idle.txt"))):
                                      "what": "sum of the cpu ms/s column, Hyprland + wol-shell"}
         break
 
-# ---- shell map: 'wol-shell: first map <Duration> at <ms>' (WOL_SHELL_TIMING=1) ----
+# ---- shell map: 'wol-shell: first map <Duration> at <ms>' (WOL_SHELL_TIMING=1; the shell's stderr, saved as shell-logs.txt) ----
 def ms(dur):
     m = re.fullmatch(r"([0-9.]+)(ns|µs|us|ms|s)", dur)
     if not m:
@@ -186,8 +186,8 @@ for f in sorted(glob.glob(J("vm", "*", "*logs.txt"))) + sorted(glob.glob(J("vm",
     m = re.search(r"wol-shell: first map (\S+)", read(f))
     if m and ms(m.group(1)) is not None:
         shell_map = round(ms(m.group(1)), 1)
-        evidence["shell_map_ms"] = {"from": rel(f), "command": "WOL_SHELL_TIMING=1 wol-shell (journal of the session)",
-                                    "what": "wol-shell: first map"}
+        evidence["shell_map_ms"] = {"from": rel(f), "command": "WOL_SHELL_TIMING=1 wol-shell 2>>$XDG_RUNTIME_DIR/wol-shell.log (journey desktop-idle saves that file)",
+                                    "what": "wol-shell: first map (menu bar mapped, ms since the shell started)"}
         break
 
 # ---- the VMs the journeys ran in (wolvm's vm.json of each) ----

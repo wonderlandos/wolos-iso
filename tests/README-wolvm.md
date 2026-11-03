@@ -95,9 +95,11 @@ bash $F run "$V snapshot live save before-disk-page; $V click live 824 599; $V w
 
 YAML subset (or JSON): top-level `name:`, then `- verb args` or `- verb: value` with indented
 options. Verbs: `start stop shot type key click wait-text wait-agent wait-stable sleep ssh exec logs
-checkpoint snapshot-save snapshot-restore eject boot note serial-send`. Options for every step:
+checkpoint snapshot-save snapshot-restore eject boot note serial-send put`. Options for every step:
 `timeout`, `retry`, `on-fail-restore: TAG`, `shot: false`, `caption`; `ssh`: `expect`, `rc` (number
-or `any`), `save: file.txt`, `user`; `wait-text`: `regex`, `new`; `click`: `button`, `double`.
+or `any`), `save: file.txt`, `user`; `wait-text`: `regex`, `new`; `click`: `button`, `double`;
+`put: /guest/path`: `file` (host file sent into the guest through the agent; a relative name is looked up
+under `$WOLOS_SRC`, then the `wolos` checkout next to this repo, then the current directory), `mode`.
 
 ```yaml
 name: live ISO boots to the installer
@@ -118,7 +120,10 @@ steps:
 ```
 
 Examples: `tests/wolvm/journeys/live-boot.yaml`, `install-auto.yaml` (wolos.autoinstall, reboot
-into the disk), `install-gui.yaml` (a keyboard template the agent adapts screen by screen).
+into the disk), `install-gui.yaml` (the graphical installer from the first screen to the restart: one `shot page-*` step
+per page, the page count `tests/metrics.sh` reports), `desktop-idle.yaml` (the installed desktop: login,
+60 s of idle measured by `design/tools/perf/idle.py`, the shell's first-map time; run it on the VM
+`install-gui` left behind).
 A failed step stops the run; fix the step and rerun with `--from N` after `snapshot restore`.
 Each run writes `journey.jsonl`, the PNGs, saved command output, `serial.log`, `report.md`, `index.html`.
 

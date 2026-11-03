@@ -1,25 +1,89 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# The installer app, driven like a person with keys. A template: the agent checks every
-# screenshot (Read tool) and edits keys/clicks to the screen it sees, then reruns with --from N.
-name: installer by keyboard
+# The graphical installer, driven like a person: from its first screen to "WolOS Is Installed", an
+# erase-disk install of a blank virtual disk without encryption, with automatic login. One
+# `shot page-<name>` step per page of the installer (crates/shell/src/install_flow.rs): the journey
+# record counts them, and tests/metrics.sh reports that count as `pages`.
+# The VM: a blank disk and the ISO, nothing else (no TPM, no Secure Boot, so no "Secure Boot" page):
+#   wolvm new gui --iso wolos.iso && wolvm journey gui tests/wolvm/journeys/install-gui.yaml
+# It ends with the installed disk as the boot device: run desktop-idle.yaml on the same VM next.
+# Positions are for the 1280x800 default screen. Enter is the card's default button (Continue).
+name: graphical installer
 steps:
 - start
 - wait-agent:
   timeout: 300
+# The agent is up before the installer is: wait for its window, then for the picture to settle.
+- ssh: "for i in $(seq 1 120); do pgrep -x wol-installer >/dev/null && { echo installer-up; exit 0; }; sleep 1; done; echo installer-timeout; exit 1"
+  expect: "installer-up"
+  timeout: 150
+  shot: false
+- sleep: 5
 - wait-stable:
   timeout: 180
-  caption: installer welcome page
-- checkpoint: installer-open
-- key: tab
-- key: ret
-  caption: next page (language)
+- shot page-welcome
+- click: 825 599
+  caption: Install WolOS (not Try)
 - wait-stable:
   timeout: 30
+- shot page-language
 - key: ret
-  caption: keyboard
 - wait-stable:
   timeout: 30
-- note: "continue: disk, account (type the name/password), summary, Install"
-- ssh: "journalctl -b --no-pager -n 80 -t wol-installer"
+- shot page-zone
+- key: ret
+- wait-stable:
+  timeout: 30
+- shot page-disk
+- key: ret
+- wait-stable:
+  timeout: 30
+- shot page-method
+- key: ret
+- wait-stable:
+  timeout: 30
+- click: 640 410
+  caption: Don't Encrypt
+- shot page-protect
+- key: ret
+- wait-stable:
+  timeout: 30
+- type: Wanda Tester
+- click: 680 430
+- type: wonderland-9
+- click: 680 468
+- type: wonderland-9
+- click: 550 540
+  caption: Log in automatically
+- shot page-account
+- key: ret
+- wait-stable:
+  timeout: 30
+- shot page-modules
+- key: ret
+- wait-stable:
+  timeout: 30
+- shot page-extras
+- key: ret
+- wait-stable:
+  timeout: 30
+- shot page-summary
+- key: ret
+  caption: Install
+- sleep: 8
+- shot page-installing
+# The installer reads the result (sudo install-check --result) once install-run has ended; sudo logs
+# that command to the journal. [t]: the agent logs this very command line, which must not match itself.
+- ssh: "for i in $(seq 1 450); do journalctl -b --no-pager -o cat | grep -q 'COMMAND=/usr/lib/wolos/install-check --resul[t]' && { echo install-done; exit 0; }; sleep 2; done; echo install-timeout; exit 1"
+  expect: "install-done"
+  timeout: 1000
+  shot: false
+  caption: the installer ended the install and read its result
+- wait-stable:
+  timeout: 60
+- shot page-done
+- ssh: "journalctl -b --no-pager -o cat -t wol-installer -n 80"
   rc: any
   save: installer-journal.txt
+  shot: false
+- stop
+- boot disk

@@ -382,5 +382,46 @@ class Expect(unittest.TestCase):
         self.assertTrue(any("wolos-tpm-reseal" in a for a in seen), seen)
 
 
+class PutStep(unittest.TestCase):
+    """The put verb sends a host file into the guest through the agent (idle.py for desktop-idle.yaml)."""
+    def test_parse_and_send(self):
+        _, steps = W.load_journey(os.path.join(HERE, "journeys", "desktop-idle.yaml"))
+        st = next(s for s in steps if s["verb"] == "put")
+        self.assertEqual(st["args"], ["/tmp/idle.py"])
+        self.assertEqual(st["opts"]["file"], "design/tools/perf/idle.py")
+        with tempfile.TemporaryDirectory() as d:
+            put(os.path.join(d, "x.py"), "print(1)\n")
+            sent = []
+
+            class A:
+                def put(self, path, data, mode):
+                    sent.append((path, data, mode))
+
+            class V:
+                def agent(self):
+                    return A()
+
+            ok, detail = W.run_step(V(), {"verb": "put", "args": ["/tmp/x.py"],
+                                          "opts": {"file": os.path.join(d, "x.py"), "mode": "0755"}}, d, 1)
+        self.assertTrue(ok, detail)
+        self.assertEqual(sent, [("/tmp/x.py", b"print(1)\n", "0755")])
+
+    def test_relative_file_is_looked_up_under_wolos_src(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "a"))
+            put(os.path.join(d, "a", "b.py"), "")
+            old = os.environ.get("WOLOS_SRC")
+            os.environ["WOLOS_SRC"] = d
+            try:
+                self.assertEqual(W.host_file("a/b.py"), os.path.join(d, "a", "b.py"))
+                with self.assertRaises(RuntimeError):
+                    W.host_file("a/missing.py")
+            finally:
+                if old is None:
+                    del os.environ["WOLOS_SRC"]
+                else:
+                    os.environ["WOLOS_SRC"] = old
+
+
 if __name__ == "__main__":
     unittest.main()

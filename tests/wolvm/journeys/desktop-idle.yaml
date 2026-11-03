@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# The installed desktop at rest: sign in (automatic login, as install-gui.yaml set it), leave the
+# computer alone for 60 s and count what the compositor and the shell cost, with the shell's own
+# first-map time. tests/metrics.sh reads idle.txt (idle_cpu_ms_s) and the shell log (shell_map_ms).
+# Run it on the VM install-gui.yaml left behind (boot device: the installed disk):
+#   wolvm journey gui tests/wolvm/journeys/desktop-idle.yaml
+# idle.txt is design/tools/perf/idle.py of the wolos checkout (see `put` in tests/README-wolvm.md),
+# run as `idle.py 60 Hyprland wol-shell`.
+name: desktop at rest
+steps:
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+  caption: the desktop after automatic login
+- ssh: "cat /etc/os-release; uname -r; systemd-detect-virt"
+  rc: any
+  save: system.txt
+  shot: false
+# The shell prints its stage times when WOL_SHELL_TIMING is set. wol-session sets it for every
+# session of an image with the export in it; for the images built before that, set it for the account (pam_env
+# reads /etc/environment) and sign in again, so the log holds exactly one start.
+- ssh: "grep -q '^WOL_SHELL_TIMING=' /etc/environment || echo WOL_SHELL_TIMING=1 >> /etc/environment; rm -f /run/user/*/wol-shell.log; systemctl restart wold; for i in $(seq 1 90); do pgrep -x wol-shell >/dev/null && grep -q 'first map' /run/user/*/wol-shell.log 2>/dev/null && { echo shell-up; exit 0; }; sleep 1; done; echo shell-timeout; exit 1"
+  expect: "shell-up"
+  timeout: 150
+  caption: signed in again with the shell timing on
+- wait-stable:
+  timeout: 120
+  caption: the desktop, nothing touched
+- sleep: 20
+- put: /tmp/idle.py
+  file: design/tools/perf/idle.py
+  mode: "0755"
+  shot: false
+- ssh: "python3 /tmp/idle.py 60 Hyprland wol-shell"
+  expect: "wol-shell"
+  timeout: 200
+  save: idle.txt
+  caption: 60 s with no input
+- ssh: "cat /run/user/*/wol-shell.log"
+  rc: any
+  save: shell-logs.txt
+  shot: false
+- shot desktop-idle
+- logs:
+  n: 400
