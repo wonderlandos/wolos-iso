@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Cryswol hello through the REAL Kit host: the shard's examples/hello.cr runs on the installed
 # desktop as the person (uid 1000), against the live wold (not the fake). Cryswol ships in the
-# Developer module (wolos-module-dev: crystal, libwol, the cryswol shard; docs/modules/cryswol.md),
-# not in the base image, so the journey installs it first through the root helper the installer
-# and firstboot use (/usr/lib/wolos/modules-install dev; needs the network and a mirror holding
-# [wolos], e.g. test-installer.sh's served repo for a pre-release build).
+# Developer module (wolos-module-dev: crystal, pkgconf, libwol, the cryswol shard;
+# docs/modules/cryswol.md), not in the base image, so the journey installs it first through the
+# root helper the installer and firstboot use (/usr/lib/wolos/modules-install dev; needs the
+# network and a mirror holding [wolos], e.g. test-installer.sh's served repo for a pre-release
+# build).
 # Run on an installed disk: wolvm journey <vm> tests/wolvm/journeys/cryswol-hello.yaml
 # The program is written inline (base64) because the package installs the shard's src/ only.
 name: Cryswol hello on the installed desktop
@@ -14,12 +15,18 @@ steps:
   timeout: 300
 - wait-stable:
   timeout: 180
-  caption: the installed desktop is up
-- ssh: "pacman -Q wolos-module-dev >/dev/null 2>&1 || /usr/lib/wolos/modules-install dev; pacman -Q wolos-module-dev crystal libwol cryswol && echo dev-module-present"
+  caption: the installed system is up (login window)
+- type: curiouser
+  caption: the person logs in (the account test-installer.sh's install_scenario makes: Alice Liddell, password curiouser)
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: the desktop session is up
+- ssh: "pacman -Q wolos-module-dev >/dev/null 2>&1 || /usr/lib/wolos/modules-install dev; pacman -Q wolos-module-dev crystal pkgconf libwol cryswol && echo dev-module-present"
   expect: "dev-module-present"
   timeout: 1800
   save: dev-module.txt
-  caption: the Developer module brings crystal, libwol and the cryswol shard
+  caption: the Developer module brings crystal, pkgconf, libwol and the cryswol shard
 - ssh: "crystal --version"
   expect: "Crystal"
   save: crystal-version.txt
@@ -35,13 +42,23 @@ steps:
   timeout: 600
   save: cryswol-build.txt
   caption: hello.cr compiles as the person against the installed shard and libwol
-- ssh: "u=$(id -nu 1000) && h=$(getent passwd 1000 | cut -d: -f6) && runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 sh -c 'cd \"$HOME/cr\" && { (sleep 3; wol theme light; sleep 1; wol theme dark) >theme-flip.txt 2>&1 & } ; timeout 30 ./hello; echo rc=$?; wait; echo flip:; cat theme-flip.txt'"
+# Notifications are off for a new app. This mirrors System Settings > Privacy & Security, which
+# writes the same grant to /etc/wolos/consent.json through wol-admind (no wol verb in v0.12).
+- ssh: "h=$(getent passwd 1000 | cut -d: -f6) && a=$(realpath \"$h/cr/hello\") && f=/etc/wolos/consent.json && { [ -s $f ] && jq -e .grants $f >/dev/null 2>&1 || printf '%s\\n' '{\"grants\":[]}' > $f; } && jq --arg a \"$a\" '.grants |= ((map(select(.app != $a or .capability != \"notifications\"))) + [{app: $a, capability: \"notifications\"}])' $f > $f.new && mv $f.new $f && chmod 644 $f && jq -e --arg a \"$a\" '.grants[] | select(.app == $a and .capability == \"notifications\")' $f && echo granted"
+  expect: "granted"
+  save: consent.txt
+  caption: the person turns notifications on for hello (System Settings > Privacy & Security writes this grant to /etc/wolos/consent.json through wol-admind; the journey writes the same entry as root)
+- ssh: "u=$(id -nu 1000) && h=$(getent passwd 1000 | cut -d: -f6) && runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 sh -c 'cd \"$HOME/cr\" && rm -f hello.out theme-flip.txt && { (sleep 4; wol theme light; sleep 1; wol theme dark) >theme-flip.txt 2>&1 & } && { (timeout 30 ./hello; echo rc=$?) >hello.out 2>&1 & } && echo started'"
+  expect: "started"
+  caption: hello starts as the person; 4 s later the person flips the theme (wol theme light, then dark) while hello listens for the theme event
+- sleep: 1
+- shot notification
+- ssh: "u=$(id -nu 1000) && h=$(getent passwd 1000 | cut -d: -f6) && runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 sh -c 'cd \"$HOME/cr\" && for i in $(seq 1 40); do grep -q ^rc= hello.out 2>/dev/null && break; sleep 1; done; cat hello.out; echo flip:; cat theme-flip.txt'"
   rc: any
   timeout: 90
   save: cryswol-hello.txt
-  expect: "posted"
-  caption: version, OS and a notification through the live wold; the person flips the theme (wol theme light, then dark) while hello listens for the theme event
-- shot notification
+  expect: "posted\ntheme: {\"event\":\"theme\",\"id\":\"wol-light\"}\nrc=0"
+  caption: version, OS, the notification, then the theme event wold sent for the person's wol theme light (hello stops at the first one and exits 0)
 - ssh: "journalctl -b --no-pager -n 80 -t wold"
   rc: any
   save: wold-journal.txt

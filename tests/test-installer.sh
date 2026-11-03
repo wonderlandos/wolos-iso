@@ -5,7 +5,8 @@
 # as the app. Boot counting proves the boot: the entry is blessed only when the system came up.
 # Usage: tests/test-installer.sh remaster BASE.iso BIN_DIR | tests/test-installer.sh run SCENARIO...
 #        (BIN_DIR: wol, wol-installer, wol-shell, install_scenario; wol-xguard when it is there)
-#        tests/test-installer.sh layouts BIN_DIR NAME...   (real partitioning on loop devices, no VM)
+#        tests/test-installer.sh layouts BIN_DIR NAME...   (real partitioning on loop devices, no VM;
+#          exit 1 on any E2E FAIL or when no layout passed, e.g. every name skipped)
 # Scenarios: erase alongside-windows alongside-linux manual manual-ext4 password encrypted-alongside tpm medium
 #            bitlocker-windows reinstall-windows replace offline-modules
 # Exit status of `run`: 1 when any E2E FAIL line came out or a scenario left no E2E PASS line
@@ -165,14 +166,27 @@ wait_off() { # vm seconds: until the VM powered itself off, else stop it
   running "$1" && w stop "$1" --force >/dev/null 2>&1
 }
 to_raw() { # vm dir: the VM's disk back as $dir/disk.raw (the checks below read it with losetup)
-  qemu-img convert -f qcow2 -O raw "$W/wolvm/vms/$1/disk.qcow2" "$2/disk.raw"
+  # Right after `wolvm stop --force` a loaded host may still hold the qcow2's write lock ("Failed
+  # to get shared write lock"): wait for it, a bounded while, then say so as a failed check.
+  local i err=$2/to_raw.err
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    qemu-img convert -f qcow2 -O raw "$W/wolvm/vms/$1/disk.qcow2" "$2/disk.raw" 2> "$err" && { rm -f "$err"; return 0; }
+    grep -qi 'lock' "$err" || break
+    sleep 5
+  done
+  echo "E2E FAIL ${S:-$1}: the disk did not come back from the VM after try $i (qemu-img: $(tr '\n' ' ' < "$err"))"
+  return 1
 }
 
 install_in_vm() { # dir scenario-name plan
-  local d=$1 n=e2e-$2 s=$3 start=$SECONDS tpm=
-  [ "$2" != tpm ] || tpm=--tpm   # a TPM2 that lives through install and boot (wolvm keeps its state)
+  local d=$1 n=e2e-$2 s=$3 start=$SECONDS tpm='' net=--no-net
+  # tpm: a TPM2 that lives through install and boot (wolvm keeps its state), and a network card:
+  # without one the first boot falls back to the recovery prompt (prerelease run 2026-11-03, B6;
+  # the product side is tracked apart). The others stay offline.
+  [ "$2" != tpm ] || { tpm=--tpm; net=; }
   # The disk keeps its size (a grown disk would move the GPT backup header the installer reads).
-  w new "$n" --from-image "$d/disk.raw" --disk "$(stat -c %s "$d/disk.raw")" --iso "$ISO" --direct --no-net \
+  # shellcheck disable=SC2086  # net is one word or none
+  w new "$n" --from-image "$d/disk.raw" --disk "$(stat -c %s "$d/disk.raw")" --iso "$ISO" --direct $net \
     --mem 6G --smp 4 --gpu virtio $tpm --append "wolos.e2e=$s wolos.try quiet audit=0" --force >/dev/null || return 1
   w start "$n" >/dev/null || return 1
   wait_off "$n" "${WOLOS_E2E_INSTALL_S:-1500}"
@@ -407,9 +421,18 @@ layouts() { # bin_dir names...: the real partitioning on loop devices, no VM and
   local bin=$1; shift
   for S in "$@"; do
     local d=$W/layout-$S plan=$S before
+    case $S in
+      # A whole-disk erase (also password and tpm, which erase too) goes through systemd-repart in
+      # install-run, never through `wol install layout` ("Erase runs through systemd-repart"):
+      # `run $S` covers them.
+      erase | password | tpm) echo "E2E SKIP $S: erases the whole disk (systemd-repart in install-run, not wol install layout); see run $S"; continue ;;
+    esac
     rm -rf "$d"; mkdir -p "$d"
+    # The throw-away disk key install-run makes before the layout (an encrypted plan formats with it).
+    (umask 077 && head -c 64 /dev/urandom > "$d/key") || { echo "E2E FAIL $S: no disk key"; continue; }
     case $S in
       alongside-windows) mk_disk windows "$d/disk.raw"; plan=alongside ;;
+      encrypted-alongside) mk_disk windows "$d/disk.raw" ;;   # beside Windows, as in scenario()
       alongside-linux) mk_disk linux "$d/disk.raw"; plan=alongside ;;
       *) mk_disk linux "$d/disk.raw" ;;
     esac
@@ -418,7 +441,11 @@ layouts() { # bin_dir names...: the real partitioning on loop devices, no VM and
     apply_layout() {
       sudo "$bin/wol" install probe "$LOOP" > "$d/probe.json" || return 1
       "$bin/install_scenario" "$plan" "$d/probe.json" "$d/plan" || return 1
-      sudo "$bin/wol" install layout "$d/plan/plan.json" "$d/key" > "$d/layout.env"
+      sudo "$bin/wol" install layout "$d/plan/plan.json" "$d/key" > "$d/layout.env"; local rc=$? m
+      # An encrypted plan leaves its volumes open (install-run closes them later): close them here,
+      # or the loop device stays busy and the next encrypted layout finds wolosroot taken.
+      for m in $(sed -n 's|^[a-z_]*=/dev/mapper/||p' "$d/layout.env"); do sudo cryptsetup close "$m"; done
+      return $rc
     }
     if ! with_loop "$d/disk.raw" apply_layout; then echo "E2E FAIL $S: layout not applied"; continue; fi
     echo "E2E PASS $S: layout applied"
@@ -488,7 +515,15 @@ medium() { # the installer's own medium is refused
 
 case ${1:-} in
   remaster) shift; remaster "$@" ;;
-  layouts) shift; layouts "$@" ;;
+  layouts) shift
+    [ $# -gt 1 ] || { echo "usage: $0 layouts BIN_DIR NAME..." >&2; exit 2; }
+    # A verdict like run's: any E2E FAIL, or no E2E PASS at all (nothing ran, or every name was
+    # skipped), is a failed run.
+    layouts "$@" 2>&1 | tee "$W/layouts.result"
+    if ! grep -q '^E2E PASS' "$W/layouts.result" && grep -q '^E2E SKIP' "$W/layouts.result"; then
+      echo "layouts: every name was skipped, no layout ran: name one wol install layout applies (not erase, password or tpm)" >&2
+    fi
+    sh "$REPO/tests/test/verdict.sh" E2E "$W/layouts.result" ;;
   run) shift
     for s in "$@"; do
       rm -f "$W/$s.result"

@@ -153,7 +153,7 @@ fn install_tests_drive_their_vms_through_wolvm() {
     }
     let i = read("tests/test-installer.sh");
     assert!(i.contains("--iso-bus virtio"), "medium: the ISO as a disk");
-    assert!(i.contains(r#"[ "$2" != tpm ] || tpm=--tpm"#));
+    assert!(i.contains(r#"[ "$2" != tpm ] || { tpm=--tpm; net=; }"#));
 }
 
 #[test]
@@ -172,11 +172,164 @@ fn install_test_is_unattended_and_proves_the_bystander_disk_untouched() {
         // not just any screenshot (firmware's "no bootable device" screen is a screenshot too).
         "Linux Boot Manager",
         "getcolors",
-        // One VM at a time: a leftover VM on the same disk and sockets starves the install.
-        "pgrep -x qemu-system-x86",
+        // One run per $WOLOS_VM home (its pidfile), not "no QEMU at all on the host".
+        "lock=$T/test-install.pid",
     ] {
         assert!(t.contains(want), "test-install.sh lacks {want}");
     }
+    assert!(
+        !t.contains("pgrep -x qemu-system-x86"),
+        "test-install.sh must not refuse to run beside other harnesses' or people's VMs"
+    );
+}
+
+/// Prerelease run 2026-11-03 (B10): the guard is this harness's own pidfile in $WOLOS_VM/test.
+/// A live run in the same home stops a second one; a stale pidfile does not; any other QEMU on
+/// the host (a pgrep that finds one) is not consulted at all.
+#[test]
+fn install_test_guards_its_own_home_not_every_qemu() {
+    let d = std::env::temp_dir().join(format!("wol-vmguard-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&d);
+    let bin = d.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    for (name, body) in [
+        ("qemu-system-x86_64", "exit 0"),
+        ("qemu-img", "exit 0"),
+        ("mdir", "exit 0"),
+        // A foreign VM is running: the old guard would have stopped here.
+        ("pgrep", "echo 4242; exit 0"),
+    ] {
+        let p = bin.join(name);
+        fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let t = d.join("vm").join("test");
+    fs::create_dir_all(&t).unwrap();
+    let run = || {
+        Command::new("sh")
+            .arg(repo("tests/test-install.sh"))
+            .arg(d.join("missing.iso"))
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .env("WOLOS_VM", d.join("vm"))
+            .output()
+            .unwrap()
+    };
+    // Another run (this test process, alive) owns the home.
+    fs::write(
+        t.join("test-install.pid"),
+        format!("{}\n", std::process::id()),
+    )
+    .unwrap();
+    let err = String::from_utf8_lossy(&run().stderr).into_owned();
+    assert!(err.contains("another test-install run"), "{err}");
+    // Its owner is gone (a pid that cannot be alive): the run goes on, past the guard, to the ISO.
+    fs::write(t.join("test-install.pid"), "999999999\n").unwrap();
+    let o = run();
+    let err = String::from_utf8_lossy(&o.stderr).into_owned();
+    assert!(!err.contains("another"), "{err}");
+    assert!(err.contains("no ISO in"), "{err}");
+    assert!(
+        !t.join("test-install.pid").exists(),
+        "the run removes its pidfile on exit"
+    );
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// `layouts` has a verdict like `run`: its output goes to $W/layouts.result and verdict.sh decides,
+/// so a FAIL, or a run where every name was skipped (no PASS), exits non-zero. The run itself on
+/// skip-only names (no sudo, no disk needed): exit 1 with the clear line.
+#[test]
+fn layouts_has_a_verdict_and_fails_when_everything_skipped() {
+    let i = read("tests/test-installer.sh");
+    assert!(i.contains(r#"layouts "$@" 2>&1 | tee "$W/layouts.result""#));
+    assert!(i.contains(r#"sh "$REPO/tests/test/verdict.sh" E2E "$W/layouts.result""#));
+    let d = std::env::temp_dir().join(format!("wol-layouts-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&d);
+    fs::create_dir_all(&d).unwrap();
+    let run = |args: &[&str]| {
+        Command::new("bash")
+            .arg(repo("tests/test-installer.sh"))
+            .arg("layouts")
+            .args(args)
+            .env("WOLOS_E2E", &d)
+            .output()
+            .unwrap()
+    };
+    let o = run(&["/nonexistent", "erase", "password", "tpm"]);
+    let (out, err) = (
+        String::from_utf8_lossy(&o.stdout),
+        String::from_utf8_lossy(&o.stderr),
+    );
+    assert!(!o.status.success(), "{out}{err}");
+    assert_eq!(out.matches("E2E SKIP").count(), 3, "{out}");
+    assert!(err.contains("every name was skipped"), "{err}");
+    assert!(
+        out.contains("1 of 1 result files not clean"),
+        "verdict.sh decided: {out}"
+    );
+    // No names at all: a usage error, not a pass.
+    let o = run(&["/nonexistent"]);
+    assert_eq!(o.status.code(), Some(2));
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// Prerelease run 2026-11-03: the harness bugs it found stay fixed. B2 the live journey waits for
+/// the live system's own first unit, not a greeting this console never prints; B4 the disk comes
+/// back from the VM with a bounded wait for the qcow2 lock; B4b `layouts` skips the whole-disk
+/// erases (systemd-repart) and makes the throw-away key an encrypted plan formats with; B5 the
+/// MOK screens are driven by the text the firmware mirrors to the serial console; B6 the tpm
+/// variants have a network card.
+#[test]
+fn prerelease_harness_fixes_stay() {
+    let j = read("tests/wolvm/journeys/live-boot.yaml");
+    assert!(
+        j.contains(r#"wait-text: "Install WolOS: the first screen of the live image""#),
+        "{j}"
+    );
+    assert!(!j.contains(r#"wait-text: "Welcome to""#));
+    let i = read("tests/test-installer.sh");
+    let to_raw = i
+        .split("to_raw() {")
+        .nth(1)
+        .unwrap()
+        .split("\n}\n")
+        .next()
+        .unwrap();
+    for want in [
+        "for i in 1 2 3 4 5 6 7 8 9 10 11 12; do",
+        "grep -qi 'lock'",
+        "E2E FAIL",
+        "return 1",
+    ] {
+        assert!(to_raw.contains(want), "to_raw lacks {want}");
+    }
+    let layouts = i
+        .split("layouts() {")
+        .nth(1)
+        .unwrap()
+        .split("\n}\n")
+        .next()
+        .unwrap();
+    assert!(layouts.contains("erase | password | tpm) echo \"E2E SKIP $S:"));
+    assert!(layouts.contains(r#"head -c 64 /dev/urandom > "$d/key""#));
+    assert!(layouts.contains(r#"encrypted-alongside) mk_disk windows "$d/disk.raw" ;;"#));
+    assert!(layouts.contains(r#"sudo cryptsetup close "$m""#));
+    assert!(i.contains(r#"[ "$2" != tpm ] || { tpm=--tpm; net=; }"#));
+    assert!(i.contains("--direct $net"));
+    let t = read("tests/test-install.sh");
+    for want in [
+        r#"net=--no-net; [ "$ENC" != tpm ] || net="#,
+        "--direct $net",
+        r#"MOK_MENU="down ret down ret down ret b o o t ret ret""#,
+        r#"w wait-text "$N" 'Perform MOK management|Press any key to perform MOK management' --regex"#,
+        r#"if [ -n "${WOLOS_MOK_KEYS:-}" ]; then"#,
+    ] {
+        assert!(t.contains(want), "test-install.sh lacks {want}");
+    }
+    assert!(
+        !t.contains("WOLOS_MOK_KEYS:-ret down"),
+        "the old key list starts with Continue boot"
+    );
 }
 
 /// test-audio.sh runs inside a booted WolOS and proves the sound rules end to end: the WolOS
@@ -193,7 +346,11 @@ fn audio_test_proves_floor_force_modules_and_reset_in_the_guest() {
         "module-null-sink",
         "sink_name=wolos_test",
         "pw-cat",
-        "--latency 64/48000",
+        "--latency 64",
+        "pw-config -n pipewire.conf merge context.properties",
+        "cpu.vm.name",
+        "FLOOR=1024",
+        "no user session",
         "--raw",
         "pw-top -b -n",
         "clock.force-quantum 256",
