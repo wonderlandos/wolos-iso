@@ -99,6 +99,8 @@ rtkit                  # realtime audio threads (PipeWire)
 zsh-autosuggestions
 zsh-syntax-highlighting
 zsh-completions
+# Scripts: sh and zsh from the base; ruby for .rb scripts (wolos ADR 0041, wol script)
+ruby
 # Session: xdg-user-dirs at login (wol-session), login keyring unlocked by wol-login
 xdg-user-dirs
 gnome-keyring
