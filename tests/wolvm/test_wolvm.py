@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Unit tests for wolvm: step parser, key/QMP builders, qemu command, PNG writer, report.
 Run: python3 tests/wolvm/test_wolvm.py   (no QEMU needed; also runs on Windows)."""
-import contextlib, io, json, os, struct, subprocess, sys, tempfile, unittest, zlib
+import contextlib, io, json, os, struct, subprocess, sys, tempfile, unittest, unittest.mock, zlib
 from importlib.machinery import SourceFileLoader
 sys.dont_write_bytecode = True  # no __pycache__ next to the wolvm script
 from importlib.util import module_from_spec, spec_from_loader
@@ -380,6 +380,59 @@ class Expect(unittest.TestCase):
         # the reseal unit is asked on the second start
         seen = [st["args"][0] for st in steps[starts[-1]:] if st["verb"] == "ssh"]
         self.assertTrue(any("wolos-tpm-reseal" in a for a in seen), seen)
+
+
+class StopAfterPoweroff(unittest.TestCase):
+    """v0.12: the guest powered itself off ("reboot: Power down"), so the monitor of the dying QEMU
+    resets; `stop` must treat that as already going down and still end in a clean "stopped"."""
+
+    class ResetOnConnect:
+        def __init__(self):
+            raise ConnectionResetError(104, "Connection reset by peer")
+
+    class ResetOnFirstCall:
+        calls = []
+
+        def call(self, msg):
+            self.calls.append(msg["execute"])
+            raise ConnectionResetError(104, "Connection reset by peer")
+
+    def stop(self, qmp_factory, via_step=False):
+        pids = iter([4242, 4242])  # running at the first look and while waiting, then gone
+        killed = []
+        with tempfile.TemporaryDirectory() as d, \
+                unittest.mock.patch.object(W, "DRY", False), \
+                unittest.mock.patch.object(W.VM, "pid", lambda self: next(pids, None)), \
+                unittest.mock.patch.object(W.VM, "qmp", lambda self: qmp_factory()), \
+                unittest.mock.patch.object(W.time, "sleep", lambda s: None), \
+                unittest.mock.patch.object(W.os, "kill", lambda *a: killed.append(a)):
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                if via_step:
+                    vm = W.VM(d, "t")
+                    ok, _ = W.run_step(vm, W.parse_step({"stop": "", "timeout": 5}), d, 0)
+                    rc = 0 if ok else 1
+                else:
+                    rc = W.cmd_stop(W.argparse.Namespace(home=d, name="t", force=False, timeout=5))
+        self.assertEqual(killed, [])
+        return rc, buf.getvalue()
+
+    def test_reset_on_connect(self):
+        rc, out = self.stop(self.ResetOnConnect)
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.rstrip().endswith("t: stopped"), out)
+
+    def test_reset_on_first_call(self):
+        self.ResetOnFirstCall.calls = []
+        rc, out = self.stop(self.ResetOnFirstCall)
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.ResetOnFirstCall.calls, ["system_powerdown"])
+        self.assertTrue(out.rstrip().endswith("t: stopped"), out)
+
+    def test_journey_stop_step_takes_the_same_path(self):
+        rc, out = self.stop(self.ResetOnFirstCall, via_step=True)
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.rstrip().endswith("t: stopped"), out)
 
 
 if __name__ == "__main__":
