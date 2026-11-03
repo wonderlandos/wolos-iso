@@ -110,7 +110,7 @@ jobs:
             # An image the build box already signed with the pinned live key keeps its tested bytes;
             # otherwise the secrets must be that same key (a stray pair would give an image no PC boots).
             docker run --rm --device /dev/kvm -v "$PWD:/src" -v "$RUNNER_TEMP:/keys" -w /src archlinux:latest bash -euo pipefail -c '
-              pacman -Sy --noconfirm --needed mtools sbsigntools openssl python util-linux qemu-base edk2-ovmf virt-firmware >/dev/null
+              pacman -Sy --noconfirm --needed mtools sbsigntools openssl python util-linux qemu-base qemu-hw-display-virtio-vga edk2-ovmf virt-firmware >/dev/null
               iso=dist/'"$iso"'; pin=wolos-iso/release/wolos-live-2026.cer
               fp() { openssl x509 -noout -fingerprint -sha256 -inform DER -in "$1" 2>/dev/null || openssl x509 -noout -fingerprint -sha256 -inform PEM -in "$1"; }
               if wolos-iso/release/sb-layout.sh check "$iso"; then
@@ -145,6 +145,7 @@ jobs:
         env:
           WOLOS_RELEASE_KEY: ${{ secrets.WOLOS_RELEASE_KEY }}
         run: |
+          mkdir -p out
           export WOLOS_ISO=$PWD/wolos-iso WOLOS_SUMMARY=$PWD/out/summary.md WOLOS_WORK=$PWD/out/work
           [ "$UPLOAD" = 1 ] || export WOLOS_GH_RECORD=$PWD/out/release.sh
           wolos-iso/.github/builder wolos-build release --do --iso dist ${SB_SIGNED:+--rehash} --run "$RUN" "$TAG"
