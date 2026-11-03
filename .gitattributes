@@ -1,0 +1,14 @@
+# Text files are stored and checked out with LF, whatever the platform, so a diff shows only real
+# changes (a CRLF checkout on Windows makes whole files look rewritten, and a CRLF script or unit
+# breaks inside the image).
+* text=auto eol=lf
+# Bytes that must never be converted: images, disk and package images, keys (their fingerprints
+# and signatures cover the exact bytes), and patches applied to other trees.
+*.png binary
+*.iso binary
+*.img binary
+*.zst binary
+*.asc -text
+*.gpg -text
+*.sig -text
+*.patch -text
