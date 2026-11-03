@@ -11,6 +11,9 @@
 #  5. The files the modules rely on are in place: Claude Code's managed settings, the WolOS skill,
 #     zellij, mise and the console setup (a login zsh of the person has the WolOS history size), and
 #     `wol sessions list --json` answers.
+#  6. Terminals open the shell chosen in Settings (/usr/bin/wol-term-shell, zsh without a choice),
+#     and with the console module installed, the person's pwsh (wopkg recipe) has the WolOS setup,
+#     its launcher entry and the system shim; prints pwsh's start time with and without the setup.
 # Run as root with the desktop user as argument: sudo tests/test-modules.sh alice
 # Exit 0 and "test-modules: PASS", else the first failing step. A module this test installed is
 # removed again on EXIT; one that was installed before stays.
@@ -74,5 +77,27 @@ grep -q '"mcp__wolos"' /etc/claude-code/managed-settings.json || fail "managed s
 H=$(as_user zsh -lic 'print -r -- $HISTSIZE' 2>/dev/null | tail -1)
 [ "$H" = 50000 ] || fail "a login zsh of $U has HISTSIZE=$H, not the WolOS 50000"
 as_user wol sessions list --json | grep -q '"windows"' || fail "wol sessions list --json"
+
+# 6. Terminal shell and pwsh.
+TS=/usr/bin/wol-term-shell
+[ -x "$TS" ] || fail "$TS missing"
+[ -x /usr/lib/wolos/pwsh ] || fail "/usr/lib/wolos/pwsh missing"
+Z=$(as_user env -u XDG_CONFIG_HOME "$TS" -fc 'print -r -- zsh:$ZSH_VERSION' 2>/dev/null | tail -1)
+case $Z in zsh:?*) ;; *) fail "wol-term-shell without a choice is not zsh: $Z" ;; esac
+if pacman -Qq wolos-module-console >/dev/null 2>&1; then
+  as_user wol modules enable console </dev/null || fail "wol modules enable console"
+  UH=$(getent passwd "$U" | cut -d: -f6)
+  PW=$UH/.local/bin/pwsh
+  [ -x "$PW" ] || fail "$PW missing after enabling console"
+  [ -r "$UH/.local/share/applications/wolos-pwsh.desktop" ] || fail "pwsh launcher entry missing"
+  N=$(as_user env WOLOS_PWSH_FORCE=1 "$PW" -NoLogo -c '(Get-PSReadLineOption).MaximumHistoryCount' 2>/dev/null | tail -1)
+  [ "$N" = 50000 ] || fail "pwsh setup not loaded: MaximumHistoryCount=$N"
+  as_user /usr/lib/wolos/pwsh -NoProfile -c 'exit 7' && fail "shim lost the exit code"
+  [ $? = 7 ] || fail "shim exit code"
+  t() { local s e; s=$(date +%s%N); for _ in 1 2 3 4 5; do as_user "$@" >/dev/null 2>&1; done; e=$(date +%s%N); echo $(( (e - s) / 5000000 )); }
+  echo "test-modules: pwsh start ms: bare $(t "$PW" -NoLogo -NoProfile -c exit), setup $(t env WOLOS_PWSH_FORCE=1 "$PW" -NoLogo -c exit)"
+else
+  echo "test-modules: console module not installed: pwsh checks skipped"
+fi
 
 echo "test-modules: PASS"
