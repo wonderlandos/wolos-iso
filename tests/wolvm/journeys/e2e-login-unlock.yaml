@@ -1,0 +1,53 @@
+name: login and unlock (cold boot to the lock screen, wrong password, right password, lock again)
+# Base: a clone of the kept v0.12 install (tests/e2e.sh). The account tester has the password "tester".
+# Autologin starts the session locked, so the lock screen is the first thing a person sees.
+from: cold
+steps:
+- start
+- wait-agent:
+  timeout: 120
+- wait-cmd: "pgrep -x wol-lock"
+  timeout: 90
+  caption: the lock screen process is up (seconds after the agent)
+- wait-screen:
+  not-blank: true
+  luma-min: 120
+  timeout: 30
+  caption: lock screen drawn, light theme with clock and avatar
+- ssh: "pgrep -x Hyprland >/dev/null && echo compositor-up; ls /home/tester/.cache/hyprland 2>/dev/null | wc -l"
+  expect: compositor-up
+  caption: the compositor did not crash on the way (no crash reports in the first boot)
+- type: "wrongpass\n"
+  budget: 1.0
+- sleep: 5
+- assert-screen:
+  luma-min: 120
+  caption: still locked after a wrong password
+- wait-cmd: "pgrep -x wol-lock"
+  timeout: 5
+- type: "tester\n"
+  budget: 1.0
+- wait-cmd: "! pgrep -x wol-lock"
+  timeout: 15
+  budget: 2.0
+  caption: unlocked (lock process gone)
+- wait-screen:
+  changed-from: 8
+  min: 20
+  timeout: 15
+  caption: desktop with dock and menu bar after unlocking
+- ssh: "hyprctl layers -j | grep -c namespace"
+  user: tester
+  expect: "4"
+- key: ctrl-super-q
+  caption: lock from the keyboard
+- wait-cmd: "pgrep -x wol-lock"
+  timeout: 15
+  budget: 1.5
+- wait-screen:
+  luma-min: 120
+  timeout: 10
+  caption: locked again
+- type: "tester\n"
+- wait-cmd: "! pgrep -x wol-lock"
+  timeout: 15

@@ -1,0 +1,420 @@
+name: Settings, every page opened (25 sidebar panes and the subpages), then one sidebar click and the search box
+# Each page is asked for with `wol-settings "<page>"` (the documented deep link); the window must stay
+# alive, repaint (a different picture than the page before) and leave no panic in the user journal.
+from: desktop
+steps:
+- click: 891 755
+  caption: open System Settings from the Dock (open time)
+- wait-ui: "^org.wolos.settings$"
+  timeout: 15
+  budget: 1.5
+- wait-screen:
+  changed-from: 1
+  min: 5
+  timeout: 15
+  caption: the window content is drawn (first paint)
+- ssh: "setsid -f wol-settings 'Wi-Fi' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Wi-Fi"
+- ssh: "setsid -f wol-settings 'Bluetooth' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Bluetooth"
+- ssh: "setsid -f wol-settings 'Network' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Network"
+- ssh: "setsid -f wol-settings 'Notifications' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Notifications"
+- ssh: "setsid -f wol-settings 'Sound' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Sound"
+- ssh: "setsid -f wol-settings 'General' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page General"
+- ssh: "setsid -f wol-settings 'Appearance' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Appearance"
+- ssh: "setsid -f wol-settings 'Accessibility' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Accessibility"
+- ssh: "setsid -f wol-settings 'Control Center' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Control Center"
+- ssh: "setsid -f wol-settings 'Desktop & Dock' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Desktop & Dock"
+- ssh: "setsid -f wol-settings 'Displays' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Displays"
+- ssh: "setsid -f wol-settings 'Wallpaper' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Wallpaper"
+- ssh: "setsid -f wol-settings 'Effects & Looks' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Effects & Looks"
+- ssh: "setsid -f wol-settings 'Widgets' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Widgets"
+- ssh: "setsid -f wol-settings 'Battery' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Battery"
+- ssh: "setsid -f wol-settings 'Lock Screen' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Lock Screen"
+- ssh: "setsid -f wol-settings 'Privacy & Security' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Privacy & Security"
+- ssh: "setsid -f wol-settings 'Users & Groups' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Users & Groups"
+- ssh: "setsid -f wol-settings 'Keyboard' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Keyboard"
+- ssh: "setsid -f wol-settings 'Trackpad & Mouse' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Trackpad & Mouse"
+- ssh: "setsid -f wol-settings 'Printers' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Printers"
+- ssh: "setsid -f wol-settings 'Hardware' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Hardware"
+- ssh: "setsid -f wol-settings 'Assistants & Automation' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Assistants & Automation"
+- ssh: "setsid -f wol-settings 'Modules' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Modules"
+- ssh: "setsid -f wol-settings 'Restore' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Restore"
+- ssh: "setsid -f wol-settings 'Keyboard Shortcuts' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Keyboard Shortcuts"
+- ssh: "setsid -f wol-settings 'Startup Security' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Startup Security"
+- ssh: "setsid -f wol-settings 'About' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page About"
+- ssh: "setsid -f wol-settings 'Software Update' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Software Update"
+- ssh: "setsid -f wol-settings 'Storage' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Storage"
+- ssh: "setsid -f wol-settings 'Date & Time' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Date & Time"
+- ssh: "setsid -f wol-settings 'Language & Region' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Language & Region"
+- ssh: "setsid -f wol-settings 'Login Items' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Login Items"
+- ssh: "setsid -f wol-settings 'Sharing' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Sharing"
+- ssh: "setsid -f wol-settings 'Memory Saver' >/dev/null 2>&1 </dev/null; echo asked"
+  user: tester
+  expect: asked
+  shot: false
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  retry: 1
+  caption: "page Memory Saver"
+- ssh: "pgrep -u tester -x wol-settings >/dev/null && echo alive; journalctl --user -b --no-pager | grep -ci 'panicked\\|segfault\\|SIGSEGV' || true"
+  user: tester
+  expect: alive
+  caption: the window survived all pages and the journal has no panic
+- click: 267 367
+  caption: a real click on the Appearance row in the sidebar
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+- click: 304 139
+  caption: the search field
+- type: "dock"
+- wait-screen:
+  changed-from: prev
+  min: 0.01
+  timeout: 6
+  budget: 1.0
+  caption: search results for "dock"

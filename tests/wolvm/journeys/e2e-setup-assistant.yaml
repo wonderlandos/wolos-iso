@@ -1,0 +1,100 @@
+name: Setup Assistant on a computer with no account (remove the only user, reboot, walk every page, land on the desktop)
+# The assistant is what wol-login starts when no account exists (ADR 0004). The clone loses its user.
+from: cold
+steps:
+- start
+- wait-agent:
+  timeout: 120
+- ssh: "pkill -u tester -KILL; sleep 1; userdel -rf tester; getent passwd tester || echo no-user"
+  expect: no-user
+  rc: any
+  caption: remove the only account on this copy
+- ssh: "setsid -f sh -c 'sleep 1; systemctl reboot' >/dev/null 2>&1 </dev/null; echo scheduled"
+  expect: scheduled
+- sleep: 5
+- wait-agent:
+  timeout: 120
+- wait-ui: "wol-setup|setup"
+  layer: false
+  user: root
+  timeout: 5
+  soft: true
+- wait-screen:
+  not-blank: true
+  luma-max: 120
+  timeout: 60
+  caption: the Welcome page is drawn (dark artwork)
+- sleep: 3
+- assert-screen:
+  not-blank: true
+  caption: Welcome to WolOS
+- click: 130 501
+  caption: Continue
+- wait-screen:
+  changed-from: prev
+  min: 10
+  timeout: 10
+  budget: 1.0
+  caption: Language & Region
+- click: 838 599
+  caption: Continue (English US is preselected)
+- wait-screen:
+  changed-from: prev
+  min: 5
+  timeout: 10
+  budget: 1.0
+  caption: Create Your Account
+- type: "Fresh Tester"
+- key: tab
+- type: "fresh"
+- key: tab
+- type: "freshpass1"
+- key: tab
+- type: "freshpass1"
+- assert-screen:
+  caption: form filled, Continue enabled
+- click: 838 606
+  caption: Continue (the account is created at the end)
+- wait-screen:
+  changed-from: prev
+  min: 5
+  timeout: 10
+  budget: 1.0
+  caption: Appearance
+- click: 639 360
+  caption: pick Dark
+- assert-screen:
+  changed-from: prev
+  min: 0.2
+  caption: Dark is selected
+- click: 838 599
+  caption: Continue
+- wait-screen:
+  changed-from: prev
+  min: 3
+  timeout: 20
+  caption: You're All Set
+- ssh: "getent passwd fresh; id fresh"
+  expect: fresh
+  rc: any
+  save: fresh-account.txt
+  caption: the account exists on disk
+- click: 831 599
+  caption: Get Started
+- wait-cmd: "pgrep -u fresh -x wol-shell"
+  timeout: 60
+  budget: 15
+  caption: the new account's shell starts (the black screen between)
+- wait-screen:
+  changed-from: prev
+  min: 5
+  timeout: 40
+  caption: desktop of the new account
+- sleep: 5
+- ssh: "id -nG fresh; test -d /home/fresh && echo home-ok; ls /home/fresh/.config | head; wol theme"
+  user: fresh
+  save: fresh-home.txt
+  expect: home-ok
+- assert-screen:
+  not-blank: true
+  caption: first desktop of the fresh account (dock, menu bar, wallpaper)

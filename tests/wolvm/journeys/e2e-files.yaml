@@ -1,0 +1,48 @@
+name: Files (open from the Dock, window geometry, new folder, rename-free create, verify on disk)
+from: desktop
+steps:
+- click: 251 755
+  caption: open Files from the Dock
+- wait-ui: "nautilus|files"
+  timeout: 20
+  budget: 1.5
+  caption: window mapped (open time)
+- wait-screen:
+  changed-from: 1
+  min: 3
+  timeout: 20
+  caption: first paint with the sidebar
+- ssh: "hyprctl clients -j | python3 -c \"import json,sys; [print(c['class'],c['at'],c['size']) for c in json.load(sys.stdin)]\""
+  user: tester
+  save: files-geometry.txt
+  caption: window geometry for the clip check
+- ssh: "mkdir -p ~/Documents ~/Pictures; echo hello > ~/Documents/e2e-note.txt; echo ok"
+  user: tester
+  expect: ok
+- key: ctrl-shift-n
+  caption: new folder
+- wait-screen:
+  changed-from: prev
+  min: 0.2
+  timeout: 5
+- type: "E2E Folder\n"
+- wait-cmd: "test -d '/home/tester/E2E Folder' || test -d '/home/tester/Documents/E2E Folder'"
+  timeout: 15
+  budget: 1.0
+  caption: the folder exists on disk
+- assert-screen:
+  caption: folder listed
+- key: ctrl-l
+- type: "~/Documents\n"
+- wait-screen:
+  changed-from: prev
+  min: 0.2
+  timeout: 5
+  caption: Documents lists the note
+- assert-screen:
+  not-blank: true
+- key: super-q
+- wait-ui: "nautilus|files"
+  absent: true
+  timeout: 10
+  budget: 1.5

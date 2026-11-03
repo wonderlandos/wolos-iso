@@ -1,0 +1,36 @@
+name: Theme picker (Ctrl+Super+T, pick a dark theme, it applies live, persists in the theme file, back to light)
+from: desktop
+steps:
+- ssh: "wol theme"
+  user: tester
+  expect: wol-light
+- key: ctrl-super-t
+- wait-ui: "themes"
+  layer: true
+  timeout: 5
+  budget: 1.0
+  caption: picker opens
+- wait-screen:
+  changed-from: 1
+  min: 2
+  timeout: 5
+  caption: theme cards drawn
+- click: 570 220
+  caption: Catppuccin Mocha
+- wait-cmd: "test \"$(wol theme)\" = catppuccin-mocha || wol theme | grep -qi mocha"
+  user: tester
+  timeout: 10
+  budget: 1.5
+  caption: the theme id changed
+- wait-screen:
+  region: "0,0,1280,28"
+  luma-max: 110
+  timeout: 10
+  caption: menu bar and shell turned dark
+- ssh: "cat ~/.config/wolos/theme; echo; gsettings get org.gnome.desktop.interface color-scheme; ls ~/.config/gtk-4.0 | head"
+  user: tester
+  save: theme-files.txt
+  caption: the choice is on disk (theme file) and the GTK colour scheme follows
+- ssh: "wol theme set wol-light; wol theme"
+  user: tester
+  expect: wol-light

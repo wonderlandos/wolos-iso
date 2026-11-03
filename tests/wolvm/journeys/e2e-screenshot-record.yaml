@@ -1,0 +1,62 @@
+name: Screenshot and screen recording (shortcut, capture bar, file on disk, recording started and stopped)
+from: desktop
+steps:
+- ssh: "rm -rf ~/Pictures/Screenshots ~/Desktop/Screenshot* ~/Movies; true"
+  user: tester
+  shot: false
+- key: super-shift-3
+  caption: full-screen screenshot shortcut
+- wait-cmd: "find ~ -name 'Screenshot*.png' -o -name 'screenshot*.png' | grep -q ."
+  user: tester
+  timeout: 10
+  budget: 1.5
+  caption: a PNG file exists
+- ssh: "f=$(find ~ -name 'Screenshot*.png' -o -name 'screenshot*.png' | head -1); echo $f; python3 -c \"import struct,sys; d=open('$f','rb').read(32); print('png', struct.unpack('>II', d[16:24])); import os; print('bytes', os.path.getsize('$f'))\""
+  user: tester
+  save: screenshot-file.txt
+  expect: "(1280, 800)"
+- assert-screen:
+  caption: the desktop after the shot (no stuck overlay)
+- key: super-shift-5
+  caption: capture bar
+- wait-ui: "capture"
+  layer: true
+  timeout: 5
+  budget: 1.5
+  user: tester
+- assert-screen:
+  changed-from: 1
+  min: 0.5
+  caption: capture bar visible
+- key: esc
+  caption: Esc should close the capture bar
+- wait-ui: "capture"
+  layer: true
+  absent: true
+  timeout: 4
+  user: tester
+  caption: the bar closes on Esc
+- ssh: "setsid -f wol shell show screen-record >/dev/null 2>&1 </dev/null; echo ok"
+  user: tester
+- wait-screen:
+  changed-from: prev
+  min: 0.3
+  timeout: 5
+  caption: recording bar
+- click: 861 633
+  caption: Record
+- sleep: 4
+- assert-screen:
+  caption: while recording (menu bar indicator?)
+- ssh: "pgrep -ax 'wf-recorder|wl-screenrec|gpu-screen-recorder|ffmpeg' || echo no-recorder-process; ls -la ~/Movies ~/Videos 2>&1 | head"
+  user: tester
+  rc: any
+  save: recorder.txt
+- key: super-shift-5
+  caption: second press or the menu bar stop button
+- sleep: 2
+- assert-screen:
+- ssh: "pkill -INT -u tester -f 'wf-recorder|wl-screenrec'; sleep 2; find ~ -name '*.mp4' -o -name '*.webm' -o -name '*.mkv' | head -3"
+  user: tester
+  rc: any
+  save: recording-file.txt

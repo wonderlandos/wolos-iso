@@ -1,0 +1,95 @@
+name: Plugin Maker (create a plugin from the template, check it, package it, install it, enable it, see it in the menu bar)
+from: desktop
+steps:
+- ssh: "setsid -f wol-plugin-maker >/dev/null 2>&1 </dev/null; echo started"
+  user: tester
+  expect: started
+  shot: false
+- wait-ui: "Plugin Maker|plugin-maker"
+  timeout: 20
+  budget: 1.5
+  caption: Maker window mapped (open time)
+- wait-screen:
+  changed-from: 1
+  min: 3
+  timeout: 20
+  caption: the Editor page is drawn
+- click: 968 333
+  caption: Plugin id field
+- type: "e2e.hello"
+- key: tab
+  shot: false
+- click: 1035 374
+  caption: switch the menu bar item off so a card-only plugin is made? (leave menu bar on: it is what we look for later)
+  shot: false
+- click: 1035 374
+  shot: false
+- key: tab
+  shot: false
+- key: tab
+  shot: false
+- key: tab
+  shot: false
+- key: tab
+  shot: false
+- key: tab
+  shot: false
+- key: tab
+  shot: false
+- key: tab
+  shot: false
+- key: tab
+  shot: false
+- key: tab
+  shot: false
+- key: tab
+  shot: false
+- key: tab
+  shot: false
+- wait-screen:
+  pixel: "1011,643"
+  color: "#7c5cfc"
+  tol: 70
+  timeout: 5
+  caption: Create Plugin button visible after scrolling with Tab
+- click: 1011 643
+  caption: Create Plugin
+- wait-cmd: "test -f ~/.local/share/wolos/plugins/e2e.hello/plugin.toml"
+  user: tester
+  timeout: 10
+  budget: 1.0
+  caption: plugin.toml is on disk
+- wait-screen:
+  changed-from: prev
+  min: 0.3
+  timeout: 10
+  caption: the editor shows plugin.toml and "No problems found"
+- click: 826 98
+  caption: Check
+- sleep: 1.5
+- assert-screen:
+  caption: Check result
+- click: 929 98
+  caption: Create Package
+- sleep: 2
+- assert-screen:
+  caption: package dialog or confirmation
+- ssh: "find ~ -name '*.wolplug' -newer ~/.local/share/wolos/plugins/e2e.hello/plugin.toml 2>/dev/null | head -3; wol plugin check e2e.hello | tail -3"
+  user: tester
+  rc: any
+  save: package.txt
+- ssh: "wol plugin enable e2e.hello; wol plugin list | grep -A3 '\"enabled\"' | head -5"
+  user: tester
+  save: enable.txt
+  expect: "true"
+  caption: turn the new plugin on
+- wait-screen:
+  region: "800,0,480,28"
+  changed-from: 1
+  min: 0.5
+  timeout: 15
+  budget: 3.0
+  caption: the plugin's menu bar item appears in the menu bar
+- ssh: "wol plugin remove e2e.hello; wol plugin list | grep -c e2e.hello; true"
+  user: tester
+  rc: any

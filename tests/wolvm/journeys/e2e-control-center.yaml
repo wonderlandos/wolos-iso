@@ -1,0 +1,109 @@
+name: Control Center tiles (open from the menu bar; Dark Mode, Focus, Stay Awake, Sound, Screenshot, Record, Wi-Fi)
+from: desktop
+steps:
+- click: 1141 14
+  caption: click the Control Center icon in the menu bar
+- wait-ui: "controlcenter"
+  layer: true
+  timeout: 10
+  budget: 1.0
+  caption: panel surface mapped (open time)
+- wait-screen:
+  changed-from: 1
+  min: 1
+  timeout: 10
+  caption: the panel is drawn
+- click: 1133 130
+  caption: Dark Mode tile (the icon circle)
+- wait-cmd: "test \"$(wol theme)\" = wol-dark"
+  user: tester
+  timeout: 10
+  budget: 1.0
+  caption: the theme switched to dark
+- wait-screen:
+  region: "0,0,1280,28"
+  luma-max: 110
+  timeout: 10
+  caption: the menu bar turned dark
+- click: 1133 130
+  caption: Dark Mode off again
+- wait-cmd: "test \"$(wol theme)\" = wol-light"
+  user: tester
+  timeout: 10
+  budget: 1.0
+- wait-screen:
+  region: "0,0,1280,28"
+  luma-min: 150
+  timeout: 10
+- click: 1189 130
+  soft: true
+  caption: the Dark Mode label highlights on hover; clicking it should toggle like the icon
+- wait-cmd: "test \"$(wol theme)\" = wol-dark"
+  user: tester
+  soft: true
+  timeout: 3
+- ssh: "wol theme light >/dev/null; wol theme"
+  user: tester
+  expect: wol-light
+- click: 1133 92
+  caption: Focus tile icon turns Do Not Disturb on
+- wait-cmd: "wol focus | grep -q true"
+  user: tester
+  timeout: 10
+  budget: 1.0
+- assert-screen:
+  caption: Focus tile on
+- click: 1133 92
+- wait-cmd: "wol focus | grep -q false"
+  user: tester
+  timeout: 10
+- click: 1175 92
+  caption: Focus label opens its detail page
+- assert-screen:
+  changed-from: prev
+  min: 1
+  caption: Do Not Disturb / For 1 hour / Until tomorrow morning
+- click: 975 77
+  caption: back arrow
+- click: 1211 275
+  caption: Stay Awake tile
+- wait-cmd: 'wol toggle list | python3 -c "import json,sys; print([t['on'] for t in json.load(sys.stdin)['toggles'] if t['id']=='stay-awake'][0])"'
+  expect: "True"
+  user: tester
+  timeout: 10
+  budget: 1.0
+- assert-screen:
+  caption: Stay Awake on
+- click: 1211 275
+- click: 1219 213
+  caption: Sound chevron opens the sound page
+- assert-screen:
+  changed-from: prev
+  min: 1
+  caption: sound outputs
+- click: 975 77
+- click: 1067 281
+  caption: Screenshot tile opens the capture bar
+- wait-ui: "screenshot|capture"
+  layer: true
+  timeout: 5
+  budget: 1.5
+  user: tester
+  soft: true
+  caption: capture surface appears
+- assert-screen:
+  caption: capture bar
+- key: esc
+- click: 1141 14
+- click: 1139 281
+  caption: Record tile opens the recording bar
+- sleep: 1.5
+- assert-screen:
+  caption: recording bar with Record button
+- key: esc
+- click: 1141 14
+- click: 989 91
+  caption: Wi-Fi tile
+- sleep: 1
+- assert-screen:
+  caption: network detail

@@ -1,0 +1,58 @@
+name: Clipboard panel (copy in an app, open the panel with the shortcut, entry listed, paste it back, Clear)
+from: desktop
+steps:
+- key: super-comma
+  caption: open Settings (a window with a text field)
+- wait-ui: "^org.wolos.settings$"
+  timeout: 15
+  budget: 1.5
+- wait-screen:
+  changed-from: 1
+  min: 5
+  timeout: 10
+- click: 304 139
+- type: "hello clip e2e"
+- key: ctrl-a
+- key: ctrl-c
+  caption: copy with the Ctrl chord
+- wait-cmd: "test \"$(wl-paste)\" = 'hello clip e2e'"
+  user: tester
+  timeout: 5
+  budget: 1.0
+  caption: the Wayland clipboard holds the text
+- key: super-shift-v
+- wait-ui: "clipboard"
+  layer: true
+  timeout: 5
+  budget: 1.0
+  caption: panel opens
+- assert-screen:
+  changed-from: 1
+  min: 0.2
+  caption: the panel lists the entry
+- key: esc
+- click: 393 139
+  caption: clear the search box
+- type: "second"
+- key: super-a
+  soft: true
+  caption: the Mac-style Cmd+A (wol-app select-all) should select the field text
+- key: super-c
+  soft: true
+- wait-cmd: "test \"$(wl-paste)\" = 'second'"
+  user: tester
+  soft: true
+  timeout: 3
+  caption: Cmd+C copied "second" (it did not: wol-app copy sends nothing to a GTK entry)
+- key: ctrl-a
+- key: ctrl-c
+- wait-cmd: "test \"$(wl-paste)\" = 'second'"
+  user: tester
+  timeout: 5
+- key: super-shift-v
+- assert-screen:
+  caption: history should list "second" and "hello clip e2e" (two entries)
+- click: 717 331
+  caption: Clear
+- assert-screen:
+  caption: list empty again ("Copied text shows up here")

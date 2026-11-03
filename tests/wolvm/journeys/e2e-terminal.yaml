@@ -1,0 +1,56 @@
+name: Terminal and the shells (open from the dock, bash and zsh in the window, files written by each)
+from: desktop
+steps:
+- click: 763 755
+  caption: click Terminal in the dock
+- wait-ui: "^foot$"
+  timeout: 15
+  budget: 1.5
+  caption: window mapped (open time)
+- wait-screen:
+  changed-from: 1
+  min: 2
+  timeout: 10
+  caption: the window and prompt are drawn
+- type: "echo bash-$BASH_VERSION > /tmp/e2e-bash.txt; clear\n"
+  budget: 1.0
+- wait-cmd: "grep -q '^bash-5' /tmp/e2e-bash.txt"
+  timeout: 5
+  budget: 1.0
+  caption: command typed in the window reached bash within a second
+- type: "zsh\n"
+- wait-cmd: "pgrep -u tester -x zsh"
+  timeout: 10
+  budget: 1.5
+  caption: zsh starts from bash
+- type: "echo zsh-$ZSH_VERSION > /tmp/e2e-zsh.txt\n"
+- wait-cmd: "grep -q '^zsh-5' /tmp/e2e-zsh.txt"
+  timeout: 5
+- assert-screen:
+  caption: zsh prompt visible in the window
+- type: "exit\n"
+- type: "ls /usr/share/wolos/bash /usr/share/wolos/zsh | head -3 > /tmp/e2e-shelldirs.txt; echo $0 >> /tmp/e2e-shelldirs.txt\n"
+- wait-cmd: "test -s /tmp/e2e-shelldirs.txt"
+  timeout: 20
+- ssh: "wol pkg -- -S --noconfirm fish > /tmp/e2e-fish-install.txt 2>&1; which fish"
+  timeout: 240
+  expect: /usr/bin/fish
+  save: fish-install.txt
+  caption: install fish (a shell the image does not carry) with the sealed-system package command, as root
+- type: "fish -c 'echo fish-$version > /tmp/e2e-fish.txt'; clear\n"
+- wait-cmd: "grep -q '^fish-' /tmp/e2e-fish.txt"
+  timeout: 10
+- type: "fish\n"
+- wait-cmd: "pgrep -u tester -x fish"
+  timeout: 10
+- assert-screen:
+  caption: fish interactive prompt in the window
+- type: "exit\n"
+- key: super-q
+  caption: quit the terminal with the keyboard
+- wait-ui: "^foot$"
+  absent: true
+  timeout: 10
+  budget: 1.5
+- assert-screen:
+  caption: the window is gone and the desktop is back

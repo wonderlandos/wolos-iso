@@ -1,0 +1,81 @@
+name: App Store (open, Discover, search, Kits, Plugins, Get on an app, Updates, Community, then remove through the system)
+from: desktop
+steps:
+- click: 827 755
+  caption: open the Store from the Dock
+- wait-ui: "^org.wolos.store$"
+  timeout: 20
+  budget: 1.5
+  caption: window mapped (open time)
+- wait-screen:
+  changed-from: 1
+  min: 5
+  timeout: 20
+  caption: Discover is drawn
+- click: 304 139
+- type: "keepass"
+- wait-screen:
+  changed-from: prev
+  min: 0.5
+  timeout: 10
+  budget: 1.5
+  caption: search results for keepass
+- key: ctrl-a
+- key: backspace
+- click: 242 315
+  caption: Kits
+- wait-screen:
+  changed-from: prev
+  min: 1
+  timeout: 6
+  budget: 1.0
+- click: 252 343
+  caption: Plugins
+- wait-screen:
+  changed-from: prev
+  min: 1
+  timeout: 6
+  budget: 1.0
+- assert-screen:
+  luma-min: 150
+  caption: the plugin list page
+- ssh: "wol plugin list >/dev/null; curl -sI -m 8 https://wolos.org | head -1; echo done"
+  user: tester
+  rc: any
+  save: plugin-list-net.txt
+  caption: is the network OK while the Plugins page says the list could not be loaded
+- click: 256 371
+  caption: Updates
+- wait-screen:
+  changed-from: prev
+  min: 1
+  timeout: 10
+  budget: 1.0
+- click: 264 399
+  caption: Community
+- wait-screen:
+  changed-from: prev
+  min: 1
+  timeout: 10
+  budget: 1.0
+- click: 256 175
+  caption: Discover again
+- wait-screen:
+  changed-from: prev
+  min: 1
+  timeout: 10
+- click: 706 611
+  caption: Get on KeePassXC
+- sleep: 3
+- assert-screen:
+  changed-from: prev
+  min: 0.1
+  soft: true
+  caption: Get must give feedback (progress, spinner, prompt)
+- wait-cmd: "pgrep -ax 'flatpak|pkexec' | grep -v flatpak-system-helper | grep -q ."
+  timeout: 5
+  soft: true
+  caption: an install process started
+- ssh: "journalctl -b --no-pager | grep -ci 'keepass'; true"
+  rc: any
+  save: store-journal.txt

@@ -1,0 +1,41 @@
+name: Modules (Settings > Modules page, install the 20 MB Sessions module, check it, remove it)
+from: desktop
+steps:
+- ssh: "setsid -f wol-settings Modules >/dev/null 2>&1 </dev/null; echo ok"
+  user: tester
+  shot: false
+- wait-ui: "^org.wolos.settings$"
+  timeout: 15
+  budget: 1.5
+- wait-screen:
+  changed-from: 1
+  min: 5
+  timeout: 10
+  caption: the Modules page lists AI, Console, Creative, Developer, Gaming
+- ssh: "wol modules status ai-sessions"
+  user: tester
+  save: before.txt
+  rc: any
+- ssh: "wol modules install ai-sessions 2>&1 | tail -5; wol modules status ai-sessions | head -12"
+  timeout: 300
+  save: install.txt
+  rc: any
+  caption: install as root (administrator action)
+- ssh: "pacman -Q wolos-module-ai-sessions 2>&1; wol modules list | grep -A4 '\"id\": \"ai-sessions\"' | head -6"
+  rc: any
+  save: installed.txt
+  expect: wolos-module-ai-sessions
+- wait-screen:
+  changed-from: prev
+  min: 0.1
+  timeout: 8
+  soft: true
+  caption: the open Modules page notices the install without reopening
+- ssh: "wol modules remove ai-sessions 2>&1 | tail -5; pacman -Q wolos-module-ai-sessions 2>&1 | head -2"
+  timeout: 300
+  save: remove.txt
+  rc: any
+  caption: remove it again
+- ssh: "pacman -Q wolos-module-ai-sessions 2>&1 | head -1"
+  rc: any
+  expect: "was not found"

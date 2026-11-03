@@ -1,0 +1,94 @@
+name: Memory Saver with a web app (setting on, web app window, backgrounded, memory given back, back in front)
+from: desktop
+steps:
+- ssh: "setsid -f wol-settings Battery >/dev/null 2>&1 </dev/null; echo ok"
+  user: tester
+  shot: false
+- wait-ui: "^org.wolos.settings$"
+  timeout: 15
+  budget: 1.5
+- wait-screen:
+  changed-from: 1
+  min: 5
+  timeout: 10
+  caption: Energy page with Memory Saver
+- ssh: "cat /var/run/wol-memsaver.json | head -c 400; echo; cat ~/.config/wolos/memsaver* 2>/dev/null | head -5"
+  user: tester
+  rc: any
+  save: memsaver-before.txt
+  caption: wold's own status file before (enabled flag)
+- assert-screen:
+  pixel: "1023,229"
+  color: "#7c5cfc"
+  tol: 70
+  caption: the Memory Saver switch is on in Settings
+- wait-cmd: "grep -q '\"enabled\":true' /var/run/wol-memsaver.json"
+  timeout: 15
+  soft: true
+  caption: wold agrees (status says enabled)
+- ssh: "wol webapp add E2EDemo https://example.org >/dev/null; grep '^Exec' ~/.local/share/applications/wolos-webapp-e2edemo.desktop; timeout 15 wol open E2EDemo 2>&1; true"
+  user: tester
+  save: webapp-open.txt
+  rc: any
+  shot: false
+- wait-ui: "example|E2EDemo|helium"
+  timeout: 10
+  caption: the web app window opens from its launcher (wol open)
+- ssh: "pgrep -u tester -x helium >/dev/null || (setsid -f helium --app=https://example.org --class=e2e-fallback >/dev/null 2>&1 </dev/null; echo fallback-launch)"
+  user: tester
+  rc: any
+  caption: if the launcher did not work, start the browser by hand so the Memory Saver part can run
+  shot: false
+- wait-ui: "example|E2EDemo|helium|e2e-fallback"
+  timeout: 60
+  budget: 4.0
+  caption: browser window (first launch of a browser on this account)
+- sleep: 4
+- ssh: "hyprctl clients -j | grep -o '\"class\": \"[^\"]*\"' | sort | tr '\\n' ' '"
+  user: tester
+  save: windows.txt
+  rc: any
+- assert-screen:
+  caption: first launch. A "Choose password for new keyring" prompt on top of the page is a defect on a normal account
+- click: 898 377
+  caption: Cancel the keyring prompt if it is there (harmless click on the page otherwise)
+  shot: false
+- wait-screen:
+  not-blank: true
+  changed-from: prev
+  min: 1
+  timeout: 40
+  caption: the page is drawn
+- ssh: "ps -u tester -o pid,rss,args | grep -i 'helium' | grep -v grep | awk '{s+=$2} END {print \"helium_rss_kb\", s}'"
+  user: tester
+  save: rss-active.txt
+  rc: any
+  caption: resident memory of the web app while it is in front
+- click: 763 755
+  caption: put a Terminal in front so the web app is in the background
+- wait-ui: "^foot$"
+  timeout: 15
+  budget: 1.5
+- sleep: 45
+  caption: wait for Memory Saver to act on the background app
+- ssh: "cat /var/run/wol-memsaver.json | head -c 900; echo; ps -u tester -o pid,rss,args | grep -i 'helium' | grep -v grep | awk '{s+=$2} END {print \"helium_rss_kb\", s}'"
+  user: tester
+  save: rss-background.txt
+  rc: any
+  caption: status after the wait: does it list the web app, how much was given back
+- wait-cmd: "python3 -c \"import json; d=json.load(open('/var/run/wol-memsaver.json')); import sys; sys.exit(0 if d['enabled'] and any(a.get('state') in ('saving','napping') for a in d['apps']) else 1)\""
+  user: tester
+  soft: true
+  timeout: 5
+  caption: wold reports the background web app as saving memory (status file)
+- assert-screen:
+  caption: terminal in front
+- ssh: "wol windows focus helium >/dev/null 2>&1; echo focused"
+  user: tester
+  rc: any
+- sleep: 2
+- assert-screen:
+  caption: web app back in front, content still there
+- ssh: "pkill -u tester -f 'helium' ; true"
+  user: tester
+  rc: any

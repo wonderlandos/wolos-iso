@@ -435,5 +435,108 @@ class StopAfterPoweroff(unittest.TestCase):
         self.assertTrue(out.rstrip().endswith("t: stopped"), out)
 
 
+class E2eVerbs(unittest.TestCase):
+    """The verbs the end-to-end journeys use: assert-screen, wait-screen, wait-ui, wait-cmd, push, clone, soft/budget/max."""
+
+    def test_new_verbs_parse(self):
+        for v in ("assert-screen", "wait-screen"):
+            self.assertEqual(W.parse_step({v: None, "changed-from": "prev", "min": 2})["args"], [])
+        st = W.parse_step({"wait-ui": "^foot$", "layer": True, "timeout": 5})
+        self.assertEqual((st["verb"], st["args"], st["opts"]["layer"]), ("wait-ui", ["^foot$"], True))
+        self.assertEqual(W.parse_step({"wait-cmd": "pgrep -x wol-lock"})["args"], ["pgrep -x wol-lock"])
+        self.assertEqual(W.parse_step({"push": ["a.sh", "/tmp/a.sh"]})["args"], ["a.sh", "/tmp/a.sh"])
+
+    def test_e2e_journeys_all_parse(self):
+        d = os.path.join(HERE, "journeys")
+        names = [f for f in sorted(os.listdir(d)) if f.startswith("e2e-")]
+        self.assertGreaterEqual(len(names), 15)
+        for f in names:
+            meta, steps = W.load_journey(os.path.join(d, f))
+            self.assertTrue(meta.get("name"), f)
+            self.assertIn(meta.get("from"), ("desktop", "cold"), f)
+            self.assertTrue(steps, f)
+            if meta["from"] == "cold":
+                self.assertEqual(steps[0]["verb"], "start", f)
+
+    def test_session_env_names_the_desktop(self):
+        e = W.session_env()
+        for need in ("XDG_RUNTIME_DIR", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "HYPRLAND_INSTANCE_SIGNATURE"):
+            self.assertIn(need, e)
+
+    def test_wait_ui_script_is_valid_python(self):
+        compile(W.WAIT_UI_PY, "wait-ui", "exec")
+        self.assertIn("monotonic", W.WAIT_UI_PY)  # a restored snapshot makes the guest wall clock jump
+
+    def test_clone_dry_and_real(self):
+        with tempfile.TemporaryDirectory() as home:
+            src = os.path.join(home, "vms", "base")
+            os.makedirs(src)
+            for f in ("disk.qcow2", "vars.qcow2", "vmlinuz-linux-wolos"):
+                put(os.path.join(src, f), b"x" * 10)
+            cfg = dict(CFG, name="base", direct={"kernel": src + "/vmlinuz-linux-wolos"})
+            put(os.path.join(src, "vm.json"), json.dumps(cfg))
+            put(os.path.join(src, "serial.log"), "not copied")
+            rc = W.main(["--home", home, "clone", "base", "copy1"])
+            self.assertEqual(rc, 0)
+            dst = os.path.join(home, "vms", "copy1")
+            self.assertTrue(os.path.exists(os.path.join(dst, "disk.qcow2")))
+            self.assertFalse(os.path.exists(os.path.join(dst, "serial.log")))
+            c = json.loads(get(os.path.join(dst, "vm.json")))
+            self.assertEqual(c["name"], "copy1")
+            self.assertEqual(c["direct"]["kernel"], dst + "/vmlinuz-linux-wolos")
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                W.main(["--home", home, "clone", "base", "copy1"])  # exists: needs --force
+            self.assertEqual(W.main(["--home", home, "clone", "base", "copy1", "--force"]), 0)
+
+    def test_clone_refuses_a_running_source(self):
+        with tempfile.TemporaryDirectory() as home:
+            src = os.path.join(home, "vms", "base")
+            os.makedirs(src)
+            put(os.path.join(src, "vm.json"), json.dumps(dict(CFG, name="base")))
+            put(os.path.join(src, "qemu.pid"), str(os.getpid()))  # this process is alive
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                W.main(["--home", home, "clone", "base", "x"])
+
+    @unittest.skipUnless(__import__("importlib.util").util.find_spec("PIL"), "Pillow not installed")
+    def test_screen_assertions(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as d:
+            a, b, c = (os.path.join(d, n) for n in ("a.png", "b.png", "c.png"))
+            Image.new("RGB", (100, 80), (255, 255, 255)).save(a)
+            img = Image.new("RGB", (100, 80), (255, 255, 255))
+            for x in range(50):
+                for y in range(80):
+                    img.putpixel((x, y), (0, 0, 0))
+            img.save(b)
+            Image.new("RGB", (100, 80), (255, 255, 255)).save(c)
+            self.assertAlmostEqual(W.diff_percent(a, b), 50.0, places=1)
+            self.assertEqual(W.diff_percent(a, c), 0.0)
+            self.assertAlmostEqual(W.diff_percent(a, b, "0,0,50,80"), 100.0, places=1)
+            self.assertEqual(W.diff_percent(a, b, "50,0,50,80"), 0.0)
+
+    def test_journey_runner_soft_budget_and_result(self):
+        """A soft step that fails does not fail the journey; budget marks slow; max fails; result.json is written."""
+        with tempfile.TemporaryDirectory() as home:
+            vd = os.path.join(home, "vms", "t")
+            os.makedirs(vd)
+            put(os.path.join(vd, "vm.json"), json.dumps(CFG))
+            jf = os.path.join(home, "j.json")
+            put(jf, json.dumps({"name": "demo", "steps": [
+                {"note": "one"},
+                {"sleep": 0.05, "budget": 0.01},
+                {"ssh": "true", "soft": True, "rc": 0},
+                {"sleep": 0.05, "max": 0.01},
+            ]}))
+            out = os.path.join(home, "out")
+            with unittest.mock.patch.object(W, "guest", return_value=(1, "", "boom")):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    rc = W.main(["--home", home, "journey", "t", jf, "--out", out, "--keep-going"])
+            self.assertEqual(rc, 1)
+            res = json.loads(get(os.path.join(out, "result.json")))
+            self.assertEqual((res["steps"], res["failed"], res["slow"]), (4, 1, 1))
+            self.assertEqual([x["n"] for x in res["soft"]], [3])
+            self.assertEqual(res["first_failure"]["n"], 4)
+
+
 if __name__ == "__main__":
     unittest.main()

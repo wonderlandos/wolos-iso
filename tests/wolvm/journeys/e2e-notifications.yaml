@@ -1,0 +1,55 @@
+name: Notification banners and Notification Center (notify-send and wol notify, banner, centre, Focus mutes banners)
+from: desktop
+steps:
+- ssh: "wol notify 'Build finished' 'All 12 checks passed'"
+  user: tester
+  caption: a notification sent through the wol command
+- wait-ui: "banners"
+  layer: true
+  timeout: 5
+  budget: 1.0
+  caption: banner surface appears (action latency)
+- wait-screen:
+  changed-from: 1
+  min: 0.2
+  timeout: 5
+  caption: the banner is drawn at the top right
+- ssh: "notify-send -a E2E 'Second one' 'sent with notify-send, a plain freedesktop client'"
+  user: tester
+- sleep: 1.5
+- assert-screen:
+  caption: two notifications (stacked or replaced)
+- ssh: "setsid -f wol shell show notifications >/dev/null 2>&1 </dev/null; echo ok"
+  user: tester
+- wait-ui: "notifications"
+  layer: true
+  timeout: 5
+  budget: 1.0
+  caption: Notification Center opens
+- wait-screen:
+  changed-from: prev
+  min: 0.5
+  timeout: 5
+- ssh: "setsid -f wol shell hide notifications >/dev/null 2>&1 </dev/null; echo ok"
+  user: tester
+- wait-ui: "notifications"
+  layer: true
+  absent: true
+  timeout: 5
+  budget: 1.0
+  caption: Notification Center closes
+- ssh: "wol focus on && wol focus"
+  user: tester
+  expect: "true"
+  caption: Focus on
+- ssh: "wol notify 'Muted?' 'this one should not pop a banner while Focus is on'"
+  user: tester
+- sleep: 2
+- ssh: "hyprctl layers -j | grep -c banners; true"
+  user: tester
+  save: banner-layers-under-focus.txt
+  caption: no banner layer while Focus is on
+- assert-screen:
+  caption: desktop quiet under Focus
+- ssh: "wol focus off"
+  user: tester

@@ -1,0 +1,34 @@
+name: Update check (Settings > Software Update > Check Now, the command, the status files)
+from: desktop
+steps:
+- ssh: "setsid -f wol-settings 'Software Update' >/dev/null 2>&1 </dev/null; echo ok"
+  user: tester
+  shot: false
+- wait-ui: "^org.wolos.settings$"
+  timeout: 15
+  budget: 1.5
+- wait-screen:
+  changed-from: 1
+  min: 5
+  timeout: 10
+  caption: Software Update page
+- click: 1017 283
+  caption: Check Now
+- sleep: 2
+- assert-screen:
+  changed-from: prev
+  min: 0.05
+  caption: the button gives feedback (spinner, text or disabled state)
+- ssh: "wol update check"
+  user: tester
+  timeout: 120
+  caption: the same check from the command line must succeed on a machine that is online (the page said "Couldn't check")
+- assert-screen:
+  luma-min: 150
+  caption: page text after the check; must not say "Couldn't check for updates" on a machine with a network
+- ssh: "wol update status; echo ---; wol update check 2>&1 | head -12; echo ---; ls -la /var/lib/wolos/updates /var/lib/wolos/updates/* 2>&1 | head; systemctl status wolos-update-check.timer --no-pager 2>&1 | head -4"
+  user: tester
+  save: update-status.txt
+  rc: any
+- assert-screen:
+  caption: page after the check

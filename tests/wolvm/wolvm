@@ -168,6 +168,7 @@ VERBS = {  # verb -> how its argument string splits: "one" (whole), "words", "no
     "click": "words", "wait-text": "one", "wait-agent": "none", "wait-stable": "none", "sleep": "one",
     "ssh": "one", "exec": "one", "logs": "none", "checkpoint": "one", "snapshot-save": "one",
     "snapshot-restore": "one", "eject": "none", "boot": "one", "note": "one", "serial-send": "one",
+    "assert-screen": "none", "push": "words", "wait-ui": "one", "wait-cmd": "one", "wait-screen": "none",
 }
 
 
@@ -664,6 +665,42 @@ def cmd_start(a):
     return 0
 
 
+def cmd_clone(a):
+    """A copy of a stopped VM under a new name: disk and firmware vars (reflink on btrfs/xfs, so it is
+    instant and the original is never touched; the internal snapshots of the qcow2 come along, so a
+    `snapshot save` made before the copy can be restored in it). Sockets, logs, shots are not copied."""
+    src, dst = VM(a.from_home or a.home, a.src), VM(a.home, a.name)
+    cfg = src.cfg
+    if src.pid():
+        die(f"{src.name} is running: stop it first (a copy of a live disk is not consistent)")
+    if os.path.exists(dst.dir):
+        if not a.force:
+            die(f"{dst.name} exists (--force replaces it)")
+        if dst.pid():
+            die(f"{dst.name} is running")
+        if not DRY:
+            shutil.rmtree(dst.dir)
+    keep = ("disk.qcow2", "vars.qcow2", "vmlinuz-linux-wolos", "initramfs-linux-wolos.img", "id_ed25519",
+            "id_ed25519.pub", "tpm")
+    if DRY:
+        print(f"clone {src.dir} -> {dst.dir}")
+        return 0
+    os.makedirs(dst.dir)
+    for f in keep:
+        sp = src.p(f)
+        if os.path.isdir(sp):
+            shutil.copytree(sp, dst.p(f))
+        elif os.path.exists(sp):
+            r = subprocess.run(["cp", "--reflink=auto", sp, dst.p(f)], capture_output=True, text=True)
+            if r.returncode:
+                die(f"cp {f}: {r.stderr.strip()}")
+    cfg = json.loads(json.dumps(cfg).replace(src.dir, dst.dir))
+    cfg["name"] = dst.name
+    dst.save_cfg(cfg)
+    print(f"{dst.name}: cloned from {src.name} ({dst.dir})")
+    return 0
+
+
 def cmd_stop(a):
     vm = VM(a.home, a.name)
     pid = vm.pid()
@@ -904,6 +941,22 @@ def cmd_wait_agent(a):
     return 0 if ok else 1
 
 
+def session_env():
+    """What a command needs to run like a program started from the desktop of the user it runs as
+    (hyprctl, wl-paste, wol shell, gsettings, a browser that picks Wayland from XDG_SESSION_TYPE): the
+    runtime dir and bus, then the session variables copied from the running wol-shell, and the newest
+    compositor instance that still answers when wol-shell is not up yet."""
+    return ('U=$(id -u); export XDG_RUNTIME_DIR=/run/user/$U WAYLAND_DISPLAY=wayland-1 '
+            'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$U/bus XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=Hyprland; '
+            'p=$(pgrep -u $U -x wol-shell | head -1); if [ -n "$p" ]; then '
+            'for v in WAYLAND_DISPLAY DISPLAY HYPRLAND_INSTANCE_SIGNATURE XDG_SESSION_TYPE XDG_CURRENT_DESKTOP; do '
+            'x=$(tr "\\0" "\\n" < /proc/$p/environ 2>/dev/null | sed -n "s/^$v=//p" | head -1); '
+            '[ -n "$x" ] && export "$v=$x"; done; fi; '
+            '[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] || for i in $(ls -t $XDG_RUNTIME_DIR/hypr 2>/dev/null); do '
+            'if HYPRLAND_INSTANCE_SIGNATURE=$i hyprctl version >/dev/null 2>&1; then '
+            'export HYPRLAND_INSTANCE_SIGNATURE=$i; break; fi; done; ')
+
+
 def guest(vm, command, timeout=300, user="root", via="auto"):
     """Run a shell command in the guest: ssh when the VM has --ssh and sshd answers, else the agent.
     via: auto | ssh (fail rather than fall back) | agent."""
@@ -918,7 +971,7 @@ def guest(vm, command, timeout=300, user="root", via="auto"):
         if r.returncode != 255 or via == "ssh":
             return r.returncode, r.stdout, r.stderr
     if user != "root":
-        command = f"runuser -u {shlex.quote(user)} -- sh -c {shlex.quote(command)}"
+        command = f"runuser -u {shlex.quote(user)} -- sh -c {shlex.quote(session_env() + command)}"
     return vm.agent().run(command, timeout)
 
 
@@ -1083,6 +1136,130 @@ def cmd_rm(a):
     return 0
 
 
+
+# ---------------------------------------------------------------- screen assertions, push, wait-ui
+def _pil():
+    try:
+        from PIL import Image, ImageChops, ImageStat  # optional: only the screen assertions need it
+    except ImportError:
+        raise RuntimeError("assert-screen needs python3-pillow on the host (the forge has it)")
+    return Image, ImageChops, ImageStat
+
+
+def _region(img, spec):
+    if not spec:
+        return img
+    x, y, w, h = [int(v) for v in str(spec).replace(" ", "").split(",")]
+    return img.crop((x, y, min(x + w, img.width), min(y + h, img.height)))
+
+
+def _hex(c):
+    c = str(c).lstrip("#")
+    return tuple(int(c[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def diff_percent(a, b, region=None, thresh=16):
+    """Share of pixels (in percent) whose colour differs by more than thresh between two PNGs."""
+    Image, ImageChops, _ = _pil()
+    ia, ib = _region(Image.open(a).convert("RGB"), region), _region(Image.open(b).convert("RGB"), region)
+    if ia.size != ib.size:
+        return 100.0
+    d = ImageChops.difference(ia, ib).convert("L").point(lambda v: 255 if v > thresh else 0)
+    return 100.0 * d.histogram()[255] / (ia.width * ia.height)
+
+
+def assert_screen(vm, out_dir, idx, o, nudge_pointer=True):
+    """Take a screenshot and check it: not blank, region mean luminance, a pixel colour, how much of
+    it changed against another shot. Returns (ok, detail, png)."""
+    Image, _, ImageStat = _pil()
+    png = os.path.join(out_dir, f"{idx:02d}-assert-screen.png")
+    screenshot(vm, png, nudge_pointer)
+    img = Image.open(png).convert("RGB")
+    reg = _region(img, o.get("region"))
+    problems, facts = [], []
+    if o.get("not-blank", True):
+        sd = sum(ImageStat.Stat(reg).stddev) / 3
+        ncol = len(reg.convert("P", palette=Image.ADAPTIVE, colors=64).getcolors() or [])
+        facts.append(f"stddev={sd:.1f} palette={ncol}")
+        if sd < 3:
+            problems.append(f"screen looks blank (stddev {sd:.1f})")
+    luma = sum(ImageStat.Stat(reg.convert("L")).mean)
+    facts.append(f"luma={luma:.0f}")
+    if "luma-min" in o and luma < float(o["luma-min"]):
+        problems.append(f"too dark: luma {luma:.0f} < {o['luma-min']}")
+    if "luma-max" in o and luma > float(o["luma-max"]):
+        problems.append(f"too bright: luma {luma:.0f} > {o['luma-max']}")
+    if "pixel" in o:
+        x, y = [int(v) for v in str(o["pixel"]).split(",")]
+        got = img.getpixel((x, y))
+        tol = int(o.get("tol", 24))
+        facts.append(f"pixel({x},{y})=#{got[0]:02x}{got[1]:02x}{got[2]:02x}")
+        if "color" in o and max(abs(g - w) for g, w in zip(got, _hex(o["color"]))) > tol:
+            problems.append(f"pixel ({x},{y}) is not {o['color']} (+-{tol})")
+    for key, want_change in (("changed-from", True), ("unchanged-from", False)):
+        if key not in o:
+            continue
+        ref = str(o[key])
+        if ref == "prev":
+            ref = vm.shots.get(max(vm.shots)) if vm.shots else None
+        elif ref.isdigit():  # that step's picture, or the latest one before it, or the first of the run
+            n = int(ref)
+            keys = [k for k in sorted(vm.shots) if k <= n] or sorted(vm.shots)[:1]
+            ref = vm.shots.get(keys[-1]) if keys else None
+        else:
+            ref = os.path.join(out_dir, ref)
+        if not ref or not os.path.exists(ref):
+            problems.append(f"{key}: no such earlier shot {o[key]!r}")
+            continue
+        pc = diff_percent(png, ref, o.get("region"))
+        facts.append(f"{key} {os.path.basename(ref)}: {pc:.1f}% of pixels differ")
+        if want_change and pc < float(o.get("min", 1.0)):
+            problems.append(f"screen did not change ({pc:.2f}% < {o.get('min', 1.0)}%)")
+        if not want_change and pc > float(o.get("max-diff", 1.0)):
+            problems.append(f"screen changed ({pc:.2f}% > {o.get('max-diff', 1.0)}%)")
+    return not problems, "; ".join(facts + problems), png
+
+
+def push_file(vm, local, remote):
+    """Copy a small file into the guest through the agent (base64 in chunks), mode of the local file."""
+    data = open(local, "rb").read()
+    rc, out, err = vm.agent().run(f": > {shlex.quote(remote)}", 30)
+    for i in range(0, len(data), 24000):
+        b = base64.b64encode(data[i:i + 24000]).decode()
+        rc, out, err = vm.agent().run(f"echo {b} | base64 -d >> {shlex.quote(remote)}", 60)
+        if rc:
+            raise RuntimeError(f"push {local}: {err.strip()}")
+    vm.agent().run(f"chmod {'755' if os.access(local, os.X_OK) else '644'} {shlex.quote(remote)}", 10)
+    return len(data)
+
+
+# Runs in the guest as the desktop user: poll `hyprctl clients -j` every 50 ms until a window whose
+# class or title matches the regex is mapped (or, with absent, gone), print the wait in milliseconds.
+WAIT_UI_PY = r"""
+import json, re, subprocess, sys, time
+pat, timeout, absent, mode = re.compile(sys.argv[1], re.I), float(sys.argv[2]), sys.argv[3] == "1", sys.argv[4]
+t0 = time.monotonic()  # not time.time(): a restored snapshot makes the wall clock jump
+last = []
+while time.monotonic() - t0 < timeout:
+    r = subprocess.run(["hyprctl", mode, "-j"], capture_output=True, text=True)
+    try:
+        cl = json.loads(r.stdout or "[]")
+    except ValueError:
+        cl = []
+    if mode == "layers":  # {monitor: {levels: {"0": [{namespace, w, h, ...}]}}} -> windows-like rows
+        cl = [{"class": l.get("namespace", ""), "title": "", "size": [l.get("w"), l.get("h")]}
+              for m in (cl.values() if isinstance(cl, dict) else []) for lv in m.get("levels", {}).values() for l in lv]
+    hit = [c for c in cl if c.get("mapped", True) and (pat.search(c.get("class", "")) or pat.search(c.get("title", "")))]
+    last = [(c.get("class"), c.get("title")) for c in cl]
+    if bool(hit) != absent:
+        c = hit[0] if hit else {}
+        print("ok %d ms class=%s title=%s size=%s" % ((time.monotonic() - t0) * 1000, c.get("class"), c.get("title"), c.get("size")))
+        sys.exit(0)
+    time.sleep(0.05)
+print("timeout after %.1f s; windows: %s" % (time.monotonic() - t0, last))
+sys.exit(1)
+"""
+
 # ---------------------------------------------------------------- journey and report
 def run_step(vm, st, out_dir, idx):
     """Runs one parsed step. Returns (ok, detail)."""
@@ -1123,6 +1300,35 @@ def run_step(vm, st, out_dir, idx):
         want = o.get("rc", 0)
         ok = (want == "any" or rc == int(want)) and (str(o["expect"]) in text if "expect" in o else True)
         return ok, f"rc={rc}\n{text[-2000:]}"
+    if v == "assert-screen":
+        ok, detail, png = assert_screen(vm, out_dir, idx, o)
+        vm.shot_made = png
+        return ok, detail
+    if v == "wait-screen":  # assert-screen until it holds: the time to first paint, in the step's secs
+        t0, tries, ok, detail, png = time.time(), 0, False, "", None
+        while True:
+            ok, detail, png = assert_screen(vm, out_dir, idx, o, nudge_pointer=tries % 3 == 2)
+            tries += 1
+            if ok or time.time() - t0 > t:
+                break
+            time.sleep(0.25)
+        vm.shot_made = png
+        return ok, f"{detail}; after {time.time() - t0:.1f} s ({tries} looks)"
+    if v == "push":
+        local = args[0] if os.path.isabs(args[0]) else os.path.join(vm.journey_dir, args[0])
+        n = push_file(vm, local, args[1])
+        return True, f"pushed {os.path.basename(local)} ({n} bytes) to {args[1]}"
+    if v == "wait-ui":
+        rc, out, err = guest(vm, "python3 -c " + shlex.quote(WAIT_UI_PY) + " " + shlex.quote(args[0]) + f" {t} "
+                             + ("1" if o.get("absent") else "0") + (" layers" if o.get("layer") else " clients"), t + 30, o.get("user", "tester"), "agent")
+        return rc == 0, (out + err).strip()
+    if v == "wait-cmd":  # poll a guest command every 100 ms until it exits 0 (and prints `expect`)
+        grep = f" && grep -q -- {shlex.quote(str(o['expect']))} /tmp/.wait-cmd.$(id -u)" if "expect" in o else ""
+        script = (f"up() {{ read -r u _ < /proc/uptime; echo ${{u/./}}; }}; s=$(up); end=$((SECONDS+{int(t)})); while :; do if ( {args[0]} ) >/tmp/.wait-cmd.$(id -u) 2>&1{grep}; "
+                  "then echo \"ok $(( ($(up)-s)*10 )) ms\"; tail -c 600 /tmp/.wait-cmd.$(id -u); exit 0; fi; "
+                  "[ $SECONDS -ge $end ] && { echo timeout; tail -c 600 /tmp/.wait-cmd.$(id -u); exit 1; }; sleep 0.1; done")
+        rc, out, err = guest(vm, script, t + 30, o.get("user", "root"), "agent")
+        return rc == 0, (out + err).strip()
     if v == "logs":
         text = logs(vm, int(o.get("n", 300)), o.get("unit"))
         name = f"{idx:02d}-logs.txt"
@@ -1163,16 +1369,25 @@ def cmd_journey(a):
     vm.cfg  # exists?
     out = os.path.abspath(a.out or os.path.join(vm.dir, "journeys", time.strftime("%Y%m%d-%H%M%S")))
     os.makedirs(out, exist_ok=True)
+    vm.shots, vm.journey_dir, vm.shot_made, recs = {}, os.path.dirname(os.path.abspath(a.file)), None, []
     with open(os.path.join(out, "journey.jsonl"), "a") as jl:
         title = meta.get("name") or os.path.basename(a.file)
         jl.write(json.dumps({"journey": title, "vm": vm.name, "file": os.path.abspath(a.file), "time": time.ctime()}) + "\n")
         failed = 0
+        if vm.pid() and a.frm <= 1:  # the picture before any step: what `changed-from: 1` compares with
+            try:
+                base = os.path.join(out, "00-baseline.png")
+                screenshot(vm, base)
+                vm.shots[0] = base
+            except (OSError, RuntimeError, ValueError):
+                pass
         for i, st in enumerate(steps, 1):
             if i < a.frm:
                 continue
             label = " ".join([st["verb"]] + st["args"])
             t0 = time.time()
             tries = int(st["opts"].get("retry", 0)) + 1
+            vm.shot_made = None
             for attempt in range(tries):
                 try:
                     ok, detail = run_step(vm, st, out, i)
@@ -1184,9 +1399,23 @@ def cmd_journey(a):
                     break
                 if st["opts"].get("on-fail-restore"):
                     snapshot(vm, "restore", st["opts"]["on-fail-restore"])
+            secs = time.time() - t0  # the step itself, without the picture taken after it
+            soft = False
+            if not ok and st["opts"].get("soft"):  # a defect we record without stopping the journey
+                ok, soft, detail = True, True, f"SOFT-FAIL (soft: true) {detail}".strip()
+            slow = False
+            if ok and "max" in st["opts"] and secs > float(st["opts"]["max"]):
+                ok, detail = False, f"{detail}\ntook {secs:.2f} s, limit {st['opts']['max']} s".strip()
+            if "budget" in st["opts"] and secs > float(st["opts"]["budget"]):
+                slow = True
+                detail = f"{detail}\nSLOW {secs:.2f} s (budget {st['opts']['budget']} s)".strip()
             shot = None
-            want_shot = st["opts"].get("shot", True) and st["verb"] not in ("stop", "note", "boot", "logs")
-            if want_shot and vm.pid():
+            nxt = steps[i] if i < len(steps) else None  # the next step looks at the screen itself: its picture must be the first after this action
+            next_looks = bool(nxt and nxt["verb"] in ("wait-screen", "assert-screen"))
+            want_shot = st["opts"].get("shot", True) and st["verb"] not in ("stop", "note", "boot", "logs") and not next_looks
+            if vm.shot_made and os.path.exists(vm.shot_made):
+                shot = os.path.basename(vm.shot_made)
+            elif want_shot and vm.pid():
                 name = (st["args"][0] if st["verb"] in ("shot", "screenshot") and st["args"] else "-".join([st["verb"]] + ([slug(" ".join(st["args"]))] if st["args"] else [])))
                 shot = f"{i:02d}-{slug(name)}.png"
                 try:
@@ -1194,11 +1423,14 @@ def cmd_journey(a):
                 except (OSError, RuntimeError, ValueError) as e:
                     detail += f"\n(screenshot failed: {e})"
                     shot = None
-            rec = {"n": i, "step": label, "opts": st["opts"], "ok": ok, "secs": round(time.time() - t0, 1),
+            if shot:
+                vm.shots[i] = os.path.join(out, shot)
+            rec = {"n": i, "step": label, "opts": st["opts"], "ok": ok, "secs": round(secs, 2), "slow": slow, "soft": soft,
                    "shot": shot, "detail": detail, "caption": st["opts"].get("caption", "")}
+            recs.append(rec)
             jl.write(json.dumps(rec) + "\n")
             jl.flush()
-            print(f"{'ok  ' if ok else 'FAIL'} {i:02d} {label[:70]}" + (f"  [{shot}]" if shot else ""), flush=True)
+            print(f"{'soft' if soft else 'ok  ' if ok else 'FAIL'} {i:02d} {label[:70]} ({secs:.2f} s{', SLOW' if slow else ''})" + (f"  [{shot}]" if shot else ""), flush=True)
             if not ok:
                 failed += 1
                 if detail:
@@ -1207,6 +1439,12 @@ def cmd_journey(a):
                     print(f"stopped at step {i}; fix and rerun with --from {i} (snapshots: wolvm snapshot {vm.name} list)")
                     break
         shutil.copy(vm.p("serial.log"), os.path.join(out, "serial.log")) if os.path.exists(vm.p("serial.log")) else None
+    with open(os.path.join(out, "result.json"), "w") as f:  # one line of facts for tests/e2e.sh
+        json.dump({"journey": meta.get("name") or os.path.basename(a.file), "vm": vm.name, "steps": len(recs),
+                   "failed": failed, "slow": sum(1 for r in recs if r.get("slow")),
+                   "soft": [{"n": r["n"], "step": r["step"], "detail": r["detail"][:300], "shot": r["shot"]} for r in recs if r.get("soft")],
+                   "secs": round(sum(r["secs"] for r in recs), 1),
+                   "first_failure": next(({"n": r["n"], "step": r["step"], "detail": r["detail"][:400]} for r in recs if not r["ok"]), None)}, f)
     write_report(out)
     print(f"{out}: {'all steps passed' if not failed else f'{failed} failed'}; report {os.path.join(out, 'index.html')}")
     return 1 if failed else 0
@@ -1234,7 +1472,7 @@ def write_report(d):
     passed = sum(1 for r in recs if r["ok"])
     md = [f"# {title}", "", f"VM `{head.get('vm', '?')}`, {head.get('time', '')}: {passed}/{len(recs)} steps ok.", ""]
     for r in recs:
-        md.append(f"## {r['n']:02d} {'ok' if r['ok'] else 'FAIL'}: `{r['step']}` ({r.get('secs', 0)} s)")
+        md.append(f"## {r['n']:02d} {'ok' if r['ok'] else 'FAIL'}: `{r['step']}` ({r.get('secs', 0)} s{', SLOW' if r.get('slow') else ''})")
         if r.get("caption"):
             md.append(r["caption"])
         if r.get("shot"):
@@ -1256,7 +1494,7 @@ def write_report(d):
          f"<b>{passed}/{len(recs)}</b> steps ok.</p>"]
     for r in recs:
         h.append(f"<div class='s{'' if r['ok'] else ' f'}'><h3>{r['n']:02d} {'ok' if r['ok'] else 'FAIL'}: "
-                 f"<code>{e(r['step'])}</code> <small>{r.get('secs', 0)} s</small></h3>")
+                 f"<code>{e(r['step'])}</code> <small>{r.get('secs', 0)} s{' SLOW' if r.get('slow') else ''}</small></h3>")
         if r.get("caption"):
             h.append(f"<p>{e(r['caption'])}</p>")
         if r.get("shot"):
@@ -1333,6 +1571,9 @@ def parser():
     for name, fn in (("start", cmd_start), ("status", cmd_status), ("rm", cmd_rm), ("eject", cmd_eject)):
         s = sp.add_parser(name); s.add_argument("name"); s.set_defaults(fn=fn)
     sp.add_parser("list").set_defaults(fn=cmd_list)
+    s = sp.add_parser("clone"); s.add_argument("src"); s.add_argument("name"); s.add_argument("--force", action="store_true")
+    s.add_argument("--from-home", help="WOLVM_HOME that holds SRC (it is only read)")
+    s.set_defaults(fn=cmd_clone)
     s = sp.add_parser("stop"); s.add_argument("name"); s.add_argument("--force", action="store_true")
     s.add_argument("--timeout", type=float, default=60); s.set_defaults(fn=cmd_stop)
     s = sp.add_parser("set"); s.add_argument("name"); s.add_argument("--boot", choices=["disk", "cdrom"])

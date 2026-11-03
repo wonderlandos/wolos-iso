@@ -122,6 +122,15 @@ into the disk), `install-gui.yaml` (a keyboard template the agent adapts screen 
 A failed step stops the run; fix the step and rerun with `--from N` after `snapshot restore`.
 Each run writes `journey.jsonl`, the PNGs, saved command output, `serial.log`, `report.md`, `index.html`.
 
+## End-to-end journeys of the desktop
+
+`tests/e2e.sh` runs the `journeys/e2e-*.yaml` files (every shipped app and flow) on reflink copies of one
+kept install (`wolvm clone`), each from the whole-VM snapshot `desktop` or a cold boot, N runs each, and
+writes `index.html` (PASS / FAIL / FLAKE per journey, contact sheet per run, steps over 1 s).
+`tests/wolvm/e2e/make-base.sh` builds the base. Extra journey verbs: `assert-screen`, `wait-screen`
+(pixels; Pillow on the host), `wait-ui` (window or layer surface), `wait-cmd`, `push`; extra options
+`budget`, `max`, `soft`. Details and the list of journeys: `wolos/docs/modules/qa.md`.
+
 ## Tests
 
 ```sh

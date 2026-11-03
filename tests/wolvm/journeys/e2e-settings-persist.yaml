@@ -1,0 +1,82 @@
+name: Settings change persists across a reboot (Desktop & Dock > Show battery percentage)
+from: cold
+steps:
+- start
+- wait-agent:
+  timeout: 120
+- wait-cmd: "pgrep -x wol-lock"
+  timeout: 90
+- wait-screen:
+  not-blank: true
+  luma-min: 120
+  timeout: 30
+- sleep: 2
+- type: "tester\n"
+- wait-cmd: "! pgrep -x wol-lock"
+  timeout: 20
+- wait-cmd: "pgrep -u tester -x wol-shell"
+  timeout: 20
+- wait-screen:
+  not-blank: true
+  timeout: 20
+- ssh: "wol settings | python3 -c \"import json,sys; print('battery_percent', json.load(sys.stdin)['shell']['battery_percent'])\""
+  user: tester
+  expect: "battery_percent False"
+  caption: before
+- key: super-comma
+- wait-ui: "^org.wolos.settings$"
+  timeout: 15
+  budget: 1.5
+- click: 279 451
+  caption: sidebar row Desktop & Dock
+- wait-screen:
+  changed-from: prev
+  min: 1
+  timeout: 6
+  budget: 1.0
+- click: 1035 542
+  caption: toggle Show battery percentage
+- wait-cmd: "wol settings | python3 -c \"import json,sys; print('battery_percent', json.load(sys.stdin)['shell']['battery_percent'])\""
+  expect: "battery_percent True"
+  user: tester
+  timeout: 5
+  budget: 1.0
+  caption: the change reached the settings store
+- assert-screen:
+  pixel: "1023,542"
+  color: "#7c5cfc"
+  tol: 60
+  caption: the switch is on (purple)
+- ssh: "sync; ls -la ~/.config/wolos/; grep -o 'battery_percent[^,]*' ~/.config/wolos/shell.json"
+  user: tester
+  rc: any
+  save: dconf-after.txt
+- ssh: "setsid -f sh -c 'sleep 1; systemctl reboot' >/dev/null 2>&1 </dev/null; echo scheduled"
+  expect: scheduled
+- sleep: 5
+- wait-agent:
+  timeout: 120
+- wait-cmd: "pgrep -x wol-lock"
+  timeout: 90
+- wait-screen:
+  not-blank: true
+  luma-min: 120
+  timeout: 30
+- sleep: 2
+- type: "tester\n"
+- wait-cmd: "pgrep -u tester -x wol-shell"
+  timeout: 30
+- ssh: "wol settings | python3 -c \"import json,sys; print('battery_percent', json.load(sys.stdin)['shell']['battery_percent'])\""
+  user: tester
+  expect: "battery_percent True"
+  caption: after the reboot the value is still true
+- key: super-comma
+- wait-ui: "^org.wolos.settings$"
+  timeout: 15
+- click: 279 451
+- wait-screen:
+  pixel: "1023,542"
+  color: "#7c5cfc"
+  tol: 60
+  timeout: 10
+  caption: the page shows the switch on after the reboot

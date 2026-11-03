@@ -1,0 +1,34 @@
+name: Night Shift (toggle with the shortcut, warm tint on screen, state on disk, off again)
+from: desktop
+steps:
+- ssh: "wol toggle list"
+  user: tester
+  save: toggles-before.txt
+- key: ctrl-super-n
+  caption: Ctrl+Super+N
+- wait-cmd: 'wol toggle list | python3 -c "import json,sys; print([t['on'] for t in json.load(sys.stdin)['toggles'] if t['id']=='nightlight'][0])"'
+  expect: "True"
+  user: tester
+  timeout: 10
+  budget: 1.0
+  caption: the toggle reads on
+- wait-screen:
+  changed-from: 1
+  min: 5
+  timeout: 10
+  caption: the whole screen shifted warmer
+- ssh: "which hyprsunset gammastep wlsunset 2>&1; pgrep -ax 'hyprsunset|gammastep|wlsunset' || echo no-night-light-backend-running; wol toggle nightlight on 2>&1 | head -3"
+  user: tester
+  save: night-backend.txt
+  rc: any
+- key: ctrl-super-n
+- wait-cmd: 'wol toggle list | python3 -c "import json,sys; print([t['on'] for t in json.load(sys.stdin)['toggles'] if t['id']=='nightlight'][0])"'
+  expect: "False"
+  user: tester
+  timeout: 10
+  budget: 1.0
+- wait-screen:
+  unchanged-from: 1
+  max-diff: 2
+  timeout: 10
+  caption: back to the original colours

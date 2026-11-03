@@ -1,0 +1,41 @@
+name: Gallery (Photos): open from the Dock, welcome dialog, import a screenshot folder, close
+from: desktop
+steps:
+- ssh: "mkdir -p ~/Pictures/e2e; grim ~/Pictures/e2e/one.png; cp ~/Pictures/e2e/one.png ~/Pictures/e2e/two.png; ls ~/Pictures/e2e"
+  user: tester
+  expect: two.png
+- click: 571 755
+  caption: open Photos from the Dock
+- wait-ui: "Shotwell"
+  timeout: 30
+  budget: 2.0
+  caption: window mapped (open time)
+- wait-screen:
+  changed-from: 1
+  min: 5
+  timeout: 30
+  caption: first paint
+- ssh: "hyprctl clients -j | python3 -c \"import json,sys; [print(c['class'],repr(c['title']),c['at'],c['size']) for c in json.load(sys.stdin)]\""
+  user: tester
+  save: gallery-windows.txt
+  caption: window list (a Welcome dialog exists?)
+- assert-screen:
+  caption: is the Welcome dialog visible on top of the main window?
+- key: ctrl-i
+  caption: import from folder
+- sleep: 2
+- assert-screen:
+  caption: import dialog
+- key: ctrl-l
+- type: "/home/tester/Pictures/e2e\n"
+- sleep: 3
+- assert-screen:
+  caption: folder chosen
+- key: ret
+- sleep: 4
+- assert-screen:
+  caption: after import
+- ssh: "ls ~/.local/share/shotwell 2>&1 | head; ls ~/.local/share/shotwell/data 2>&1 | head -3"
+  user: tester
+  rc: any
+  save: shotwell-data.txt
