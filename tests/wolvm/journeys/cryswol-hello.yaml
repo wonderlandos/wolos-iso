@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Cryswol hello through the REAL Kit host: examples/hello.cr runs on the installed desktop,
+# against the live wold (not the fake). Needs the image to ship crystal, libwol and the shard
+# (CRYSTAL_PATH below). Run on an installed disk: wolvm journey <vm> tests/wolvm/journeys/cryswol-hello.yaml
+name: Cryswol hello on the installed desktop
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: the installed desktop is up
+- ssh: "test -e /usr/lib/libwol.so.1 && echo libwol-present"
+  expect: "libwol-present"
+  caption: libwol is installed
+- ssh: "test -d /usr/lib/wolos/crystal/cryswol && echo shard-present"
+  expect: "shard-present"
+  caption: the cryswol shard is installed
+- ssh: "mkdir -p /tmp/cr && cp /usr/lib/wolos/crystal/cryswol/examples/hello.cr /tmp/cr/hello.cr && sed -i 's#\"../src/cryswol\"#\"cryswol\"#' /tmp/cr/hello.cr && cd /tmp/cr && CRYSTAL_PATH=\"/usr/lib/wolos/crystal:$(crystal env CRYSTAL_PATH)\" crystal build hello.cr -o hello && echo built"
+  expect: "built"
+  timeout: 300
+  save: cryswol-build.txt
+  caption: hello.cr compiles against the installed shard and libwol
+- ssh: "cd /tmp/cr && (sleep 3; wol-notify-theme-event 2>/dev/null || true) & cd /tmp/cr && timeout 30 ./hello; echo rc=$?"
+  rc: any
+  save: cryswol-hello.txt
+  expect: "posted"
+  caption: version, OS and a notification through the live wold (a theme event ends the run; a person may toggle the theme)
+- shot notification
+- ssh: "journalctl -b --no-pager -n 80 -t wold"
+  rc: any
+  save: wold-journal.txt
+- checkpoint: cryswol-hello
+- stop
