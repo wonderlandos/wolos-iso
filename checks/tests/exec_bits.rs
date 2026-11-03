@@ -21,16 +21,7 @@ const NOT_SOURCE: &[&str] = &["out", "work"];
 const RUN_BY_PATH: &[&str] = &["build.sh", "release/sb-key.sh", "tests/wolvm/wolvm"];
 /// Tracked as 100644 before the list existed; the commit that adds this test sets their bit
 /// (`git update-index --chmod=+x`). Only shrinks: an entry that is 100755 is reported for removal.
-const PENDING_CHMOD: &[&str] = &[
-    "tests/test/greeter-sway.sh",
-    "tests/test/limits/guest-run.sh",
-    "tests/test/limits/load.sh",
-    "tests/test/limits/matrix.sh",
-    "tests/test/limits/mkguest.sh",
-    "tests/test/limits/pack.sh",
-    "tests/test/limits/report.py",
-    "tests/test/shell-shots.sh",
-];
+const PENDING_CHMOD: &[&str] = &[];
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
