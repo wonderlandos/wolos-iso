@@ -107,10 +107,23 @@ jobs:
           iso=$(cd dist && find . -maxdepth 1 -name '*.iso' -printf '%f')
           if [ -n "$SB_KEY" ] && [ -n "$SB_CERT" ]; then
             (umask 077; printf '%s\n' "$SB_KEY" > "$RUNNER_TEMP/sb.key"; printf '%s\n' "$SB_CERT" > "$RUNNER_TEMP/sb.crt")
-            docker run --rm --device /dev/kvm -v "$PWD:/src" -v "$RUNNER_TEMP:/keys" -w /src archlinux:latest bash -euo pipefail -c "
+            # An image the build box already signed with the pinned live key keeps its tested bytes;
+            # otherwise the secrets must be that same key (a stray pair would give an image no PC boots).
+            docker run --rm --device /dev/kvm -v "$PWD:/src" -v "$RUNNER_TEMP:/keys" -w /src archlinux:latest bash -euo pipefail -c '
               pacman -Sy --noconfirm --needed mtools sbsigntools openssl python util-linux qemu-base edk2-ovmf virt-firmware >/dev/null
-              wolos-iso/release/sb-layout.sh sign dist/$iso /keys/sb.key /keys/sb.crt
-              wolos-iso/tests/test-secureboot.sh dist/$iso /keys/sb.crt"
+              iso=dist/'"$iso"'; pin=wolos-iso/release/wolos-live-2026.cer
+              fp() { openssl x509 -noout -fingerprint -sha256 -inform DER -in "$1" 2>/dev/null || openssl x509 -noout -fingerprint -sha256 -inform PEM -in "$1"; }
+              if wolos-iso/release/sb-layout.sh check "$iso"; then
+                echo "secure boot: already signed by the pinned live key; not signed again"
+              else
+                [ "$(fp /keys/sb.crt)" = "$(fp "$pin")" ] || { echo "::error::WOLOS_SB_CERT is not the pinned live key ($pin)"; exit 1; }
+                [ "$(openssl x509 -in /keys/sb.crt -noout -pubkey)" = "$(openssl pkey -in /keys/sb.key -pubout)" ] || { echo "::error::WOLOS_SB_KEY does not belong to WOLOS_SB_CERT"; exit 1; }
+                wolos-iso/release/sb-layout.sh sign "$iso" /keys/sb.key /keys/sb.crt
+              fi
+              export WOLOS_SB_TEST=/src/dist/.sb-test
+              wolos-iso/tests/test-secureboot.sh "$iso" wolos-iso/release/wolos-live-2026.crt ||
+                { echo "::group::serial log"; tail -n 80 /src/dist/.sb-test/serial.log 2>/dev/null; echo "::endgroup::"; exit 1; }
+              rm -rf /src/dist/.sb-test'
             rm -f "$RUNNER_TEMP/sb.key"; sudo chown -R "$(id -u)" dist
             echo "SB_SIGNED=1" >> "$GITHUB_ENV"
           elif [ "$WOLOS_SB_LAYOUT" = 1 ]; then
