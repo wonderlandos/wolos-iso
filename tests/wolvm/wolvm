@@ -670,15 +670,23 @@ def cmd_stop(a):
     if not pid and not DRY:
         print(f"{vm.name}: not running")
         return 0
-    q = vm.qmp()
-    if not a.force:
-        q.call({"execute": "system_powerdown"})
-        end = time.time() + a.timeout
-        while not DRY and time.time() < end and vm.pid():
-            time.sleep(0.5)
     if DRY:
+        q = vm.qmp()
+        if not a.force:
+            q.call({"execute": "system_powerdown"})
         q.call({"execute": "quit"})
         return 0
+    if not a.force:
+        # A guest that powered itself off (install-auto waits for "reboot: Power down") leaves a
+        # dying QEMU: its monitor refuses, resets or closes. That is "already going down", not an
+        # error: skip the powerdown and just wait for the pid to go.
+        try:
+            vm.qmp().call({"execute": "system_powerdown"})
+        except (OSError, SystemExit) as e:
+            print(f"{vm.name}: monitor gone ({e.__class__.__name__}), guest already going down")
+        end = time.time() + a.timeout
+        while time.time() < end and vm.pid():
+            time.sleep(0.5)
     if vm.pid():
         try:
             vm.qmp().call({"execute": "quit"})
@@ -1083,9 +1091,9 @@ def run_step(vm, st, out_dir, idx):
     if v == "start":
         return cmd_start(argparse.Namespace(home=os.path.dirname(os.path.dirname(vm.dir)), name=vm.name)) == 0, ""
     if v == "stop":
-        cmd_stop(argparse.Namespace(home=os.path.dirname(os.path.dirname(vm.dir)), name=vm.name,
-                                    force=bool(o.get("force")), timeout=t))
-        return True, ""
+        rc = cmd_stop(argparse.Namespace(home=os.path.dirname(os.path.dirname(vm.dir)), name=vm.name,
+                                         force=bool(o.get("force")), timeout=t))
+        return rc == 0, ""
     if v in ("shot", "screenshot"):
         return True, ""  # the runner takes the picture
     if v == "type":
