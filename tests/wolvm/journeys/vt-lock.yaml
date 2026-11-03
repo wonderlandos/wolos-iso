@@ -1,0 +1,171 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# VT lock, end to end (ADR 0012): while the login window, a session or the lock screen owns the
+# screen, Ctrl+Alt+Fn cannot show a text console (wol-login sets Linux VT_LOCKSWITCH on tty1
+# before every compositor, crates/controller/src/login.rs). Switching is refused at the login
+# window, in the session, on the lock screen and after the lock screen is unlocked; it is allowed
+# again only while wol-login shows the console notice (VT_UNLOCKSWITCH), which stays readable
+# through every retry, and Ctrl+Alt+Delete there restarts. After the restart the login window
+# with two accounts comes back with the lock screen's words (Enter Password, Incorrect password).
+# Run on an installed disk (test-installer.sh's erase scenario: one account, Alice Liddell,
+# password curiouser; the login window at boot is the locked session, ADR 0004):
+#   wolvm new vt --from-image <erase>/disk.raw --disk <its size> --no-net
+#   wolvm journey vt-lock tests/wolvm/journeys/vt-lock.yaml
+# Each VT check reads the kernel's active console (/sys/class/tty/tty0/active); `chvt` is the same
+# VT_ACTIVATE request the seat daemon makes for a compositor's Ctrl+Alt+Fn, with a timeout because
+# a refused switch never becomes active.
+name: VT switching locked from login to lock screen, console notice, login window parity
+steps:
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+  caption: the login window (one account, so the locked session; Enter Password)
+- ssh: "a=$(cat /sys/class/tty/tty0/active); echo active=$a; test $a = tty1 && echo on-tty1"
+  expect: "on-tty1"
+  save: vt-boot.txt
+  caption: tty1 is the active console
+- ssh: "journalctl -b --no-pager -o cat -t wold | grep -E 'VT_(UN)?LOCKSWITCH' || echo no-vt-ioctl-error"
+  rc: any
+  expect: "no-vt-ioctl-error"
+  caption: wol-login logged no failed VT_LOCKSWITCH (the old base's request number failed with ENOTTY on Linux)
+  shot: false
+- key: ctrl-alt-f2
+  caption: Ctrl+Alt+F2 at the login window
+- sleep: 2
+- ssh: "a=$(cat /sys/class/tty/tty0/active); echo active=$a; journalctl -b --no-pager -o cat -t seatd | grep -c 'to VT 2'; test $a = tty1 && echo vt-refused-login"
+  expect: "vt-refused-login"
+  save: vt-login-key.txt
+  caption: the seat daemon asked for VT 2, the kernel refused it; the login window is still on screen
+- ssh: "timeout 3 chvt 2; echo chvt-rc=$?; a=$(cat /sys/class/tty/tty0/active); echo active=$a; test $a = tty1 && echo vt-refused-kernel"
+  rc: any
+  expect: "vt-refused-kernel"
+  save: vt-login-chvt.txt
+  shot: false
+- type: curiouser
+  caption: Alice signs in
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: the desktop
+- ssh: "for i in $(seq 1 30); do pgrep -x wol-lock >/dev/null || break; sleep 1; done; pgrep -x wol-lock || echo session-unlocked"
+  rc: any
+  expect: "session-unlocked"
+  shot: false
+- key: ctrl-alt-f2
+- sleep: 2
+- ssh: "a=$(cat /sys/class/tty/tty0/active); echo active=$a; test $a = tty1 && echo vt-refused-session"
+  expect: "vt-refused-session"
+  caption: Ctrl+Alt+F2 in the session; the desktop stays
+- key: ctrl-super-q
+  caption: Ctrl+Super+Q locks the screen
+- sleep: 3
+- wait-stable:
+  timeout: 60
+- ssh: "pgrep -x wol-lock >/dev/null && echo screen-locked"
+  expect: "screen-locked"
+  shot: false
+- key: ctrl-alt-f2
+- sleep: 2
+- ssh: "a=$(cat /sys/class/tty/tty0/active); echo active=$a; timeout 3 chvt 2; a=$(cat /sys/class/tty/tty0/active); echo active=$a; test $a = tty1 && echo vt-refused-locked"
+  rc: any
+  expect: "vt-refused-locked"
+  save: vt-locked.txt
+  caption: Ctrl+Alt+F2 and chvt 2 on the lock screen; the lock screen stays
+- type: wrongpw
+- key: ret
+- sleep: 3
+- shot: lock-incorrect
+  caption: the lock screen's words for a wrong password (Incorrect password, under the pill)
+- type: curiouser
+  caption: Alice unlocks
+- key: ret
+- wait-stable:
+  timeout: 60
+- ssh: "for i in $(seq 1 30); do pgrep -x wol-lock >/dev/null || break; sleep 1; done; pgrep -x wol-lock || echo screen-unlocked"
+  rc: any
+  expect: "screen-unlocked"
+  shot: false
+- key: ctrl-alt-f2
+- sleep: 2
+- ssh: "a=$(cat /sys/class/tty/tty0/active); echo active=$a; timeout 3 chvt 2; a=$(cat /sys/class/tty/tty0/active); echo active=$a; test $a = tty1 && echo vt-refused-after-unlock"
+  rc: any
+  expect: "vt-refused-after-unlock"
+  save: vt-after-unlock.txt
+  caption: after the unlock switching stays off for the whole session (ADR 0012)
+# A second account, so a logout shows the login window with account tiles (one account logs out
+# to the locked session again). The installer makes accounts the same way (useradd + chpasswd).
+- ssh: "id bo >/dev/null 2>&1 || useradd -m -c 'Bo Peep' -s /usr/bin/zsh bo; echo bo:sheep | chpasswd && echo second-account"
+  expect: "second-account"
+  shot: false
+- ssh: "u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 hyprctl -i 0 dispatch exit"
+  rc: any
+  caption: Alice logs out (what Log Out in the menu runs)
+- sleep: 5
+- wait-stable:
+  timeout: 120
+- ssh: "for i in $(seq 1 30); do pgrep -x wol-loginwindow >/dev/null && break; sleep 1; done; pgrep -x wol-loginwindow >/dev/null && echo login-window-up"
+  expect: "login-window-up"
+  caption: the login window with both accounts and Sleep, Restart, Shut Down
+- key: ctrl-alt-f2
+- sleep: 2
+- ssh: "a=$(cat /sys/class/tty/tty0/active); echo active=$a; test $a = tty1 && echo vt-refused-greeter"
+  expect: "vt-refused-greeter"
+  shot: false
+- click: 559 588
+  caption: Alice's tile
+- sleep: 2
+- type: wrongpw
+- key: ret
+- sleep: 4
+- shot: login-incorrect
+  caption: the login window's words for a wrong password match the lock screen's (Enter Password, Incorrect password)
+# The login window cannot start: the greeter is replaced by a program that fails, then the running
+# one is closed. wol-login draws the console notice after every exit, unlocks VT switching for it,
+# and tries again with backoff (1 s .. 5 min).
+- ssh: "mount --bind /usr/bin/false /usr/bin/wol-greeter-session && pkill -x wol-loginwindow && echo greeter-broken"
+  expect: "greeter-broken"
+  shot: false
+- ssh: "for i in $(seq 1 60); do fold -w 160 /dev/vcs1 | grep -q 'Trying again in [0-9]* second' && [ $(fold -w 160 /dev/vcs1 | grep -o 'again in [0-9]*' | grep -o '[0-9]*$') -ge 4 ] && break; sleep 1; done; fold -w 160 /dev/vcs1 | sed 's/ *$//' | grep .; echo; grep -q 'The WolOS login window could not start.' /dev/vcs1 && grep -q 'Ctrl+Alt+Delete' /dev/vcs1 && echo notice-stays"
+  rc: any
+  timeout: 120
+  expect: "notice-stays"
+  save: console-notice.txt
+  caption: after the third failed try the notice is still on tty1 (what is wrong, when it tries again, how to restart)
+- ssh: "timeout 3 chvt 2; a=$(cat /sys/class/tty/tty0/active); chvt 1; echo active=$a; test $a = tty2 && echo vt-allowed-notice"
+  rc: any
+  retry: 3
+  expect: "vt-allowed-notice"
+  save: vt-notice.txt
+  shot: false
+  caption: with the notice up switching works again (VT_UNLOCKSWITCH), then back to tty1
+- shot: console-notice
+- ssh: "cat /proc/sys/kernel/random/boot_id > /var/tmp/vt-lock.boot && echo boot-noted"
+  expect: "boot-noted"
+  shot: false
+- key: ctrl-alt-delete
+  caption: Ctrl+Alt+Delete on the notice
+- wait-text: "Reached target System Reboot"
+  timeout: 120
+  new: true
+  shot: false
+  caption: the system restarts
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+- ssh: "cmp -s /proc/sys/kernel/random/boot_id /var/tmp/vt-lock.boot || echo restarted; for i in $(seq 1 60); do pgrep -x wol-loginwindow >/dev/null && break; sleep 1; done; pgrep -x wol-loginwindow >/dev/null && echo login-window-back"
+  expect: "restarted\nlogin-window-back"
+  caption: a new start; the login window (both accounts) is back
+- key: ctrl-alt-f2
+- sleep: 2
+- ssh: "a=$(cat /sys/class/tty/tty0/active); echo active=$a; test $a = tty1 && echo vt-refused-again"
+  expect: "vt-refused-again"
+  caption: and VT switching is locked again
+- ssh: "journalctl -b -1 --no-pager -o cat -t wold | grep -E 'wol-login|VT_' | tail -40"
+  rc: any
+  save: wol-login-previous-boot.txt
+  shot: false
+- logs:
+  n: 400
+- stop
