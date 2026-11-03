@@ -5,6 +5,7 @@ wolos-system
 # Graphics / session: the WolOS Hyprland fork (patches in wolos-pkgbuilds/hyprland-wolos), Mesa, Vulkan, VA-API.
 hyprland-wolos
 hypridle
+hyprsunset # Night Light (wol_core::toggles, Ctrl+Super+N, Control Center): hyprland.conf exec-once starts it, hyprctl hyprsunset tints
 xdg-desktop-portal-hyprland
 xorg-xwayland
 xorg-xrdb # wol-x11-env + Settings cursor size (wol_core::hyprprefs::cursor_sync): Xft.dpi, Xcursor.*
