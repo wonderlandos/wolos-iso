@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# The live ISO with Secure Boot on (ADR 0025): the signed shim (wolos-shim) starts, refuses the
+# WolOS-signed systemd-boot once, the blue key screen enrols the live-image key from the medium
+# (/ENROL_THIS_KEY_FOR_WOLOS.cer, the last entry of the medium's root), and after the reboot the
+# same medium starts WolOS with Secure Boot enabled. The ISO comes from `wolos-build iso` where the
+# live-image key is (release/sb-key.sh); a fresh VM has an empty key list:
+#   wolvm new sb --iso wolos.iso --secureboot --force
+#   wolvm journey sb tests/wolvm/journeys/live-secureboot.yaml
+# Keys as on a real PC (README.txt on the medium says the same): Enter, any key within 10 s,
+# "Enroll key from disk", the volume, the file, Continue, Yes, Reboot.
+name: live ISO, Secure Boot on, key screen once, then WolOS
+steps:
+- start
+- wait-text: "Security Violation"
+  timeout: 120
+  caption: 'the ERROR box "Verification failed: (0x1A) Security Violation" with one OK button'
+- key: ret
+  caption: OK; the key screen opens
+- wait-text: "Press any key to perform MOK management"
+  timeout: 30
+  caption: a 10 s countdown; a key now, or it boots on without the key
+- key: spc
+- sleep: 2
+- shot: key-menu
+  caption: Continue boot, Enroll key from disk, Enroll hash from disk
+- key: down
+- key: ret
+  caption: Enroll key from disk
+- sleep: 2
+- shot: key-volumes
+  caption: '"Select Key": one volume, the medium (ARCHISO_EFI)'
+- key: ret
+- sleep: 2
+- shot: key-files
+  caption: EFI/, loader/, wolos/, ENROL_THIS_KEY_FOR_WOLOS.cer
+- key: down down down
+- key: ret
+  caption: ENROL_THIS_KEY_FOR_WOLOS.cer
+- sleep: 2
+- shot: key-enroll
+  caption: '"[Enroll MOK]": View key 0, Continue'
+- key: down
+- key: ret
+  caption: Continue
+- sleep: 2
+- shot: key-confirm
+  caption: '"Enroll the key(s)?": No, Yes'
+- key: down
+- key: ret
+  caption: 'Yes; "Perform MOK management" with Reboot selected'
+- sleep: 2
+- shot: key-reboot
+- key: ret
+  caption: Reboot; shim now starts systemd-boot, systemd-boot the UKI
+- wait-text: "Install WolOS: the first screen of the live image"
+  timeout: 300
+  new: true
+  caption: the live system is up (systemd on the serial console)
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 120
+- shot: live-desktop
+  caption: Welcome to WolOS, started with Secure Boot on
+- ssh: "mokutil --sb-state"
+  expect: "SecureBoot enabled"
+  save: sb-state.txt
+- ssh: "bootctl status 2>/dev/null | grep -E 'Secure Boot|Loader:|Current Entry|Stub:'"
+  expect: "Current Entry: wolos.efi"
+  save: bootctl.txt
+- ssh: "mokutil --list-enrolled | grep 'Subject:'"
+  expect: "CN=WolOS Live Image 2026"
+  save: enrolled.txt
+- ssh: "systemctl --failed --no-legend"
+  rc: any
+  save: failed-units.txt
+- stop:
+  force: true

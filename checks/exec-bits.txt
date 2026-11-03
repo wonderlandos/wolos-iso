@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Every file of this repo whose first line is a `#!` shebang, one repo-relative path per line: each
+# is committed with mode 100755.
+# Why: the repo runs with core.filemode=false (checked out on Windows), so a plain `git add` records
+# a new script as 100644 and a Linux checkout cannot run it (audit5 X6-3: a 0644 release/sb-key.sh
+# turns the Secure Boot layout off without a word). How: add a new script here and commit it with
+# `git add --chmod=+x <path>` (an existing one: `git update-index --chmod=+x <path>`);
+# checks/tests/exec_bits.rs fails when a shebang file is missing here, a listed file is gone or has
+# no shebang, or the git index holds a listed file as 100644.
+.github/builder
+build.sh
+profile/profiledef.sh
+release/release-manifest.sh
+release/sb-key.sh
+release/sb-layout.sh
+release/sign-release.sh
+tests/run-gpu.sh
+tests/run-installed.sh
+tests/run.sh
+tests/test-audio.sh
+tests/test-install.sh
+tests/test-installer.sh
+tests/test-modules.sh
+tests/test-secureboot.sh
+tests/test/boot-time.sh
+tests/test/greeter-sway.sh
+tests/test/headless.sh
+tests/test/installer/wolos-e2e
+tests/test/limits/guest-run.sh
+tests/test/limits/load.sh
+tests/test/limits/matrix.sh
+tests/test/limits/mkguest.sh
+tests/test/limits/pack.sh
+tests/test/limits/report.py
+tests/test/lock-user.sh
+tests/test/serial_expect.py
+tests/test/shell-shots.sh
+tests/test/verdict.sh
+tests/wolvm/mok-esp.sh
+tests/wolvm/test_wolvm.py
+tests/wolvm/wolvm

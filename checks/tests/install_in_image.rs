@@ -16,8 +16,7 @@ use std::{
     process::{Command, Output},
 };
 fn repo(p: &str) -> PathBuf {
-    siblings::root()
-        .join(p)
+    siblings::root().join(p)
 }
 
 fn read(p: &str) -> String {
@@ -177,9 +176,13 @@ fn autoinstall_from_the_kernel_command_line() {
     let u = read("profile/airootfs/etc/systemd/system/wolos-autoinstall.service");
     assert!(u.contains("ConditionKernelCommandLine=wolos.autoinstall"));
     assert!(u.contains("ExecStart=/usr/lib/wolos/autoinstall"));
-    assert!(repo("profile/airootfs/etc/systemd/system/multi-user.target.wants/wolos-autoinstall.service")
+    assert!(
+        repo(
+            "profile/airootfs/etc/systemd/system/multi-user.target.wants/wolos-autoinstall.service"
+        )
         .symlink_metadata()
-        .is_ok());
+        .is_ok()
+    );
     let d = scratch("auto");
     fake(&d, "systemctl", "");
     fake(&d, "install-run", "");

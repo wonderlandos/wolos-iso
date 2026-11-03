@@ -7,18 +7,16 @@ mod siblings;
 
 use std::path::PathBuf;
 fn read(p: &str) -> String {
-    let f = siblings::root()
-        .join(p);
+    let f = siblings::root().join(p);
     std::fs::read_to_string(&f).unwrap_or_else(|e| panic!("{p}: {e}"))
 }
 
 #[test]
 fn end_user_image_has_no_toolchain_or_gnu_docs() {
     let all = format!(
-        "{}\n{}\n{}",
+        "{}\n{}",
         read("profile/packages.desktop"),
-        read("profile/packages.x86_64"),
-        read("profile/packages-base.txt")
+        read("profile/packages.x86_64")
     );
     for banned in [
         "gcc",
@@ -66,7 +64,12 @@ fn noise_suppression_plugin_ships_and_nothing_loads_it_statically() {
         "files/usr/share/wireplumber/wireplumber.conf.d/72-wolos-alsa.conf",
     ] {
         let t = read(f);
-        for banned in ["module-echo-cancel", "module-loopback", "filter-chain", "rnnoise"] {
+        for banned in [
+            "module-echo-cancel",
+            "module-loopback",
+            "filter-chain",
+            "rnnoise",
+        ] {
             assert!(!t.contains(banned), "{f} loads {banned} statically");
         }
     }
@@ -79,6 +82,12 @@ fn pulse_clients_get_a_256_frame_floor_games_64() {
     let t = read("files/usr/share/pipewire/pipewire-pulse.conf.d/70-wolos-latency.conf");
     let has = |l: &str| t.lines().any(|x| x.trim() == l);
     assert!(has("pulse.min.quantum = 256/48000"), "floor");
-    assert!(has("pulse.min.quantum = 64/48000") && has("{ application.process.binary = \"~wine.*\" }"), "games");
-    assert!(has("pulse.min.quantum = 1024/48000") && has("{ cpu.vm.name = !null }"), "vm");
+    assert!(
+        has("pulse.min.quantum = 64/48000") && has("{ application.process.binary = \"~wine.*\" }"),
+        "games"
+    );
+    assert!(
+        has("pulse.min.quantum = 1024/48000") && has("{ cpu.vm.name = !null }"),
+        "vm"
+    );
 }

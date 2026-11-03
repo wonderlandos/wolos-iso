@@ -1,0 +1,25 @@
+# Changelog
+
+The user-facing changes of a WolOS release are in the wolos repository's `CHANGELOG.md`; this file
+lists what changed in the image, its checks and its tests. The four repositories are tagged together
+(wolos ADR 0029).
+
+## 0.12.0 (unreleased)
+
+Image
+- The live USB stick boots with Secure Boot on: the first-stage loader, the boot loader and the kernel image are signed with the WolOS live-image key, and the certificate to enrol sits on the startup partition as `ENROL_THIS_KEY_FOR_WOLOS.cer` (with `EFI/wolos/README.txt`). `build.sh` signs and checks the layout in one go wherever the key is.
+- The release check refuses a medium signed by any other key: it compares against the WolOS certificate, not the one the medium carries.
+- New packages on the image: the two X11 helpers the desktop uses for scaling and for allowing only this account's X11 apps, `gamescope` for games that need a fixed resolution, and `openssh` for the VM tests.
+- Remote login stays off on the live medium; it starts only for a VM test that passes a login key.
+- The medium README names the right volume on a PC with an internal disk.
+
+Release
+- `release.yml` no longer builds or VM-tests on the runner: it takes the ISO the build forge built and tested, and refuses one whose `checks.txt` does not say `BOOT PASS` or has a `FAIL`. It uploads the signed update feed (`stable.json` and its signature) with the ISO.
+- The builder image is pinned by digest in `.github/builder-image`, the same digest as wolos-pkgbuilds.
+
+Tests
+- `tests/wolvm`: drive the whole system in a VM step by step: boot the ISO, go through the installer, start the installed disk, open apps, snapshots, Secure Boot on or off, extra drives, no network, and login over ssh (README: `tests/README-wolvm.md`).
+- `test-install.sh` and `test-installer.sh` exit non-zero when a check fails. `test-install.sh --release DIR` checks the ISO against its recorded sha256 before any VM starts.
+- The key-screen (MOK) variant fails when Secure Boot is off; the live-boot and unattended-install journeys check the booted system; the dual-boot run checks the dual-boot fixes it is meant to prove, including installing again over an earlier WolOS.
+- New: `test-modules.sh` (optional modules), checks for the live Secure Boot layout, the live ssh drop-in and executable bits of the shipped scripts.
+- `tests/build.sh` is gone; the image checks under `checks/` are rustfmt-formatted.

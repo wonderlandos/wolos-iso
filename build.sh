@@ -2,19 +2,21 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Build the WolOS live + installer ISO (x86_64, UEFI) with mkarchiso from profile/ (ADR 0016), from
 # the published [wolos] repo and the Arch snapshot only: no source tree, no package build here
-# (ADR "repository split"). Run by `wolos-build iso` (locally or on the ECS cluster).
-# Host: Arch (or CachyOS) with archiso; without mkarchiso it runs in an archlinux podman container.
-# Steps: staged profile in $WORK/profile (the repo + its key) -> mkarchiso -> ISO + release manifest.
-# Env: WOLOS_REPO_NAME (default wolos-testing; wolos = stable), WOLOS_REPO_URL (default its GitHub
-#      release in wonderlandos/wolos-packages), WOLOS_WORK (default ~/WolOS-vm/build),
-#      WOLOS_OUT (default $WORK/out), WOLOS_STAGE_ONLY=1 (stage the profile, no ISO),
-#      WOLOS_IMAGE_URL (manifest base URL), WOLOS_SB_LAYOUT=1 (shim layout),
-#      WOLOS_PODMAN=1 (force the container).
-#      Disk: ~15 GB in $WORK (packages + squashfs + ISO).
+# (ADR "repository split"). The one build path: `wolos-build iso` (the forge or `--ecs`) runs this;
+# by hand on an Arch host with archiso it is the same script.
+# Steps: the repo's snapshot must equal profile/snapshot -> staged profile in $WORK/profile (the repo,
+# its key, the channel the installed system follows) -> mkarchiso -> ISO + <iso>.sha256 + manifest.
+# Env: WOLOS_REPO_NAME (default wolos-testing = the testing channel; wolos = stable), WOLOS_REPO_URL
+#      (default its GitHub release in wonderlandos/wolos-packages), WOLOS_VM (default ~/WolOS-vm),
+#      WOLOS_WORK (default $WOLOS_VM/build), WOLOS_OUT (default $WOLOS_VM/out, where tests/*.sh
+#      look), WOLOS_STAGE_ONLY=1 (stage the profile, no ISO), WOLOS_IMAGE_URL (manifest base URL),
+#      WOLOS_SB_LAYOUT=1 (shim layout), WOLOS_NEED_MB (free disk needed in $WORK, default 20000),
+#      WOLOS_SNAPSHOT_CHECK=0 (build from a repo that publishes no `snapshot` file; never a release).
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
-WORK=${WOLOS_WORK:-${WOLOS_VM:-$HOME/WolOS-vm}/build}
-OUT=${WOLOS_OUT:-$WORK/out}
+VM=${WOLOS_VM:-$HOME/WolOS-vm}
+WORK=${WOLOS_WORK:-$VM/build}
+OUT=${WOLOS_OUT:-$VM/out}
 SNAP=$(tr -d '[:space:]' < "$HERE/profile/snapshot")
 NAME=${WOLOS_REPO_NAME:-wolos-testing}
 case $NAME in wolos) tag=wolos-$SNAP ;; *) tag=$NAME ;; esac
@@ -22,11 +24,28 @@ URL=${WOLOS_REPO_URL:-https://github.com/wonderlandos/wolos-packages/releases/do
 P=$WORK/profile
 die() { echo "build.sh: $*" >&2; exit 1; }
 mkdir -p "$WORK" "$OUT"
+# A full disk paused a build mid-way once and it died silently: refuse up front (packages,
+# squashfs and ISO take ~15 GB). Staging alone needs next to nothing.
+if [ "${WOLOS_STAGE_ONLY:-0}" != 1 ]; then
+  free=$(df -Pm "$WORK" | awk 'NR == 2 {print $4}'); need=${WOLOS_NEED_MB:-20000}
+  if [ "$free" -lt "$need" ]; then
+    echo "build.sh: host has $free MB free in $WORK, needs $need MB (trim $VM/build, $OUT)" >&2
+    exit 2
+  fi
+fi
 
-# 1. The repo as published: its database (versions for the manifest) and its revision.
+# 1. The repo as published: its database (versions for the manifest), its revision and the Arch
+# snapshot its packages were built against (`wolos-build publish` writes it). An image pinned to
+# another date than its packages installs a mix nobody tested: refuse it.
 DB=$WORK/$NAME.db
 curl -fsSL --retry 5 -o "$DB" "$URL/$NAME.db" || die "no [$NAME] database at $URL"
 REV=$(curl -fsSL --retry 5 "$URL/revision" 2>/dev/null || echo unknown)
+if [ "${WOLOS_SNAPSHOT_CHECK:-1}" != 0 ]; then
+  RSNAP=$(curl -fsSL --retry 5 "$URL/snapshot" 2>/dev/null | tr -d '[:space:]') ||
+    die "no snapshot file at $URL/snapshot: the repo was not published by \`wolos-build publish\` (re-publish it, or WOLOS_SNAPSHOT_CHECK=0 for a test image)"
+  [ "$RSNAP" = "$SNAP" ] ||
+    die "[$NAME] at $URL was built against Arch snapshot $RSNAP, profile/snapshot says $SNAP: bump one of them (wolos-pkgbuilds tools/bump-snapshot.sh) and rebuild"
+fi
 # field PKG FIELD: %FIELD% of package PKG in the database (each desc starts with %FILENAME%).
 field() { bsdtar -xOf "$DB" '*/desc' | awk -v p="$1" -v f="$2" '
   function flush() { if (rec["NAME"] == p && (f in rec)) out = rec[f]; delete rec }
@@ -40,7 +59,7 @@ KV=$(field linux-wolos VERSION)
 # signatures checked against the WolOS key (release/wolos-repo.pub.asc) in a keyring of its own.
 rm -rf "$P"; cp -a "$HERE/profile" "$P"
 cat "$HERE/profile/packages.x86_64" "$HERE/profile/packages.desktop" | sed 's/#.*//' | tr -s ' \t' '\n' | grep . > "$P/packages.x86_64"
-rm -f "$P/packages.desktop" "$P/packages-base.txt"
+rm -f "$P/packages.desktop"
 G=$WORK/gnupg; S=; [ "$(id -u)" = 0 ] || S=sudo
 $S rm -rf "$G"; $S cp -a /etc/pacman.d/gnupg "$G"
 $S pacman-key --gpgdir "$G" --add "$HERE/release/wolos-repo.pub.asc" >/dev/null
@@ -57,6 +76,15 @@ awk -v name="[$NAME]" -v srv="Server = $URL" -v gpg="GPGDir = $G/" '
   sect == "[wolos]" && /^(Server|Include) = / { print srv; next }
   { print }' "$HERE/profile/pacman.conf" > "$P/pacman.conf"
 A=$P/airootfs
+# The channel (audit CA-3): the live root's WolOS section names the repo and release tag this image
+# was built from ([wolos-testing] or [wolos] + `Server = URL`); install-run's install-channel turns
+# it back into the mirrorlist on the installed system, with that tag, so a testing image installs a
+# system that follows testing and a stable one the stable tag.
+awk -v name="[$NAME]" -v srv="Server = $URL" '
+  /^\[/ { sect = $0 }
+  sect == "[wolos]" && /^\[wolos\]/ { print name; next }
+  sect == "[wolos]" && /^(Server|Include) = / { if (!done) print srv; done = 1; next }
+  { print }' "$HERE/profile/airootfs/etc/pacman.conf" > "$A/etc/pacman.conf"
 mkdir -p "$A/etc/wolos" "$A/etc/sysusers.d" "$A/etc/sudoers.d" "$A/etc/tmpfiles.d"
 echo "$SNAP" > "$A/etc/wolos/snapshot"
 # Live desktop (ADR 0009): `live` logs in automatically; it may run the installer as root, no password.
@@ -83,36 +111,53 @@ clean_work() {
   $s rm -rf --one-file-system "$WORK/work"
 }
 
-# 3. mkarchiso (root) on the host, or in a container.
+# 3. mkarchiso (root) on the host: one path, no container fallback (the forge and the ECS builder
+# image have archiso).
+command -v mkarchiso >/dev/null || die "needs mkarchiso (pacman -S archiso), or run \`wolos-build iso\` on the forge"
 clean_work
-if command -v mkarchiso >/dev/null && [ "${WOLOS_PODMAN:-0}" != 1 ]; then
-  S=; [ "$(id -u)" = 0 ] || S=sudo
-  $S mkarchiso -v -w "$WORK/work" -o "$OUT" "$P"
-else
-  command -v podman >/dev/null || die "needs mkarchiso (pacman -S archiso) or podman"
-  podman run --rm --privileged -v "$WORK:$WORK" -v "$OUT:$OUT" archlinux:base-devel \
-    bash -c "pacman -Sy --noconfirm archiso >/dev/null && mkarchiso -v -w '$WORK/work' -o '$OUT' '$P'"
-fi
+S=; [ "$(id -u)" = 0 ] || S=sudo
+$S mkarchiso -v -w "$WORK/work" -o "$OUT" "$P"
 clean_work   # disk: the pacstrap root is in the squashfs now
-# Secure Boot layout (ADR 0025, release/sb-layout.sh): shim, then systemd-boot, then one UKI. Off
-# until the WolOS Secure Boot key exists; release.yml signs it with WOLOS_SB_KEY / WOLOS_SB_CERT.
-# The shim comes from the repo the image was built from.
+# Secure Boot (ADR 0025, release/sb-layout.sh): shim, then systemd-boot, then one UKI, both signed
+# with the WolOS live-image key, so the medium starts with Secure Boot on (one blue key screen,
+# once) and off (nothing changes). `wolos-build iso` sets WOLOS_SB_LAYOUT=1 where release/sb-key.sh
+# finds the key (the forge: /etc/wolos-forge/sb). The shim comes from the repo the image was built
+# from.
 if [ "${WOLOS_SB_LAYOUT:-0}" = 1 ]; then
+  if k=$("$HERE/release/sb-key.sh" path 2>/dev/null); then
+    WOLOS_SB_KEY=$k WOLOS_SB_CERT=$("$HERE/release/sb-key.sh" cert)
+  else
+    WOLOS_SB_KEY=
+  fi
   # The layout without a signature is an image shim refuses wherever Secure Boot is on: the
-  # person's first boot would be the firmware's error screen. No key, no layout (release.yml:
-  # WOLOS_SB_CERT, build boxes: WOLOS_SB_CERT=path).
-  [ -n "${WOLOS_SB_CERT:-}" ] || die "WOLOS_SB_LAYOUT=1 needs WOLOS_SB_CERT (the signing certificate): unsigned, the image would not boot with Secure Boot on"
+  # person's first boot would be the firmware's error screen. No key, no layout (with only
+  # WOLOS_SB_CERT, release.yml signs later with its secrets).
+  [ -n "${WOLOS_SB_CERT:-}" ] || die "WOLOS_SB_LAYOUT=1 needs the live-image key (release/sb-key.sh path) or WOLOS_SB_CERT: unsigned, the image would not boot with Secure Boot on"
   mkdir -p "$WORK/shim/x86_64"
   f=$(field wolos-shim FILENAME)
   curl -fsSL --retry 5 -o "$WORK/shim/x86_64/$f" "$URL/$f"
-  $S "$HERE/release/sb-layout.sh" layout "$(ls -t "$OUT"/wolos-*.iso | head -1)" "$WORK/shim"
+  ISO=$(ls -t "$OUT"/wolos-*.iso | head -1)
+  $S "$HERE/release/sb-layout.sh" layout "$ISO" "$WORK/shim"
+  if [ -n "$WOLOS_SB_KEY" ]; then
+    $S "$HERE/release/sb-layout.sh" sign "$ISO" "$WOLOS_SB_KEY" "$WOLOS_SB_CERT"
+    $S chown "$(id -u):$(id -g)" "$ISO"
+    # A WOLOS_SB_CERT of its own (dev/test key) is what this build pins; `wolos-build release`
+    # checks again against the WolOS live key and refuses such a medium.
+    WOLOS_SB_PIN_CERT=$WOLOS_SB_CERT "$HERE/release/sb-layout.sh" check "$ISO" || die "$ISO: the Secure Boot layout does not check out (sb-layout.sh check)"
+  fi
 fi
 
-# 4. Release manifest next to the ISO.
+# 4. The medium's own hash (plan W5): mkarchiso writes wolos/x86_64/airootfs.sha512 next to the
+# squashfs ("<sha512>  airootfs.sfs"); the live wolos-medium-verify unit checks the stick against
+# it (/run/archiso/bootmnt/wolos/x86_64). No file, no self-check: refuse the image.
 ISO=$(ls -t "$OUT"/wolos-*.iso | head -1)
+bsdtar -xOf "$ISO" wolos/x86_64/airootfs.sha512 2>/dev/null | grep -Eq '^[0-9a-f]{128}  airootfs\.sfs$' ||
+  die "$ISO has no wolos/x86_64/airootfs.sha512 (mkarchiso's medium hash): the live medium check would have nothing to read"
+# 5. The download's hash (README "Verify the download": sha256sum -c) and the release manifest.
+(cd "$(dirname "$ISO")" && sha256sum "$(basename "$ISO")" > "$(basename "$ISO").sha256")
 "$HERE/release/release-manifest.sh" "$ISO" "$SNAP" "$REV" "${WOLOS_IMAGE_URL:-https://github.com/wonderlandos/wolos-packages/releases/download/$SNAP}" \
   "$VER" "$KV" > "${ISO%.iso}.json"
 # A release asset is at most 2 GiB: the ISO is one download, never split.
 SZ=$(stat -c %s "$ISO")
 [ "$SZ" -le $((2047 * 1024 * 1024)) ] || die "$ISO is $SZ bytes, over the 2047 MiB release asset limit"
-echo "image: $ISO  manifest: ${ISO%.iso}.json"
+echo "image: $ISO  sha256: $ISO.sha256  manifest: ${ISO%.iso}.json"

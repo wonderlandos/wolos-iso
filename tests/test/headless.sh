@@ -10,7 +10,10 @@ start)
   WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1 sway -c /tmp/hl.conf > /tmp/sway.log 2>&1 &
   sleep 3; ls $XDG_RUNTIME_DIR ;;
 shot)
-  export WAYLAND_DISPLAY=$(ls $XDG_RUNTIME_DIR | grep -m1 '^wayland-[0-9]*$') GDK_BACKEND=wayland
+  for s in "$XDG_RUNTIME_DIR"/wayland-[0-9]*; do
+    case ${s##*/} in *.lock) ;; *) WAYLAND_DISPLAY=${s##*/}; break ;; esac
+  done
+  export WAYLAND_DISPLAY GDK_BACKEND=wayland
   pkill -f "release/wol-"; sleep 1
   /work/target/release/$2 > /tmp/hl-$2.log 2>&1 & sleep ${4:-4}
   grim "$3"; echo "pid=$(pgrep -f release/$2)"; tail -3 /tmp/hl-$2.log ;;

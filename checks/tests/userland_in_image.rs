@@ -9,8 +9,7 @@ mod siblings;
 
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, path::PathBuf, process::Command};
 fn repo(p: &str) -> PathBuf {
-    siblings::root()
-        .join(p)
+    siblings::root().join(p)
 }
 
 fn read(p: &str) -> String {
@@ -84,10 +83,7 @@ fn image_ships_the_everyday_userland() {
 fn the_image_leaves_the_firefox_folder_alone() {
     let root = siblings::root();
     assert!(!root.join("desktop/overlay/usr/lib/firefox").exists());
-    assert!(
-        root.join("wolos-browser-config/PKGBUILD")
-            .is_file()
-    );
+    assert!(root.join("wolos-browser-config/PKGBUILD").is_file());
     for list in ["packages", "profile/packages.x86_64"] {
         let t = std::fs::read_to_string(root.join(list)).unwrap();
         assert!(!t.contains("wolos-browser-config"), "{list}");

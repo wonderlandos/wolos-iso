@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Installer MOK variant: what a person sees on a PC whose keys can't be changed, Secure Boot on,
+# before the WolOS key is in MokList. Fedora's signed shim (wolos-shim) starts, refuses the second
+# stage and opens MokManager (the blue key screen). Disk from tests/wolvm/mok-esp.sh:
+#   tests/wolvm/mok-esp.sh mok.img /usr/share/wolos/shim second-stage.efi
+#   wolvm new mok --from-image mok.img --disk 1G --secureboot --tpm
+#   wolvm journey mok tests/wolvm/journeys/mok-screen.yaml
+# MokManager waits 10 s at "Press any key", then continues booting: keep the steps tight.
+name: Secure Boot, shim refuses an unenrolled loader, MokManager
+steps:
+- start
+- wait-text: "Security Violation"
+  timeout: 90
+  caption: "shim's ERROR box, \"Verification failed: (0x1A) Security Violation\", one OK button"
+- key: ret
+  caption: OK; shim opens MokManager
+- wait-text: "Press any key to perform MOK management"
+  timeout: 30
+  caption: '"Shim UEFI key management", a 10 s countdown at the bottom'
+- key: spc
+- sleep: 2
+- shot: mok-menu
+  caption: the MokManager main menu (Continue boot, Enroll key from disk, Enroll hash from disk)
+- key: down
+- shot: mok-enroll-key-selected
+- key: ret
+- sleep: 2
+- shot: mok-file-browser
+  caption: '"Select Key": the volumes to pick the WolOS certificate from'
+- key: esc
+- sleep: 2
+- shot: mok-back
+- stop:
+  force: true

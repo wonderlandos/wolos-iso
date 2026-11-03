@@ -13,8 +13,7 @@ use std::{
     process::Command,
 };
 fn repo(p: &str) -> PathBuf {
-    siblings::root()
-        .join(p)
+    siblings::root().join(p)
 }
 
 fn read(p: &str) -> String {
@@ -77,10 +76,7 @@ fn snapshot_is_one_archive_date() {
 #[test]
 fn pacman_conf_is_pinned_and_wolos_comes_first() {
     let date = snapshot().replace('-', "/");
-    for f in [
-        "profile/pacman.conf",
-        "profile/airootfs/etc/pacman.conf",
-    ] {
+    for f in ["profile/pacman.conf", "profile/airootfs/etc/pacman.conf"] {
         let c = read(f);
         let repos: Vec<&str> = c
             .lines()
@@ -259,10 +255,8 @@ fn profile_boots_linux_wolos_quietly_with_an_install_entry() {
     );
     assert!(first.contains("ExecStart=/usr/lib/wolos/installer-session"));
     assert!(
-        repo(
-            "profile/airootfs/etc/systemd/system/multi-user.target.wants/wolos-installer.service"
-        )
-        .is_symlink()
+        repo("profile/airootfs/etc/systemd/system/multi-user.target.wants/wolos-installer.service")
+            .is_symlink()
     );
     let wait = read("profile/airootfs/etc/systemd/system/wold.service.d/wolos-live.conf");
     assert!(
@@ -281,15 +275,10 @@ fn profile_boots_linux_wolos_quietly_with_an_install_entry() {
     assert!(preset.contains("/boot/vmlinuz-linux-wolos") && preset.contains("archiso"));
 }
 
-/// WOLOS_STAGE_ONLY=1: the profile is staged from the published repo (its database names the
-/// versions; desktop packages merged; [wolos-testing] from $WOLOS_REPO_URL with signatures checked;
-/// live-only files in airootfs) and mkarchiso is not run. `sudo` is a fake: the WolOS key goes into
-/// a copy of the host's pacman keyring, which a test host need not have.
-#[test]
-fn build_stages_the_profile_from_the_published_repo() {
+/// A published repo in `d/repo` (database with wolos-base and linux-wolos, `revision`, and the
+/// `snapshot` file `wolos-build publish` writes when `snap` is Some) and a fake `sudo` in `d/bin`.
+fn fake_repo(d: &Path, snap: Option<&str>) -> (String, PathBuf) {
     use std::os::unix::fs::PermissionsExt;
-    bash_n("build.sh");
-    let d = scratch("stage");
     let repo_dir = d.join("repo");
     fs::create_dir_all(&repo_dir).unwrap();
     // A sync database: one `<name>-<ver>/desc` per package, as repo-add writes it.
@@ -299,16 +288,7 @@ fn build_stages_the_profile_from_the_published_repo() {
         fs::create_dir_all(&e).unwrap();
         fs::write(
             e.join("desc"),
-            format!("%FILENAME%
-{n}-{v}-x86_64.pkg.tar.zst
-
-%NAME%
-{n}
-
-%VERSION%
-{v}
-
-"),
+            format!("%FILENAME%\n{n}-{v}-x86_64.pkg.tar.zst\n\n%NAME%\n{n}\n\n%VERSION%\n{v}\n\n"),
         )
         .unwrap();
     }
@@ -321,25 +301,45 @@ fn build_stages_the_profile_from_the_published_repo() {
         .output()
         .unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-    fs::write(repo_dir.join("revision"), "r42
-").unwrap();
+    fs::write(repo_dir.join("revision"), "r42\n").unwrap();
+    if let Some(snap) = snap {
+        fs::write(repo_dir.join("snapshot"), format!("{snap}\n")).unwrap();
+    }
     let bin = d.join("bin");
     fs::create_dir_all(&bin).unwrap();
-    fs::write(bin.join("sudo"), "#!/bin/sh
-exit 0
-").unwrap();
+    fs::write(bin.join("sudo"), "#!/bin/sh\nexit 0\n").unwrap();
     fs::set_permissions(bin.join("sudo"), fs::Permissions::from_mode(0o755)).unwrap();
-    let url = format!("file://{}", repo_dir.display());
+    (format!("file://{}", repo_dir.display()), bin)
+}
+
+/// build.sh with WOLOS_STAGE_ONLY=1 against `url`, `sudo` faked from `bin`.
+fn stage(d: &Path, url: &str, bin: &Path) -> std::process::Output {
     // The real file, not the overlay's link: build.sh copies $HERE/profile with cp -a, and a copied
     // link would stage into this repo's profile/.
-    let o = Command::new("bash")
+    Command::new("bash")
         .arg(repo("build.sh").canonicalize().unwrap())
-        .env("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()))
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+        )
         .env("WOLOS_WORK", d.join("work"))
-        .env("WOLOS_REPO_URL", &url)
+        .env("WOLOS_REPO_URL", url)
         .env("WOLOS_STAGE_ONLY", "1")
+        .env_remove("WOLOS_SNAPSHOT_CHECK")
         .output()
-        .unwrap();
+        .unwrap()
+}
+
+/// WOLOS_STAGE_ONLY=1: the profile is staged from the published repo (its database names the
+/// versions; desktop packages merged; [wolos-testing] from $WOLOS_REPO_URL with signatures checked;
+/// live-only files in airootfs) and mkarchiso is not run. `sudo` is a fake: the WolOS key goes into
+/// a copy of the host's pacman keyring, which a test host need not have.
+#[test]
+fn build_stages_the_profile_from_the_published_repo() {
+    bash_n("build.sh");
+    let d = scratch("stage");
+    let (url, bin) = fake_repo(&d, Some(&snapshot()));
+    let o = stage(&d, &url, &bin);
     let out = String::from_utf8_lossy(&o.stdout);
     assert!(
         o.status.success(),
@@ -349,9 +349,13 @@ exit 0
     let p = d.join("work/profile");
     let pk = fs::read_to_string(p.join("packages.x86_64")).unwrap();
     assert!(
-        pk.contains("wolos-base
-") && pk.contains("steam
-"),
+        pk.contains(
+            "wolos-base
+"
+        ) && pk.contains(
+            "steam
+"
+        ),
         "{pk}"
     );
     assert!(!p.join("packages.desktop").exists());
@@ -365,21 +369,29 @@ exit 0
         "{pc}"
     );
     // No systemd-firstboot prompt on the console: the Setup Assistant asks instead.
-    let fb =
-        std::fs::read_link(p.join("airootfs/etc/systemd/system/systemd-firstboot.service"));
+    let fb = std::fs::read_link(p.join("airootfs/etc/systemd/system/systemd-firstboot.service"));
     assert_eq!(fb.unwrap(), PathBuf::from("/dev/null"));
     // The published repo replaces [wolos], signatures required (the global SigLevel).
-    assert!(!pc.contains("
+    assert!(
+        !pc.contains(
+            "
 [wolos]
-"), "{pc}");
+"
+        ),
+        "{pc}"
+    );
     let wolos = pc
-        .split("
+        .split(
+            "
 [wolos-testing]
-")
+",
+        )
         .nth(1)
         .unwrap_or_else(|| panic!("no [wolos-testing]: {pc}"))
-        .split("
-[")
+        .split(
+            "
+[",
+        )
         .next()
         .unwrap();
     assert!(
@@ -387,9 +399,27 @@ exit 0
         "{wolos}"
     );
     assert!(pc.contains("SigLevel = Required"), "{pc}");
-    // The installed system's pacman.conf keeps the published [wolos] server.
+    // The channel (CA-3): the live root names the repo and the server (release tag) the image was
+    // built from, the form install-channel reads; the rest of the file is the profile's.
     let ac = fs::read_to_string(p.join("airootfs/etc/pacman.conf")).unwrap();
-    assert!(!ac.contains("file://"));
+    let live = ac
+        .split("\n[wolos-testing]\n")
+        .nth(1)
+        .unwrap_or_else(|| panic!("live root names no [wolos-testing]: {ac}"))
+        .split("\n\n")
+        .next()
+        .unwrap();
+    assert_eq!(live.trim(), format!("Server = {url}"), "{ac}");
+    assert!(
+        !ac.contains("\n[wolos]\n") && !ac.contains("Include = /etc/pacman.d/wolos-mirrorlist"),
+        "{ac}"
+    );
+    let profile_ac = read("profile/airootfs/etc/pacman.conf");
+    assert_eq!(
+        ac.lines().count(),
+        profile_ac.lines().count(),
+        "only the WolOS section's two lines change"
+    );
     assert!(
         !ac.contains("\nDBPath"),
         "install-run names it on the installed system"
@@ -426,6 +456,75 @@ exit 0
     );
 }
 
+/// BF-8: the repo's packages were built against the Arch snapshot it publishes (`snapshot`, written
+/// by `wolos-build publish`); an image pinned to another date is refused with both dates, and a
+/// repo without the file is refused unless WOLOS_SNAPSHOT_CHECK=0 says it is a test image.
+#[test]
+fn build_refuses_a_repo_built_against_another_snapshot() {
+    let d = scratch("snapmismatch");
+    let (url, bin) = fake_repo(&d, Some("1999-01-01"));
+    let o = stage(&d, &url, &bin);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success(), "{err}");
+    assert!(
+        err.contains("1999-01-01") && err.contains(&snapshot()),
+        "both dates: {err}"
+    );
+    assert!(!d.join("work/profile").exists(), "nothing staged: {err}");
+
+    let d = scratch("snapmissing");
+    let (url, bin) = fake_repo(&d, None);
+    let o = stage(&d, &url, &bin);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success(), "{err}");
+    assert!(
+        err.contains("no snapshot file") && err.contains("WOLOS_SNAPSHOT_CHECK=0"),
+        "{err}"
+    );
+    let o = Command::new("bash")
+        .arg(repo("build.sh").canonicalize().unwrap())
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+        )
+        .env("WOLOS_WORK", d.join("work"))
+        .env("WOLOS_REPO_URL", &url)
+        .env("WOLOS_STAGE_ONLY", "1")
+        .env("WOLOS_SNAPSHOT_CHECK", "0")
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+}
+
+/// One build path (BF-9, W7): mkarchiso on the host, no container fallback; next to the ISO the
+/// download's `<iso>.sha256` (sha256sum -c form); inside it mkarchiso's medium hash, which the live
+/// medium check reads (plan W5): an ISO without it is refused.
+#[test]
+fn build_has_one_path_and_writes_the_download_and_medium_hashes() {
+    let b = read("build.sh");
+    assert!(
+        !b.contains("podman") && !b.contains("WOLOS_PODMAN"),
+        "container fallback left"
+    );
+    assert!(b.contains(r#"$S mkarchiso -v -w "$WORK/work" -o "$OUT" "$P""#));
+    assert!(
+        b.contains(r#"sha256sum "$(basename "$ISO")" > "$(basename "$ISO").sha256""#),
+        "no <iso>.sha256"
+    );
+    assert!(
+        b.contains("wolos/x86_64/airootfs.sha512"),
+        "no medium hash check"
+    );
+    // The .sha256 is written after the Secure Boot layout rewrote the ISO, never before.
+    let sb = b.find("sb-layout.sh\" layout").unwrap();
+    let sum = b.find(".sha256\")").unwrap();
+    assert!(sb < sum, "the hash must be of the final ISO");
+    assert!(
+        !repo("tests/build.sh").exists(),
+        "tests/build.sh is gone: wolos-build iso or build.sh"
+    );
+}
+
 /// The release manifest: snapshot date, repo revision, image URL and its sha256.
 #[test]
 fn release_manifest_names_snapshot_repo_image_and_hash() {
@@ -447,18 +546,26 @@ fn release_manifest_names_snapshot_repo_image_and_hash() {
     let out = String::from_utf8(o.stdout).unwrap();
     // One flat JSON object of plain values (this crate is std only: no JSON parser).
     let v = |k: &str| -> String {
-        let at = out.find(&format!("\"{k}\":")).unwrap_or_else(|| panic!("{k} in {out}"));
+        let at = out
+            .find(&format!("\"{k}\":"))
+            .unwrap_or_else(|| panic!("{k} in {out}"));
         let r = &out[at + k.len() + 3..];
         match r.strip_prefix('"') {
             Some(r) => r[..r.find('"').unwrap()].to_owned(),
             None => r[..r.find([',', '}']).unwrap()].to_owned(),
         }
     };
-    assert!(out.trim().starts_with('{') && out.trim().ends_with('}'), "{out}");
+    assert!(
+        out.trim().starts_with('{') && out.trim().ends_with('}'),
+        "{out}"
+    );
     assert_eq!(v("version"), "0.11.4");
     assert_eq!(v("snapshot"), "2026/10/20");
     assert_eq!(v("wolos_repo"), "r42");
-    assert!(!out.contains("\"cachy\""), "no cachy field since ADR 0030: {out}");
+    assert!(
+        !out.contains("\"cachy\""),
+        "no cachy field since ADR 0030: {out}"
+    );
     assert_eq!(v("kernel"), "1:1.0+7.3-5");
     assert_eq!(v("image"), "https://example.org/img/wolos-0.11-x86_64.iso");
     assert_eq!(v("size"), "9"); // "iso bytes"
@@ -551,14 +658,67 @@ fn wolos_system_files_do_not_collide_with_arch_packages() {
 }
 
 #[test]
-fn live_iso_secure_boot_layout_is_ready_and_off() {
-    // shim first (the pinned build), systemd-boot second, one UKI: behind WOLOS_SB_LAYOUT, off.
+fn live_iso_secure_boot_layout_is_ready_and_on_with_the_key() {
+    // shim first (the pinned build), systemd-boot second, one UKI, behind WOLOS_SB_LAYOUT, which
+    // `wolos-build iso` turns on where release/sb-key.sh finds the live-image key (tests/test_sbkey.sh
+    // in wolos-build). With the key, build.sh lays out, signs and checks; without it the switch
+    // stays off (build.sh dies on WOLOS_SB_LAYOUT=1 with neither key nor certificate).
     let b = read("build.sh");
     assert!(
         b.contains(r#"if [ "${WOLOS_SB_LAYOUT:-0}" = 1 ]; then"#),
         "no switch"
     );
-    assert!(b.contains(r#""$HERE/release/sb-layout.sh" layout"#));
+    let at = b
+        .find(r#"if [ "${WOLOS_SB_LAYOUT:-0}" = 1 ]; then"#)
+        .unwrap();
+    let sb = &b[at..];
+    let sb = &sb[..sb.find("\nfi\n").unwrap()];
+    for (want, why) in [
+        (
+            r#"if k=$("$HERE/release/sb-key.sh" path 2>/dev/null); then"#,
+            "key lookup",
+        ),
+        (
+            r#"WOLOS_SB_CERT=$("$HERE/release/sb-key.sh" cert)"#,
+            "its certificate",
+        ),
+        (r#"[ -n "${WOLOS_SB_CERT:-}" ] || die"#, "no key, no layout"),
+        (r#""$HERE/release/sb-layout.sh" layout"#, "layout"),
+        (
+            r#""$HERE/release/sb-layout.sh" sign "$ISO" "$WOLOS_SB_KEY" "$WOLOS_SB_CERT""#,
+            "sign",
+        ),
+        (
+            r#""$HERE/release/sb-layout.sh" check "$ISO" || die"#,
+            "check",
+        ),
+    ] {
+        assert!(
+            sb.contains(want),
+            "build.sh Secure Boot block: no {why} ({want})"
+        );
+    }
+    // Both branches of the key lookup, with the real sb-key.sh.
+    let d = scratch("sbkey");
+    let key = d.join("live.key");
+    fs::write(&key, "not a key").unwrap();
+    let path = |file: &Path| {
+        Command::new(repo("release/sb-key.sh"))
+            .arg("path")
+            .env_remove("WOLOS_SB_KEY")
+            .env("WOLOS_SB_KEY_FILE", file)
+            .output()
+            .unwrap()
+    };
+    let on = path(&key);
+    assert!(on.status.success(), "key present: {on:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&on.stdout).trim(),
+        key.to_str().unwrap()
+    );
+    let off = path(&d.join("none.key"));
+    assert_eq!(off.status.code(), Some(3), "no key: exit 3 ({off:?})");
+    assert!(off.stdout.is_empty());
     let l = read("release/sb-layout.sh");
     let shim = read("wolos-shim/PKGBUILD");
     for f in ["shimx64.efi", "mmx64.efi"] {
@@ -583,7 +743,10 @@ fn live_iso_secure_boot_layout_is_ready_and_off() {
         "::/EFI/BOOT/grubx64.efi",
         "::/EFI/BOOT/mmx64.efi",
         "::/EFI/Linux/wolos.efi",
-        "::/wolos-secureboot.cer",
+        "ENROL=ENROL_THIS_KEY_FOR_WOLOS.cer",
+        r#""::/$ENROL""#,
+        r#""::/EFI/wolos/$name.cer""#,
+        "::/EFI/wolos/README.txt",
         "--join-profile",
     ] {
         assert!(l.contains(want), "sb-layout.sh lacks {want}");
@@ -634,14 +797,16 @@ fn vm_guest_tools_start_only_in_their_hypervisor() {
         let l = fs::read_link(repo(wants).join(u)).expect("live symlink");
         assert_eq!(l, Path::new("/usr/lib/systemd/system").join(u));
     }
-    // VBoxClient --vmsvga only under VirtualBox, in every Hyprland session.
+    // wol-vbox-guest (VBoxClient resize, clipboard, drag and drop; only under VirtualBox) in every Hyprland session.
     for c in ["hyprland", "installer", "setup", "login"] {
         let s = read(&format!("desktop/overlay/usr/share/wolos/hypr/{c}.conf"));
         assert!(
-            s.contains(r#"[ "$(systemd-detect-virt)" = oracle ] && exec VBoxClient --vmsvga"#),
+            s.lines()
+                .any(|l| l.starts_with("exec-once = wol-vbox-guest")),
             "{c}.conf"
         );
     }
+    assert!(read("desktop/overlay/usr/bin/wol-vbox-guest").contains("= oracle ] || exit 0"));
     // The kernel has the VirtualBox modules: no Arch `linux` pulled in for them.
     assert!(read("wolos-base/PKGBUILD").contains("'VIRTUALBOX-GUEST-MODULES'"));
 }
