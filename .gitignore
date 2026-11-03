@@ -1,2 +1,4 @@
 checks/target/
 *.iso
+__pycache__/
+*.pyc

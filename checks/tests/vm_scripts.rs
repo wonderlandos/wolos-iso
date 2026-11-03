@@ -693,8 +693,36 @@ fn dual_boot_e2e_checks_clock_bitlocker_and_reinstall() {
     assert!(
         sc.contains("\"replace\" =>")
             && sc.contains("\"modules\"")
-            && sc.contains("tick_module(\"ai-sessions\""),
+            && sc.contains("min_by_key(|m| m.size_mb)")
+            && sc.contains("println!(\"e2e-module: {id}\")"),
         "install_scenario lacks replace or the modules scenario"
+    );
+    // The module is one the Modules page offers (f.module_list), not a record id written down: the
+    // pre-release run ticked ai-sessions, which the page has no row for, and the install never ran.
+    // The harness takes the id from the install log.
+    assert!(
+        !sc.contains("tick_module(\""),
+        "install_scenario ticks a module by a written-down id"
+    );
+    for want in [
+        "grep -a 'e2e-module: ' \"$d/install.log\"",
+        "grep -qx '$id' '$d/pending'",
+        "pacman -Q wolos-module-$id",
+        "no module ticked and installed (install log)",
+        // /var is the shared @var subvolume, not part of the slot: the queue is read there (the
+        // pre-release run read @wolos-a/var, found nothing and passed the try checks vacuously).
+        r#"slot_file "$d" lib/wolos/modules-pending "$d/pending" @var"#,
+        r#"slot_file "$d" lib/wolos/modules-attempts "$d/attempts" @var"#,
+        r#"mount -o "ro,subvol=$sv""#,
+    ] {
+        assert!(i.contains(want), "test-installer.sh lacks {want}");
+    }
+    assert!(!i.contains("ai-sessions"), "test-installer.sh names a module");
+    // The Windows fixture's NTFS boot sector carries its start and geometry, as Windows writes it
+    // (mkntfs on a loop partition can not read them and warns that Windows would not boot).
+    assert!(
+        i.contains(r#"-p "$(cat "/sys/class/block/${LOOP#/dev/}p3/start")" -H 255 -S 63"#),
+        "the Windows fixture's mkntfs lacks start and geometry"
     );
     // The fixture's header is one blkid calls BitLocker (the installer's probe reads blkid).
     let have_blkid = Command::new("sh")

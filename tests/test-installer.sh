@@ -74,7 +74,10 @@ part_hash() { # disk.raw number -> hash of the partition's bytes
 
 mk_windows_inner() {
   sudo mkfs.vfat -n SYSTEM "${LOOP}p1" >/dev/null
-  sudo mkntfs -Q -L Windows "${LOOP}p3" >/dev/null
+  # The boot sector as Windows writes it: on a loop partition mkntfs can not read the start and the
+  # geometry itself (it warns "Windows will not be able to boot from this device" and writes 0),
+  # so they are given; the installer never formats NTFS, it only shrinks it (ntfsresize).
+  sudo mkntfs -Q -L Windows -p "$(cat "/sys/class/block/${LOOP#/dev/}p3/start")" -H 255 -S 63 "${LOOP}p3" >/dev/null
   local m=$D.mnt; mkdir -p "$m"
   sudo mount "${LOOP}p1" "$m"; sudo mkdir -p "$m/EFI/Microsoft/Boot"; echo fake | sudo tee "$m/EFI/Microsoft/Boot/bootmgfw.efi" >/dev/null; sudo umount "$m"
   sudo mount -t ntfs3 "${LOOP}p3" "$m" 2>/dev/null || sudo ntfs-3g "${LOOP}p3" "$m"
@@ -196,14 +199,15 @@ adjtime() { # dir: the installed slot's /etc/adjtime (empty when it has none) in
   with_loop "$1/disk.raw" read_adjtime "$1"
 }
 
-# slot_file DIR PATH OUT: PATH of the installed slot (empty OUT when it has none).
+# slot_file DIR PATH OUT [SUBVOL]: PATH in the installed system's SUBVOL (default @wolos-a, the
+# slot; /var is the shared @var, so a /var path is lib/... in @var), empty OUT when it has none.
 slot_file() {
-  local m=$1/mnt; mkdir -p "$m"; : > "$3"
+  local m=$1/mnt sv=${4:-@wolos-a}; mkdir -p "$m"; : > "$3"
   # shellcheck disable=SC2317,SC2329  # run through with_loop, by name
   read_slot_file() {
     local p
     for p in "${LOOP}"p*; do
-      sudo mount -o ro,subvol=@wolos-a "$p" "$m" 2>/dev/null || continue
+      sudo mount -o "ro,subvol=$sv" "$p" "$m" 2>/dev/null || continue
       # shellcheck disable=SC2024  # the copy is the caller's file on purpose; only reading needs root
       [ ! -f "$m/$2" ] || sudo cat "$m/$2" > "$3"
       sudo umount "$m"
@@ -215,23 +219,29 @@ slot_file() {
 # offline_modules DIR: installed with no network and a module ticked (audit6 I6-6). The module waits
 # in modules-pending, the offline boot leaves it there (no tries used up, I6-3), and the first
 # start WITH a network installs it and empties the file (firstboot / 50-wolos-online, I6-2).
+# The module is the one install_scenario ticked (the smallest the Modules page offers), named in
+# the install log as "e2e-module: <id>". No install, no system: nothing after that is checked.
 offline_modules() {
-  local d=$1 n=e2e-offline-modules t=0 q=${WOLOS_E2E_MODULES_S:-900}
-  slot_file "$d" var/lib/wolos/modules-pending "$d/pending"
-  say "the module was queued at install (no network)" "grep -qx ai-sessions '$d/pending'"
-  slot_file "$d" var/lib/wolos/modules-attempts "$d/attempts"
+  local d=$1 n=e2e-offline-modules t=0 q=${WOLOS_E2E_MODULES_S:-900} id
+  id=$(grep -a 'e2e-module: ' "$d/install.log" | sed 's/.*e2e-module: \([a-z0-9-]*\).*/\1/' | head -n 1)
+  if [ -z "$id" ] || ! grep -aq 'wolos-install: done' "$d/install.log"; then
+    echo "E2E FAIL $S: no module ticked and installed (install log)"; return
+  fi
+  slot_file "$d" lib/wolos/modules-pending "$d/pending" @var
+  say "the module was queued at install (no network)" "grep -qx '$id' '$d/pending'"
+  slot_file "$d" lib/wolos/modules-attempts "$d/attempts" @var
   say "the offline start counted no try" "[ ! -s '$d/attempts' ]"
-  slot_file "$d" var/lib/wolos/modules-gave-up "$d/gave-up"
+  slot_file "$d" lib/wolos/modules-gave-up "$d/gave-up" @var
   say "nothing given up offline" "[ ! -s '$d/gave-up' ]"
   w set "$n" --net on >/dev/null 2>&1 || { echo "E2E FAIL $S: wolvm set --net on failed"; return; }
   w start "$n" >/dev/null || { echo "E2E FAIL $S: the online start failed"; return; }
-  until w ssh "$n" 'test ! -e /var/lib/wolos/modules-pending && pacman -Q wolos-module-ai-sessions' >/dev/null 2>&1 || [ "$t" -ge "$q" ]; do
+  until w ssh "$n" "test ! -e /var/lib/wolos/modules-pending && pacman -Q wolos-module-$id" >/dev/null 2>&1 || [ "$t" -ge "$q" ]; do
     sleep 10; t=$((t + 10))
   done
-  w ssh "$n" 'test ! -e /var/lib/wolos/modules-pending && echo pending-empty; pacman -Q wolos-module-ai-sessions; systemctl --failed --no-legend --plain; echo end' > "$d/online.txt" 2>&1 || :
+  w ssh "$n" "test ! -e /var/lib/wolos/modules-pending && echo pending-empty; pacman -Q wolos-module-$id; systemctl --failed --no-legend --plain; echo end" > "$d/online.txt" 2>&1 || :
   w stop "$n" --force >/dev/null 2>&1
   say "the pending file emptied once online" "grep -qx pending-empty '$d/online.txt'"
-  say "the module is installed" "grep -q '^wolos-module-ai-sessions ' '$d/online.txt'"
+  say "the module is installed" "grep -q '^wolos-module-$id ' '$d/online.txt'"
   say "no unit failed after the drain" "grep -qx end '$d/online.txt' && ! grep -q 'failed' '$d/online.txt'"
 }
 
