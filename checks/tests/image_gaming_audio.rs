@@ -34,6 +34,74 @@ fn end_user_image_has_no_toolchain_or_gnu_docs() {
     }
 }
 
+/// README "Userland and GNU": the base userland comes only through wolos-base (uutils-coreutils and
+/// sudo-rs there; GNU findutils, diffutils, procps-ng, util-linux and tar through `base` and
+/// mkinitcpio). A uutils replacement is not listed one by one: it joins wolos-base, after
+/// wolos-pkgbuilds `wolos-base/userland-matrix.sh` passes for it, and the README row changes with it.
+#[test]
+fn gnu_userland_is_swapped_only_inside_wolos_base_and_the_readme_says_which() {
+    let listed: Vec<String> = [
+        read("profile/packages.desktop"),
+        read("profile/packages.x86_64"),
+    ]
+    .iter()
+    .flat_map(|f| {
+        f.lines()
+            .map(|l| l.split('#').next().unwrap().to_string())
+            .collect::<Vec<_>>()
+    })
+    .flat_map(|l| l.split_whitespace().map(String::from).collect::<Vec<_>>())
+    .collect();
+    for alone in [
+        "coreutils",
+        "uutils-coreutils",
+        "sudo",
+        "sudo-rs",
+        "findutils",
+        "uutils-findutils",
+        "diffutils",
+        "uutils-diffutils",
+        "uutils-procps",
+        "uutils-util-linux",
+    ] {
+        assert!(
+            !listed.iter().any(|p| p == alone),
+            "{alone} is listed in the image; base userland comes through wolos-base"
+        );
+    }
+    // cmp (boot-setup) and diff come with mkinitcpio, which the archiso hook pulls.
+    assert!(listed.iter().any(|p| p == "mkinitcpio-archiso"));
+    let base = read("wolos-base/PKGBUILD");
+    for swapped in ["'uutils-coreutils'", "'sudo-rs'"] {
+        assert!(base.contains(swapped), "wolos-base lacks {swapped}");
+    }
+    let readme = read("README.md");
+    let section = readme
+        .split("## Userland and GNU")
+        .nth(1)
+        .and_then(|s| s.split("\n## ").next())
+        .expect("README has a Userland and GNU section");
+    for (tool, row) in [
+        ("findutils", "stays GNU"),
+        ("diffutils", "stays GNU"),
+        ("procps-ng", "stays GNU"),
+        ("util-linux", "stays GNU"),
+        ("tar", "stays GNU"),
+    ] {
+        assert!(
+            section
+                .lines()
+                .any(|l| l.starts_with(&format!("| {tool} |")) && l.contains(row)),
+            "README row for {tool} must say `{row}` while wolos-base keeps the GNU one"
+        );
+        assert!(
+            !base.contains(&format!("'uutils-{tool}'")),
+            "wolos-base swapped {tool}: change the README row and run the matrix"
+        );
+    }
+    assert!(section.contains("userland-matrix.sh"));
+}
+
 #[test]
 fn gamemode_and_rtkit_are_installed() {
     let p = read("profile/packages.desktop");

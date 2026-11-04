@@ -81,10 +81,26 @@ Boot chain and installer: wolos `docs/modules/boot.md`.
 
 ## Userland and GNU
 
-- Done in `wolos-base`: uutils-coreutils (as `coreutils`), sudo-rs (as `sudo`), bsdtar. The image lists no `gcc`, `texinfo`, `man-pages` or `base-devel` (tested in `checks/tests/image_gaming_audio.rs`); `base` does not pull them.
-- Kept on purpose: glibc and gcc-libs (Steam, Proton, NVIDIA), bash (pacman hooks), GNU findutils, diffutils, tar (no uutils package at the snapshot; pacman/dkms scripts need them), `man-db` + `less` (small, used by `wol --help`).
+Decided 2026-11-04 (order: switch to uutils what is already stable, as Ubuntu did). The gate is
+`wolos-base/userland-matrix.sh` in wolos-pkgbuilds: 170 cases, one per way WolOS code (`ours-`) and the Arch
+tools on every system (`third-`: makepkg, mkinitcpio, dkms, update-ca-trust, devtools) call the tool,
+each with the answer GNU printed. One `ours-`/`third-` difference means the tool is not switched, unless
+the script changes. `WOLOS_USERLAND_MATRIX=1 cargo test --test recipe_userland_uutils` runs it against
+the tools in `$PATH` (the image, a VM, or a directory of candidates first in `$PATH`).
+
+| Tool | In wolos-base | Evidence (2026-11-04) |
+|---|---|---|
+| coreutils | uutils-coreutils 0.12.0 as `coreutils` (exactly GNU 9.12's 102 names are linked) | In `extra`. GNU test suite 666 of 720 pass. Ubuntu 26.10 ships the same 0.12.0 with `cp`/`mv`/`rm` too; 25.10 and 26.04 kept those three GNU for open TOCTOU bugs (8 on 2026-04-22). Matrix: 52 of 52 `ours-` cases equal; `timeout -s INT -k N` exits 137 where GNU exits 124 (nothing here reads it) |
+| sudo | sudo-rs as `sudo` | Ubuntu's default since 25.10 |
+| findutils | stays GNU | Not in Arch `extra` (AUR only), so a swap means building it ourselves from crates.io 0.11.0, released 2026-11-02. GNU test suite 437 of 495 (bfs suite 280 of 317). Matrix: every `ours-`/`third-` case equal; `-ignore_readdir_race` and `xargs -t` differ (unused). Ubuntu keeps `rust-findutils` in universe, not default. Size: `find` alone is 3.9 MB, GNU findutils 1.9 MiB installed, so it would add to the image |
+| diffutils | stays GNU | Not in `extra`. 0.6.0: GNU suite 19 of 33. Fails 8 `third-` cases: no `-r -q -w -p -N`, `--label`, `--color`, `--side-by-side`, `--version` (devtools `checkpkg`/`diffpkg`, dkms, libtool use them). `cmp -s` (boot-setup) passes. `mkinitcpio` depends on it anyway |
+| procps-ng | stays GNU | No release (tag 0.0.1), no package anywhere. Built from git: `ps -ax -o pid= -o ppid=` (wol-login `stop_tree`) prints nothing, `ps -o comm= -p` is wrong, no `uptime -p`, no `top -b`. `pgrep`/`pkill` pass |
+| util-linux | stays GNU | uutils/util-linux 0.0.1 (AUR), no release; `mount`, `lsblk`, `blkid`, `sfdisk` are the installer's and the updater's |
+| tar | stays GNU | pacman/dkms scripts use GNU options; bsdtar is shipped and preferred by makepkg and mkinitcpio |
+
+- Kept on purpose: glibc and gcc-libs (Steam, Proton, NVIDIA), bash (pacman hooks), `man-db` + `less` (small, used by `wol --help`). The image lists no `gcc`, `texinfo`, `man-pages` or `base-devel` (tested in `checks/tests/image_gaming_audio.rs`, which also keeps the GNU tools above from being listed one by one or swapped without the matrix).
 - Not done: busybox/toybox. Arch packages depend on the GNU names, a second provider would add conflicts for no size gain.
-- Recommendation: revisit when `uutils-findutils` and `uutils-diffutils` reach `extra`; add them to `wolos-base` `provides`/`conflicts` then.
+- Revisit when `uutils-findutils` reaches `extra` (then run the matrix, add it to `wolos-base` `provides`/`conflicts` as for coreutils) or when uutils-diffutils passes the `third-` cases. Sources: https://documentation.ubuntu.com/release-notes/26.04/summary-for-lts-users/ (`rust-coreutils`, `sudo-rs`), https://discourse.ubuntu.com/t/an-update-on-rust-coreutils/80773 (cp/mv/rm), https://discourse.ubuntu.com/t/carefully-but-purposefully-oxidising-ubuntu/56995 (findutils/diffutils as opt-in experiments), https://github.com/uutils/findutils-tracking and https://github.com/uutils/diffutils-tracking (suite results), Launchpad `rust-coreutils`, `rust-findutils`, `rust-diffutils` publishing history.
 
 ## Tuning
 
