@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-H24 launcher-notify LN-01/LN-02: Search (Super+Space) must open on every press, and Return
+# must open the top hit, not the row under a resting pointer.
+# Bug LN-01 (0.12.1 and ui/mod.rs run_panel_app): after Search closes (Esc or a launch) its process
+# stays; the next Super+Space reaches that process, "toggles" it and nothing opens; only the press
+# after that shows the panel.
+# Bug LN-02 (ui/searchbar.rs hover_select + EventControllerMotion enter): rows are rebuilt on every
+# keystroke, the row that appears under the pointer takes the selection, Return opens it.
+# Run on an installed disk with the desktop session up (login tester / tester123, or adapt):
+# wolvm journey <vm> tests/wolvm/journeys/qa100-ln-launcher-toggle.yaml
+name: Search opens on every press and Return opens the top hit
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window
+- click: [720, 590]
+- sleep: 1.5
+- type: tester123
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop session up
+- key: meta_l-spc
+- sleep: 1.5
+- shot: ln-search-1-open
+  caption: EXPECT the Search panel
+- key: esc
+- sleep: 1
+- ssh: "runuser -u tester -- env XDG_RUNTIME_DIR=/run/user/1000 hyprctl layers | grep -c wol-panel-searchbar || true; pgrep -a wol-search || echo no-process"
+  caption: after Esc the panel is gone; a wol-search process that is still alive is the cause of LN-01
+- key: meta_l-spc
+- sleep: 1.5
+- shot: ln-search-2-second-press
+  caption: EXPECT the Search panel again. BUG LN-01 if the desktop is bare
+- ssh: "runuser -u tester -- env XDG_RUNTIME_DIR=/run/user/1000 hyprctl layers | grep wol-panel-searchbar"
+  expect: "wol-panel-searchbar"
+- key: esc
+- sleep: 0.5
+- key: meta_l-spc
+- sleep: 1.5
+# LN-02: the pointer rests where the 8th row will appear (640,600) before typing
+- click: [640, 300]
+- sleep: 0.5
+- key: meta_l-spc
+- sleep: 1.5
+- type: ls
+- sleep: 0.8
+- shot: ln-search-ls-selection
+  caption: EXPECT the first row highlighted. BUG LN-02 if the highlighted row is the one under the pointer
+- key: ret
+- sleep: 3
+- ssh: "runuser -u tester -- env XDG_RUNTIME_DIR=/run/user/1000 hyprctl clients | grep -E 'class|title'; pgrep -a wol-settings || true"
+  rc: any
+  caption: EXPECT the top hit's app; BUG if wol-settings opened 'Effects & Looks' or another subsequence hit
+- shot: ln-search-after-return
+- checkpoint: qa100-ln-launcher
+- stop

@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-H24 launcher-notify LN-20: the desktop must come back after the shell dies. On 0.12.1 the
+# session starts `wol-shell --supervised` but no supervisor process exists (crates/shell/src/supervise.rs
+# is absent in rel/0.12.1): SIGKILL on the only wol-shell leaves a black screen with no menu bar, Dock
+# or wallpaper until logout. On wave3/int the supervisor must restart it and the Notification Center
+# must come back from notify.json.
+# wolvm journey <vm> tests/wolvm/journeys/qa100-ln-shell-crash.yaml
+name: The shell comes back after a crash and keeps the Notification Center
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window
+- click: [720, 590]
+- sleep: 1.5
+- type: tester123
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop session up
+- ssh: "runuser -u tester -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus notify-send -a Keep 'Survive a crash?' 'sent before the crash'; sleep 1; ps -o pid,ppid,args -C wol-shell"
+  caption: on int EXPECT two rows (supervisor + shell); 0.12.1 shows one
+- ssh: "child=$(pgrep -x wol-shell | tail -1); kill -9 $child; sleep 6; ps -o pid,ppid,args -C wol-shell; ls -la /home/tester/.local/state/wolos/notify.json 2>&1"
+  rc: any
+  caption: EXPECT a new wol-shell row within 6 s
+- sleep: 2
+- shot: ln-shell-after-crash
+  caption: EXPECT menu bar, Dock and wallpaper. BUG LN-20 if the screen is black
+- click: [1210, 14]
+- sleep: 1.5
+- shot: ln-center-after-crash
+  caption: EXPECT 'Survive a crash?' listed in the Notification Center (int keeps notify.json)
+- checkpoint: qa100-ln-shell-crash
+- stop

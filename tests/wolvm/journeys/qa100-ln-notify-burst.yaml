@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-H24 launcher-notify LN-10..LN-14: notify-send from a script shows a banner (contradicts
+# QA-DESIGN-29 on 0.12.1), 20 at once group per app, a bad image-path leaves an empty square, the
+# Notification Center opens under the sticky banners, Do Not Disturb (Ctrl+Super+D) holds normal
+# banners and lets critical ones through, `wol notify` shows the wrong icon.
+# Run on an installed disk with the desktop session up.
+# wolvm journey <vm> tests/wolvm/journeys/qa100-ln-notify-burst.yaml
+name: Notifications from scripts, twenty at once, Center and Do Not Disturb
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window
+- click: [720, 590]
+- sleep: 1.5
+- type: tester123
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop session up
+- ssh: "runuser -u tester -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus notify-send 'Hello banner' 'from notify-send'; echo rc=$?"
+  expect: "rc=0"
+- sleep: 1
+- shot: ln-notify-simple
+  caption: EXPECT a banner top right (app NOTIFY-SEND)
+- sleep: 6
+- shot: ln-notify-gone
+  caption: EXPECT no banner after the 5 s default
+- ssh: "runuser -u tester -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus sh -c 'notify-send -a Photos -h string:image-path:/etc/passwd \"Bad picture\" \"a text file as image\"; notify-send -u critical -a Power \"Battery critically low\" \"Plug in now\"; for i in $(seq 1 20); do notify-send -a App$((i%4)) \"Burst $i\" \"body $i\" & done; wait; echo sent'"
+  expect: "sent"
+- sleep: 1.5
+- shot: ln-notify-twenty
+  caption: EXPECT four stacked groups ('4 more notifications') plus the sticky critical one; BUG LN-12 if 'Bad picture' shows an empty square
+- click: [1210, 14]
+- sleep: 1.5
+- shot: ln-notify-center
+  caption: EXPECT the Notification Center; BUG LN-13 if the sticky banners draw over its header and Clear
+- key: esc
+- sleep: 1
+- key: ctrl-meta_l-d
+- sleep: 1
+- ssh: "runuser -u tester -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus sh -c 'notify-send -a Quiet \"Held by DND\" x; notify-send -u critical -a Crit \"Critical during DND\" x; echo ok'"
+  expect: "ok"
+- sleep: 1
+- shot: ln-notify-dnd
+  caption: EXPECT a moon in the menu bar, only the critical banner
+- key: ctrl-meta_l-d
+- sleep: 0.5
+- ssh: "runuser -u tester -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus timeout 15 wol notify 'From wol' 'body'; echo rc=$?"
+  rc: any
+- sleep: 1
+- shot: ln-notify-wol
+  caption: EXPECT a WolOS/terminal icon on the 'WOL' banner; BUG LN-14 if it is another app's icon (Steam)
+- checkpoint: qa100-ln-notify
+- stop

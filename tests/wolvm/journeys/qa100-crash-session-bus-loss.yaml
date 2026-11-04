@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H25 (crash-surface) CRASH-2: the user session bus going away (dbus-broker killed, OOM,
+# crash) ends wol-shell silently (no line in wol-shell.log, no journal line, no core) and segfaults
+# xdg-desktop-portal-hyprland; the person is left with bare windows on black, no bar, no Dock, no
+# notifications (notify-send: "The name is not activatable"). Expected: the shell outlives the bus
+# (exit-on-close off on its GApplication connection) and reconnects, or the session ends cleanly.
+#   wolvm journey crash tests/wolvm/journeys/qa100-crash-session-bus-loss.yaml
+name: crash-surface, the session bus going away does not take the desktop with it
+steps:
+- wait-agent:
+  timeout: 120
+- ssh: "P=$(pgrep -u 1000 -x wol-shell | head -1); tr '\\0' '\\n' < /proc/$P/environ | grep -E '^(WAYLAND_DISPLAY|HYPRLAND_INSTANCE_SIGNATURE|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR|HOME|USER)=' > /tmp/sess.env; wc -l < /tmp/sess.env"
+  expect: "6"
+- ssh: "pgrep -u 1000 -c -x wol-shell"
+  expect: "1"
+- ssh: "pkill -KILL -u 1000 -x dbus-broker; pkill -KILL -u 1000 -x dbus-broker-lau; sleep 6; pgrep -u 1000 -c -x wol-shell; coredumpctl list --no-legend --since -20s | grep -c portal-hyprland"
+  expect: "1\n0"
+  save: after-bus-kill.txt
+  caption: CRASH-2, 0.12.1 prints 0 shells and 1 portal SIGSEGV
+- shot: after-bus-kill
+- ssh: "runuser -u $(id -nu 1000) -- env $(tr '\\n' ' ' < /tmp/sess.env) sh -c 'timeout 10 notify-send -a Probe after-bus body; echo rc=$?'"
+  expect: "rc=0"
+- logs:
+  n: 200

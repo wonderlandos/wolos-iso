@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H25 (crash-surface) CRASH-3: System Settings aborts (SIGABRT) every time it quits, focused
+# or not, with or without a sheet up. Panic "cannot access a Thread Local Storage value during or
+# after destruction" inside __call_tls_dtors -> g_object_unref -> a GObject signal -> Rust closure,
+# then "panic in a function that cannot unwind" (ui/settings/mod.rs:300-307 WINDOW thread_local).
+# Extends VIS-20 (seen as "close an inactive window"). Logged-in desktop, uid 1000 = tester.
+#   wolvm journey crash tests/wolvm/journeys/qa100-crash-settings-quit-abort.yaml
+name: crash-surface, quitting System Settings never aborts
+steps:
+- wait-agent:
+  timeout: 120
+- ssh: "P=$(pgrep -u 1000 -x wol-shell | head -1); tr '\\0' '\\n' < /proc/$P/environ | grep -E '^(WAYLAND_DISPLAY|HYPRLAND_INSTANCE_SIGNATURE|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR|HOME|USER)=' > /tmp/sess.env; wc -l < /tmp/sess.env"
+  expect: "6"
+- ssh: "runuser -u $(id -nu 1000) -- env $(tr '\\n' ' ' < /tmp/sess.env) sh -c 'setsid wol-settings General </dev/null >/tmp/settings.log 2>&1 &'; sleep 5; pgrep -c -x wol-settings"
+  expect: "1"
+- shot: settings-open
+- ssh: "runuser -u $(id -nu 1000) -- env $(tr '\\n' ' ' < /tmp/sess.env) hyprctl dispatch closewindow class:org.wolos.settings; sleep 4; pgrep -c -x wol-settings; coredumpctl list --no-legend --since -20s | grep -c 'SIGABRT.*wol-settings'; grep -c panicked /tmp/settings.log"
+  expect: "0\n0\n0"
+  save: quit-focused.txt
+  caption: CRASH-3, expected no abort; 0.12.1 prints 0, 1, 2 (SIGABRT, two panics)
+- ssh: "runuser -u $(id -nu 1000) -- env $(tr '\\n' ' ' < /tmp/sess.env) sh -c 'setsid wol-settings General </dev/null >/tmp/settings.log 2>&1 & setsid foot </dev/null >/dev/null 2>&1 &'; sleep 5; runuser -u $(id -nu 1000) -- env $(tr '\\n' ' ' < /tmp/sess.env) sh -c 'hyprctl dispatch movewindowpixel exact 300 300,class:foot; hyprctl dispatch focuswindow class:foot'; echo ready"
+  expect: "ready"
+- shot: settings-behind-terminal
+- click: [1067, 66]
+  caption: the close light of the unfocused Settings window (at 190,80, 900 wide)
+- sleep: 4
+- ssh: "pgrep -c -x wol-settings; coredumpctl list --no-legend --since -20s | grep -c 'SIGABRT.*wol-settings'"
+  expect: "0\n0"
+  save: quit-unfocused.txt
+  caption: VIS-20 / CRASH-3
+- logs:
+  n: 100
