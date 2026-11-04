@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H3: NVMe + SATA shape: WolOS erases one disk while Windows lives on another. The other disk
+# must come out byte-identical, the clock must follow Windows (install-run: Windows elsewhere counts,
+# /etc/adjtime LOCAL), WolOS must be first in the firmware order, and the Done note / boot note must
+# say how Windows starts. Build the Windows-like image with test-installer.sh's maker first:
+#   (cd tests && . ./test-installer.sh 2>/dev/null; mk_disk windows /scratch/qa100-h3/windows.raw)  # or copy mk_disk by hand
+#   sha256sum /scratch/qa100-h3/windows.raw > /scratch/qa100-h3/windows.before
+#   wolvm new two --iso wolos.iso --tpm --direct --disk 40G --drive /scratch/qa100-h3/windows.raw \
+#     --append "wolos.autoinstall=/dev/vda wolos.autologin=yes"
+#   wolvm journey two tests/wolvm/journeys/qa100-install-two-disks.yaml
+# After the journey: sha256sum -c /scratch/qa100-h3/windows.before (the raw extra disk is written in place).
+name: erase one disk while Windows stays on another disk
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- ssh: "lsblk -o NAME,SIZE,FSTYPE,PARTLABEL /dev/vdb"
+  expect: "ntfs"
+  caption: the second disk carries a Windows-like layout before anything runs
+- ssh: "/usr/lib/wolos/install-check /dev/vdb"
+  rc: any
+  expect: "os Windows"
+  caption: install-check names Windows on the other disk
+- wait-text: "wolos-install: done"
+  timeout: 1800
+- ssh: "cat /run/wolos/boot-note"
+  rc: any
+  save: boot-note.txt
+  caption: what the Done page would say (Secure Boot tier, BitLocker when it applies)
+- wait-text: "reboot: Power down"
+  timeout: 300
+  shot: false
+- stop
+- boot disk
+- start
+- wait-agent:
+  timeout: 600
+- ssh: "cat /etc/adjtime"
+  expect: "LOCAL"
+  caption: the clock is kept the Windows way because Windows stays on this computer
+- ssh: "efibootmgr | sed -n 's/^BootOrder: //p'"
+  save: bootorder.txt
+  caption: the firmware order (WolOS's entry must come first)
+- ssh: "o=$(efibootmgr | sed -n 's/^BootOrder: //p' | cut -d, -f1); efibootmgr | grep -E \"^Boot$o\\*? (WolOS|Linux Boot Manager)\" && echo wolos-first"
+  expect: "wolos-first"
+- ssh: "lsblk -no FSTYPE /dev/vdb3"
+  expect: "ntfs"
+  caption: Windows' partition is untouched (the bytes are compared on the host after the run)
+- ssh: "timeout 120 systemctl is-system-running --wait"
+  expect: "running"
+- logs:
+  n: 500

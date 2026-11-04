@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H2: package paths behind the Store, on an installed sealed system: the pacman wrapper
+# (layer vs slot), an unsigned and a tampered .wol, a full disk, and what each one says.
+# Needs a VM from install-auto.yaml (checkpoint installed-up), network up.
+# Findings covered: S-paths (wording, ENOSPC), W (signature before anything), P (channel file).
+name: package install paths on a sealed system
+steps:
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+- ssh: "btrfs property get -ts / ro; which pacman; readlink -f $(which pacman)"
+  save: sealed.txt
+- ssh: "btrfs property get -ts / ro | grep -q 'ro=true' && echo sealed"
+  expect: "sealed"
+  caption: the root is sealed (read-only); pacman on PATH is the wrapper
+# A plain package goes to a live layer, takes effect at once, says so in one sentence.
+- ssh: "pacman -S --noconfirm sl 2>&1 | tail -3; echo rc=$?"
+  timeout: 600
+  rc: any
+  save: layer-install.txt
+- ssh: "pacman -Q sl && command -v sl && echo layer-live"
+  expect: "layer-live"
+  caption: the package is usable now, without a restart
+- ssh: "ls /var/lib/wolos/layers; cat /var/lib/wolos/layers/counter 2>/dev/null"
+  rc: any
+  save: layers.txt
+- ssh: "pacman -R --noconfirm sl 2>&1 | tail -2; pacman -Q sl 2>&1 | head -1"
+  rc: any
+  save: layer-remove.txt
+# An unsigned .wol must be refused unless approved as unsigned; a tampered one always.
+- ssh: "mkdir -p /tmp/w && cd /tmp/w && printf 'garbage' > bad.wol && wol install /tmp/w/bad.wol 2>&1; echo rc=$?"
+  rc: any
+  save: bad-wol.txt
+- ssh: "wol install /tmp/w/bad.wol 2>&1 | grep -viE 'panic|backtrace|Error\\(' >/dev/null && ! wol install /tmp/w/bad.wol 2>&1 | grep -qiE 'panic|backtrace' && echo refused-cleanly"
+  expect: "refused-cleanly"
+  caption: a file that is not a package is refused with a sentence, never a crash
+- ssh: "journalctl -t wol-admind -b --no-pager -o cat | tail -20"
+  rc: any
+  save: admind-log.txt
+# A full /var: the install must fail with a sentence about space, and leave no half files.
+- ssh: "df -h /var | tail -1; fallocate -l $(( $(df --output=avail -B1 /var | tail -1) - 2*1024*1024 )) /var/tmp/qa100-fill 2>&1; df -h /var | tail -1"
+  rc: any
+  save: fill.txt
+- ssh: "pacman -S --noconfirm sl 2>&1 | tail -4; echo rc=$?"
+  timeout: 600
+  rc: any
+  save: install-disk-full.txt
+- ssh: "pacman -S --noconfirm sl 2>&1 | grep -qiE 'space|full|room' && echo says-space || echo no-space-word"
+  rc: any
+  save: disk-full-wording.txt
+  caption: with the disk full, the sentence should say the disk is full (ENOSPC), not 'are you online'
+- ssh: "rm -f /var/tmp/qa100-fill; ls /var/lib/wolos/layers; pacman -Q sl 2>&1 | head -1; btrfs subvolume list /run/wolos/top | grep -c '@wolos-tx'"
+  rc: any
+  save: after-disk-full.txt
+- ssh: "test ! -e /var/lib/wolos/layers/*.partial 2>/dev/null; ls /var/lib/wolos/layers | grep -c . ; echo cleanup-checked"
+  rc: any
+  save: layers-after-full.txt
+# The update channel: a written channel must be read by something.
+- ssh: "cat /etc/wolos/channel 2>/dev/null || echo no-channel-file; grep -rl 'wolos/channel' /usr/lib/wolos /usr/bin/wol /usr/lib/wol-admind 2>/dev/null | head"
+  rc: any
+  save: channel.txt
+  caption: "P1: who reads /etc/wolos/channel (if nothing but wol-admind writes it, the switch does nothing)"
+- logs:
+  n: 400
+- stop

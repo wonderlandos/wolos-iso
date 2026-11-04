@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-H1: Lock Screen pane: the "Lock screen when inactive" choice must be written to
+# ~/.config/hypr/hypridle.conf, hypridle must be restarted on it (one instance, reading that file),
+# the change must survive a shell reload and be listed in Restore / `wol undo`, and the undo must
+# take live effect (bug: system::after_undo only runs `hyprctl reload` for hypr/ files, so hypridle
+# keeps the undone timeouts until the next login). Also exercises the keyboard-only path of a
+# dropdown row and a plain switch whose save failure is silent (lock.rs `let _ = save_journaled`).
+# Run on an installed disk, desktop session up (Alice Liddell / curiouser):
+# wolvm journey <vm> tests/wolvm/journeys/qa100-settings-lock-undo.yaml
+name: Lock Screen choice persists, restarts hypridle once, and undo takes effect
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop session up
+- ssh: "h=$(getent passwd 1000 | cut -d: -f6); echo before:; cat \"$h/.config/hypr/hypridle.conf\" 2>/dev/null || echo no-user-conf; pgrep -u 1000 -a hypridle"
+  rc: any
+  save: hypridle-before.txt
+  caption: the shipped hypridle.conf (300 s) is in use; one hypridle process
+- ssh: "u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 sh -c 'nohup wol-settings \"Lock Screen\" >/dev/null 2>&1 &'; sleep 3; echo launched"
+  expect: "launched"
+- wait-stable:
+  timeout: 30
+- shot: lock-screen-pane
+  caption: Lock screen when inactive (5 minutes), Lock when the computer sleeps (on)
+- key: tab
+- key: tab
+  caption: focus reaches the "Lock screen when inactive" dropdown (adjust the number of tabs to the screen; search field, sidebar row, then the dropdown)
+- key: ret
+- key: down
+- key: ret
+  caption: pick the next choice (10 minutes)
+- sleep: 2
+- shot: lock-screen-changed
+  caption: the pane shows 10 minutes and the toast "Lock Screen changed · Undo"
+- ssh: "h=$(getent passwd 1000 | cut -d: -f6); f=\"$h/.config/hypr/hypridle.conf\"; grep -A2 '^listener' \"$f\" | grep -m1 'timeout = 600' && echo saved-600; n=$(pgrep -u 1000 -c -x hypridle); echo hypridle=$n; test \"$n\" = 1 && echo one-hypridle"
+  expect: "saved-600"
+  save: hypridle-after-change.txt
+  caption: the file holds the new timeout; EXPECT also one-hypridle (two instances would lock twice)
+- ssh: "u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 wol undo 2>&1; echo rc=$?"
+  rc: any
+  save: wol-undo.txt
+  caption: the Terminal undo of the Settings change (same journal as Restore > Recent Changes)
+- ssh: "h=$(getent passwd 1000 | cut -d: -f6); f=\"$h/.config/hypr/hypridle.conf\"; if [ -f \"$f\" ]; then grep -c 'timeout = 600' \"$f\" || echo reverted; else echo reverted; fi; sleep 1; pgrep -u 1000 -a hypridle; echo started-at:; ps -o lstart= -C hypridle"
+  rc: any
+  expect: "reverted"
+  save: hypridle-after-undo.txt
+  caption: the file is back; EXPECT hypridle restarted after the undo (start time newer than the change). BUG if its start time is the one from the change: the undone timeout stays live until the next login
+- shot: lock-screen-after-undo
+  caption: the open pane shows the restored choice again (Env::refresh rebuilds it)
+- ssh: "h=$(getent passwd 1000 | cut -d: -f6); chmod 500 \"$h/.config/hypr\"; echo readonly"
+  expect: "readonly"
+  caption: make the save fail (home folder not writable), to see what the pane says
+- key: tab
+- key: ret
+  caption: flip "Lock when the computer sleeps" (adjust the tabs; a plain switch, keyboard Space/Return)
+- sleep: 2
+- shot: lock-screen-save-failed
+  caption: EXPECT a status line (SAVE_FAILED) and the switch back to its saved state. BUG if the switch shows the new state with no message (lock.rs ignores the save result)
+- ssh: "h=$(getent passwd 1000 | cut -d: -f6); chmod 755 \"$h/.config/hypr\"; echo restored"
+  expect: "restored"
+- ssh: "journalctl -b --no-pager -n 60 -t wol-settings -t hypridle"
+  rc: any
+  save: journal.txt
+- checkpoint: qa100-settings-lock-undo
+- stop

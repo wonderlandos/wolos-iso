@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-H1: Settings search. Typing a word, opening a hit with Return (or a click) and then
+# clearing the field must leave the opened pane on screen. Bug (settings/mod.rs `on_query`):
+# clearing the field reopens the pane shown before the search ("General"), undoing the
+# navigation. Also checks the manual's promises: "No settings match. Try another word." and
+# Return opening the subpage that holds the row (secure boot -> Startup Security).
+# Run on an installed disk with the desktop session up (login: Alice Liddell / curiouser):
+# wolvm journey <vm> tests/wolvm/journeys/qa100-settings-search-enter.yaml
+name: Settings search opens a hit and keeps it after the field is cleared
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop session up
+- ssh: "u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 sh -c 'nohup wol-settings General >/dev/null 2>&1 &'; sleep 3; echo launched"
+  expect: "launched"
+  caption: Settings opens on General (the search field has the focus in a fresh window; press ctrl+f otherwise)
+- wait-stable:
+  timeout: 30
+- shot: settings-general
+- type: dark
+- sleep: 1
+- shot: settings-search-dark
+  caption: the sidebar keeps Appearance (and any pane with a "dark" row); the content lists the hits
+- key: ret
+- wait-stable:
+  timeout: 15
+- shot: settings-after-return
+  caption: EXPECT Appearance open (Light / Dark / Auto tiles). If General or the hits page shows, Return did not open the first hit
+- key: ctrl-a
+- key: backspace
+- sleep: 1
+- shot: settings-after-clear
+  caption: EXPECT Appearance still open. BUG if General came back (on_query reopens the pane from before the search)
+- type: secure boot
+- sleep: 1
+- key: ret
+- wait-stable:
+  timeout: 15
+- shot: settings-secure-boot
+  caption: EXPECT the Startup Security subpage (manual settings.md step 3), not Privacy & Security
+- key: ctrl-a
+- type: zzz
+- sleep: 1
+- shot: settings-search-none
+  caption: EXPECT "No Results" with "No settings match. Try another word."
+- key: ctrl-a
+- key: backspace
+- ssh: "journalctl -b --no-pager -n 60 -t wol-settings"
+  rc: any
+  save: settings-journal.txt
+- checkpoint: qa100-settings-search
+- stop

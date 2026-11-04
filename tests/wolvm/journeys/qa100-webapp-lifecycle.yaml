@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H9: lifecycle of a system web app (ADR 0048). Open twice (H9-10: one host, one window),
+# close the window while a fix waits on the password sheet (H9-05: no `wol webapp-call` child and
+# no sheet left behind), wold stopped (H9-07/H9-09: the page says so in words, no "Settings >
+# Privacy" hint), and a content-process crash (H9-09: an error page, not a blank window).
+# Needs wolos-webapps; the firewall is turned off first so Doctor has an administrator fix to offer.
+# Run on an installed disk: wolvm journey <vm> tests/wolvm/journeys/qa100-webapp-lifecycle.yaml
+name: Doctor web app lifecycle - open twice, close during a fix, wold down, crash
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: the installed system is up (login window)
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: the desktop session is up
+- ssh: "systemctl disable --now nftables.service >/dev/null 2>&1; wol doctor security --json | python3 -I -c 'import json,sys; c=[x for x in json.load(sys.stdin)[\"checks\"] if x[\"id\"]==\"security.firewall\"][0]; print(c[\"status\"], c.get(\"fix\",{}).get(\"needs_admin\"))'"
+  expect: "fail True"
+  save: firewall-check.txt
+  caption: the firewall is off, so Doctor offers "Turn on the firewall" (an administrator fix)
+- ssh: "launch() { runuser -u $(id -nu 1000) -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$') sh -c \"nohup /usr/bin/wol-webhost /usr/share/wolos/webapps/doctor/app.toml >/tmp/qa100-doctor-$1.log 2>&1 &\"; }; launch 1; sleep 3; launch 2; sleep 4; echo hosts=$(pgrep -u 1000 -x wol-webhost | wc -l); runuser -u $(id -nu 1000) -- env XDG_RUNTIME_DIR=/run/user/1000 hyprctl -j clients | python3 -I -c 'import json,sys; print(\"windows=\"+str(len([w for w in json.load(sys.stdin) if w.get(\"class\")==\"org.wolos.webapp.doctor\"])))'"
+  rc: any
+  save: open-twice.txt
+  caption: Doctor opened twice; expected one main host (plus content processes) and one window (H9-10 - today two of each)
+- shot doctor-open-twice
+- ssh: "pkill -u 1000 -x wol-webhost; sleep 2; runuser -u $(id -nu 1000) -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$') sh -c 'nohup /usr/bin/wol-webhost /usr/share/wolos/webapps/doctor/app.toml >/tmp/qa100-doctor-fix.log 2>&1 &'; echo one"
+  expect: "one"
+  caption: one fresh Doctor
+- sleep: 5
+- key: tab
+- key: tab
+- key: tab
+- key: down
+- key: down
+- key: down
+- key: down
+- key: ret
+  caption: keyboard - sidebar to Security
+- sleep: 2
+- shot doctor-security
+- key: tab
+- key: ret
+  caption: open the Firewall check
+- key: tab
+- key: ret
+  caption: "press \"Turn on the firewall\": wold asks for the password (the shell's sheet)"
+- sleep: 3
+# caption: the approval sheet names the asker (H9-08: should say Doctor, in words) and the step "firewall on"
+- shot doctor-fix-sheet
+- ssh: "pgrep -u 1000 -af 'wol webapp-call' || echo no-child-yet"
+  rc: any
+  save: webapp-call-child.txt
+  caption: wold's child `wol webapp-call … doctor.fix` while the sheet waits
+- ssh: "pkill -u 1000 -x wol-webhost; sleep 5; pgrep -u 1000 -af 'wol webapp-call' && echo child-still-running || echo child-gone"
+  expect: "child-gone"
+  save: close-during-fix.txt
+  caption: the window is closed while the sheet waits; expected no `wol webapp-call` left within 5 s (H9-05 - today it stays up to the deadline)
+- sleep: 1
+# caption: expected no approval sheet on screen (H9-05)
+- shot after-close-during-fix
+- key: esc
+- ssh: "systemctl stop wold && echo wold-stopped"
+  expect: "wold-stopped"
+  caption: wold stopped - the app must say so in words
+- ssh: "runuser -u $(id -nu 1000) -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$') sh -c 'nohup /usr/bin/wol-webhost /usr/share/wolos/webapps/doctor/app.toml >/tmp/qa100-doctor-nowold.log 2>&1 &' && echo launched"
+  expect: "launched"
+- sleep: 6
+# caption: expected the error state "Doctor could not check your computer" with "WolOS is not answering…" and a Try again button, and no "Turn it on in Settings > Privacy" (H9-07)
+- shot doctor-wold-down
+- ssh: "systemctl start wold && sleep 2 && systemctl is-active wold"
+  expect: "active"
+- key: tab
+- key: tab
+- key: ret
+  caption: Try again now that wold is back
+- sleep: 6
+# caption: expected the checks list again
+- shot doctor-recovered
+- ssh: "p=$(pgrep -u 1000 -f 'wol-webhost --content-process' | head -n1) && test -n \"$p\" && kill -KILL $p && echo content-killed"
+  expect: "content-killed"
+  caption: the page's content process is killed
+- sleep: 4
+# caption: expected an error page or a reloaded Doctor, not a blank window (H9-09)
+- shot doctor-after-crash
+- ssh: "cat /tmp/qa100-doctor-*.log; journalctl -b --no-pager -t wold -n 100 | grep -i 'webapp\\|doctor' || true"
+  rc: any
+  save: lifecycle-logs.txt
+- ssh: "pkill -u 1000 -x wol-webhost; systemctl enable --now nftables.service >/dev/null 2>&1; echo cleaned"
+  expect: "cleaned"
+- checkpoint: qa100-webapp-lifecycle
+- stop

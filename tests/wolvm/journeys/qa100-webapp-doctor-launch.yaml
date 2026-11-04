@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H9: the Doctor web app (ADR 0048) on the installed desktop. Checks the package and the
+# launcher entry are there (H9-04), the host opens a window as the person in its own
+# app-wol-<id>-<pid>-<n>.scope with the app limits, the scope is still the host's own 10 s later
+# (H9-01: the Memory Saver must not re-adopt it), and wold answers doctor.check for it (the journal
+# shows no "could not tell which app asked"). Needs the wolos-webapps and runtime packages.
+# Run on an installed disk: wolvm journey <vm> tests/wolvm/journeys/qa100-webapp-doctor-launch.yaml
+name: Doctor web app opens and talks to wold
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: the installed system is up (login window)
+- type: curiouser
+  caption: the person logs in (Alice Liddell, password curiouser)
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: the desktop session is up
+- ssh: "pacman -Q wolos-webapps && test -x /usr/bin/wol-webhost && test -f /usr/share/applications/org.wolos.webapp.doctor.desktop && test -f /usr/share/wolos/webapps/doctor/app.toml && test -f /usr/share/wolos/webapps/kit/wolkit.js && echo webapps-present"
+  expect: "webapps-present"
+  save: webapps-present.txt
+  caption: the package, the host, the launcher entry, the manifest and the kit are installed (H9-04)
+- ssh: "test ! -e /usr/share/wolos/webapps/kit/mock-bridge.js && test ! -e /usr/share/wolos/webapps/doctor/fixtures.js && test ! -d /usr/share/wolos/webapps/doctor/test && echo dev-files-absent"
+  expect: "dev-files-absent"
+  caption: development files are not installed (ADR 0048 packaging)
+- ssh: "grep -c 'wolos-host:' /usr/share/wolos/webapps/doctor/index.html || true; grep -o 'src=\"[^\"]*\"' /usr/share/wolos/webapps/doctor/index.html"
+  rc: any
+  save: doctor-scripts.txt
+  caption: "the scripts the production page loads (H9-11: no mock-bridge.js or fixtures.js expected)"
+- ssh: "u=$(id -nu 1000) && runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$') sh -c 'systemd-run --user --quiet --collect --unit=qa100-doctor-launcher gio launch /usr/share/applications/org.wolos.webapp.doctor.desktop || (nohup /usr/bin/wol-webhost /usr/share/wolos/webapps/doctor/app.toml >/tmp/qa100-doctor.log 2>&1 &)' && echo launched"
+  expect: "launched"
+  caption: Doctor is opened from its launcher entry as the person
+- sleep: 4
+- ssh: "pid=$(pgrep -u 1000 -x wol-webhost | head -n1) && test -n \"$pid\" && cat /proc/$pid/cgroup && cat /proc/$pid/cgroup | grep -E 'app-wol-org\\.wolos\\.webapp\\.doctor-[0-9]+-[0-9a-f]+\\.scope' && echo in-app-scope"
+  expect: "in-app-scope"
+  save: doctor-cgroup-start.txt
+  caption: the host runs in its own app scope app-wol-org.wolos.webapp.doctor-<pid>-<n>.scope
+- ssh: "pid=$(pgrep -u 1000 -x wol-webhost | head -n1) && unit=$(grep -oE 'app-wol-[^/]*\\.scope' /proc/$pid/cgroup | head -n1) && runuser -u $(id -nu 1000) -- env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user show -p TasksMax -p MemoryMax -p MemorySwapMax \"$unit\""
+  rc: any
+  save: doctor-scope-limits.txt
+  caption: the scope's limits (TasksMax 8192, MemoryMax 80 %, MemorySwapMax 25 %)
+- ssh: "runuser -u $(id -nu 1000) -- env XDG_RUNTIME_DIR=/run/user/1000 hyprctl -j clients | python3 -I -c 'import json,sys; c=[w for w in json.load(sys.stdin) if w.get(\"class\")==\"org.wolos.webapp.doctor\"]; print(len(c)); print(c[0][\"title\"] if c else \"\")'"
+  expect: "1\nDoctor"
+  save: doctor-window.txt
+  caption: one window with class org.wolos.webapp.doctor titled Doctor
+- shot doctor-open
+- sleep: 10
+- ssh: "pid=$(pgrep -u 1000 -x wol-webhost | head -n1) && cat /proc/$pid/cgroup && grep -qE 'app-wol-org\\.wolos\\.webapp\\.doctor-[0-9]+-[0-9a-f]+\\.scope' /proc/$pid/cgroup && echo still-in-app-scope"
+  expect: "still-in-app-scope"
+  save: doctor-cgroup-after-10s.txt
+  caption: 10 s later (five Memory Saver ticks) the host is still in its own scope, not re-adopted (H9-01)
+- ssh: "cat /run/wolos/wol-memsaver.json 2>/dev/null || cat /run/wol-memsaver.json 2>/dev/null || true"
+  rc: any
+  save: memsaver-status.txt
+  caption: the Memory Saver status with Doctor listed
+- key: tab
+- key: tab
+- key: ret
+  caption: "Tab to Check again, Enter: a second doctor.check through the bridge"
+- sleep: 6
+- shot doctor-after-check-again
+- ssh: "journalctl -b --no-pager -t wold -n 200 | grep -i 'webapp\\|could not tell which app\\|Only an app' || echo no-webapp-refusals"
+  rc: any
+  expect: "no-webapp-refusals"
+  save: wold-webapp-journal.txt
+  caption: wold refused no webapp-call (H9-01, H9-07)
+- ssh: "pid=$(pgrep -u 1000 -x wol-webhost | head -n1) && grep -E 'VmRSS|RssAnon|RssFile' /proc/$pid/status; for p in $(pgrep -u 1000 -f 'wol-webhost --content-process'); do grep VmRSS /proc/$p/status; done"
+  rc: any
+  save: doctor-memory.txt
+  caption: resident memory of the host and its content process (H9-11 baseline)
+- checkpoint: qa100-webapp-doctor-launch
+- stop

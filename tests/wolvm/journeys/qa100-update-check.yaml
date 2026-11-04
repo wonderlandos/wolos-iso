@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H2: the daily update check and `wol update check` on an installed disk, online and offline.
+# Needs a VM made from install-auto.yaml (checkpoint installed-up) with the network up:
+#   wolvm snapshot-restore inst installed-up && wolvm journey inst tests/wolvm/journeys/qa100-update-check.yaml
+# Expected behaviour (H2 report, findings U1, U2, U7):
+#   - an up-to-date system answers `wol update check` with "up to date" / [] and exit 0, never
+#     "pacman -Qu failed" (pacman -Qu exits 1 when nothing is pending: U1)
+#   - offline, update-check leaves no stamp and `wol update check` says "are you online", exit != 0
+#   - a release manifest counts only with a good signature, in the shell's reading too (U7)
+name: update check, online and offline
+steps:
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+- ssh: "systemctl list-timers --no-pager --all | grep -E 'wolos-update-(check|download)' || true"
+  save: timers.txt
+  caption: the hourly check and the daily download timers exist
+- ssh: "systemctl is-enabled wolos-update-check.timer && echo timer-enabled"
+  expect: "timer-enabled"
+# A fresh check while online.
+- ssh: "rm -f /var/lib/wolos/updates/checked; /usr/lib/wolos/update-check now; echo rc=$?; ls -l /var/lib/wolos/updates"
+  rc: any
+  save: update-check-now.txt
+- ssh: "test -s /var/lib/wolos/updates/checked && test -e /var/lib/wolos/updates/pkg && echo check-stamped"
+  expect: "check-stamped"
+  caption: online, the check leaves its stamp and its package list
+- ssh: "wol update status; echo rc=$?"
+  rc: any
+  save: update-status.txt
+- ssh: "out=$(wol update check --json 2>&1); rc=$?; echo \"rc=$rc out=$out\"; test $rc = 0 && echo check-ok"
+  expect: "check-ok"
+  save: update-check-json.txt
+  caption: "U1: a system with nothing pending still answers (exit 0, a JSON list), never 'pacman -Qu failed'"
+- ssh: "pacman -Qu >/dev/null; echo pacman-Qu-rc=$?"
+  rc: any
+  save: pacman-qu-rc.txt
+  caption: what the real pacman answers for -Qu with nothing pending (1 means U1 bites)
+# Offline: no stamp, an honest sentence.
+- ssh: "nmcli networking off || ip link set dev $(ip -o route get 1.1.1.1 2>/dev/null | awk '{print $5}') down; sleep 2; ip -br addr"
+  rc: any
+  save: offline.txt
+- ssh: "rm -f /var/lib/wolos/updates/checked; /usr/lib/wolos/update-check now; test ! -e /var/lib/wolos/updates/checked && echo no-stamp-offline"
+  expect: "no-stamp-offline"
+  caption: offline, the daily check leaves no stamp (the next hour tries again)
+- ssh: "out=$(wol update check 2>&1); rc=$?; echo \"rc=$rc out=$out\"; test $rc != 0 && echo offline-refused"
+  expect: "offline-refused"
+  save: update-check-offline.txt
+  caption: offline, `wol update check` never claims 'up to date'
+- ssh: "wol update check 2>&1 | grep -qi 'online' && echo says-online"
+  expect: "says-online"
+  caption: the sentence tells the person to check the connection, not 'pacman -Qu failed'
+# U7: a manifest with a bad signature must not count, for `wol` nor for the shell's own reading.
+- ssh: "cd /var/lib/wolos/updates && printf '{\"version\":\"9999.12\",\"snapshot\":\"2099/12/31\",\"wolos_repo\":\"r1\",\"kernel\":\"1\",\"image\":\"x\",\"sha256\":\"%s\"}' $(printf a%.0s $(seq 64)) > base && printf 00 > base.sig && date +%s > checked && wol update status --json"
+  rc: any
+  save: forged-base.txt
+- ssh: "wol update status --json | grep -q '\"base\":null' && echo forged-ignored"
+  expect: "forged-ignored"
+  caption: an unsigned manifest is not an update (wol)
+- ssh: "rm -f /var/lib/wolos/updates/base /var/lib/wolos/updates/base.sig /var/lib/wolos/updates/checked; nmcli networking on || true"
+  rc: any
+- logs:
+  n: 400
+- stop

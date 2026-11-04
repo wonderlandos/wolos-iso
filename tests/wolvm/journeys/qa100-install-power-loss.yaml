@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H3: the computer loses power in the middle of an install, then the person installs again.
+# The disk after the cut is half-written (partitions, maybe an open LUKS volume); the second run must
+# finish, the disk must boot with one WolOS entry, and nothing of the first try may linger (no stray
+# /dev/mapper/wolos* on the live system, no second ESP). Make the VM with the autoinstall words:
+#   wolvm new cut --iso wolos.iso --tpm --direct --append "wolos.autoinstall=/dev/vda wolos.autologin=yes"
+#   wolvm journey cut tests/wolvm/journeys/qa100-install-power-loss.yaml
+name: power loss during an install, then a second install on the same disk
+steps:
+- start
+- wait-text: "wolos-install: files 15"
+  timeout: 900
+  caption: the first install reached "Copying WolOS"
+- sleep: 20
+- stop:
+  force: true
+  caption: the power cut (qemu killed, nothing synced)
+- start:
+  caption: the stick again, the same autoinstall words
+- wait-agent:
+  timeout: 300
+- ssh: "lsblk -o NAME,SIZE,TYPE,FSTYPE,PARTLABEL /dev/vda; ls /dev/mapper"
+  rc: any
+  save: disk-after-cut.txt
+  caption: what the cut left on the disk (for the report; the installer must cope with any of it)
+- wait-text: "wolos-install: done"
+  timeout: 1800
+  caption: the second install finished
+- ssh: "ls /dev/mapper | grep -c '^wolos' || echo none"
+  expect: "none"
+  caption: the installer closed every volume it opened (install-run cleanup, FIX-install prelude)
+- ssh: "lsblk -no PARTTYPE /dev/vda | grep -ic c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+  expect: "1"
+  caption: exactly one startup partition (the first try's partitions did not pile up)
+- wait-text: "reboot: Power down"
+  timeout: 300
+  shot: false
+- stop
+- boot disk
+- start
+- wait-agent:
+  timeout: 600
+- ssh: "timeout 120 systemctl is-system-running --wait"
+  expect: "running"
+  caption: the installed system comes up clean
+- ssh: "ls /efi/loader/entries"
+  expect: "wolos-a.conf"
+  caption: one blessed entry
+- ssh: "ls /efi/loader/entries | grep -c '^wolos-'"
+  expect: "1"
+- ssh: "tail -n 20 /var/log/wolos-install.log"
+  rc: any
+  save: install-log-tail.txt
+- logs:
+  n: 500

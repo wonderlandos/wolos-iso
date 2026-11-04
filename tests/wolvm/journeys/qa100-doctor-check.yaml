@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H3: Doctor on a real installed system (not the fixtures): `wol doctor --json` has the shape
+# docs/modules/doctor.md promises, a fresh install reports no `fail`, a provoked failure (nftables
+# stopped) shows as security.firewall `fail` and is fixed from the CLI, `fix` of an `ok` check and of an
+# unknown id answer as documented, and the Doctor web app opens on the desktop. Run on a VM made by
+# install-auto.yaml with a user (wolos.plan=) or by qa100-setup-first-boot.yaml, booted from disk.
+#   wolvm journey inst tests/wolvm/journeys/qa100-doctor-check.yaml
+name: Doctor on an installed system
+steps:
+- start
+- wait-agent:
+  timeout: 600
+- ssh: "wol doctor --json > /run/doctor.json; python3 -c \"import json;d=json.load(open('/run/doctor.json'));assert set(d)=={'checked','ready','checks'};assert all(c['status'] in ('ok','warn','fail','skipped') for c in d['checks']);assert all('.' in c['id'] and c['area']==c['id'].split('.')[0] for c in d['checks']);print('shape-ok', len(d['checks']))\""
+  expect: "shape-ok"
+  save: doctor-shape.txt
+  caption: "{checked, ready, checks[]} with the documented statuses and <area>.<name> ids"
+- ssh: "python3 -c \"import json;d=json.load(open('/run/doctor.json'));f=[c['id'] for c in d['checks'] if c['status']=='fail'];w=[c['id'] for c in d['checks'] if c['status']=='warn'];print('fail',f);print('warn',w);print('fresh-ok' if not f else 'fresh-fail')\""
+  expect: "fresh-ok"
+  save: doctor-fresh.txt
+  caption: a fresh install has nothing to fix (the warn list is the false-positive list, H3-5)
+- ssh: "wol doctor"
+  rc: any
+  save: doctor-text.txt
+  caption: the text report (one line per check, the verdict last)
+- ssh: "wol doctor fix storage.space; echo rc=$?"
+  rc: any
+  expect: "nothing to run"
+  caption: a check with nothing to fix says so and runs nothing
+- ssh: "wol doctor fix nope.nothing; echo rc=$?"
+  rc: any
+  expect: "rc=66"
+  caption: an unknown id is NotFound (exit 66)
+- ssh: "systemctl stop nftables; sleep 1; wol doctor security"
+  rc: any
+  expect: "FAIL"
+  caption: the firewall stopped shows as a failed check with its fix line
+- ssh: "wol doctor security | grep -c 'fix: wol doctor fix security.firewall'"
+  expect: "1"
+- ssh: "systemctl start nftables; sleep 1; wol doctor security --json | python3 -c \"import json,sys;d=json.load(sys.stdin);c=[x for x in d['checks'] if x['id']=='security.firewall'][0];print(c['status'])\""
+  expect: "ok"
+  caption: back to ok once the unit runs again (the CLI fix path needs the admin password; the unit is restarted here)
+- ssh: "test -f /usr/share/wolos/webapps/doctor/app.toml && test -f /usr/share/applications/org.wolos.webapp.doctor.desktop && echo app-shipped"
+  expect: "app-shipped"
+  caption: the Doctor app and its launcher are on the image
+- ssh: "u=$(loginctl list-sessions --no-legend | awk 'NR==1{print $3}'); echo user=$u; test -n \"$u\" && echo have-user"
+  expect: "have-user"
+  save: session-user.txt
+- ssh: "u=$(loginctl list-sessions --no-legend | awk 'NR==1{print $3}'); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/$(id -u \"$u\") WAYLAND_DISPLAY=wayland-1 systemd-run --user --unit=qa100-doctor --no-block /usr/bin/wol-webhost /usr/share/wolos/webapps/doctor/app.toml && echo launched"
+  rc: any
+  expect: "launched"
+  caption: "the Doctor window opens over the session (the lock screen may be in front: unlock first on a locked start)"
+- sleep: 8
+- wait-stable:
+  timeout: 60
+- shot: doctor-window
+  caption: "the Doctor app: sidebar with areas, All checks, the summary line"
+- ssh: "u=$(loginctl list-sessions --no-legend | awk 'NR==1{print $3}'); journalctl -b --no-pager -t wol-webhost -t wold | tail -n 40"
+  rc: any
+  save: webhost-journal.txt
+- logs:
+  n: 400

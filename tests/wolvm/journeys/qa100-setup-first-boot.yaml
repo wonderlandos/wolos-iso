@@ -1,0 +1,104 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H3: the Setup Assistant on the first boot of a disk installed with no account (an autoinstall
+# without wolos.plan=). Settles README-wolvm.md:71 ("shows only the login window") against
+# wol-login.rs:170-179 (the setup assistant when no login user exists), drives Setup to Done by keyboard,
+# kills wol-setup once mid-way to see the respawn, and checks the second boot (one account: locked session).
+#   wolvm new fb --iso wolos.iso --direct --disk 32G --append "wolos.autoinstall=/dev/vda"
+#   wolvm journey fb tests/wolvm/journeys/qa100-setup-first-boot.yaml
+name: first boot without an account, the Setup Assistant, a crash, the second boot
+steps:
+- start
+- wait-text: "wolos-install: done"
+  timeout: 1800
+- wait-text: "reboot: Power down"
+  timeout: 300
+  shot: false
+- stop
+- boot disk
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+  caption: what the first boot shows (Welcome to WolOS card = Setup; a user list = login window)
+- checkpoint: first-screen
+- ssh: "pgrep -a wol-setup && echo setup-running || (pgrep -a wol-greeter; echo greeter-only)"
+  rc: any
+  expect: "setup-running"
+  save: first-greeter.txt
+  caption: H3-7, the code path says Setup; README-wolvm.md says the login window
+- ssh: "journalctl -b --no-pager -t wol-login | tail -n 20"
+  rc: any
+  save: wol-login-first.txt
+# A crash halfway: the compositor exits with wol-setup (setup.lua) and wol-login respawns it.
+- key: ret
+  caption: Continue -> Language & Region (or Finish Secure Boot Setup when a key is pending)
+- wait-stable:
+  timeout: 30
+- ssh: "pkill -9 wol-setup; sleep 12; pgrep -a wol-setup && echo respawned"
+  rc: any
+  expect: "respawned"
+  caption: Setup came back after a crash (wol-login backoff)
+- wait-stable:
+  timeout: 60
+  caption: back at Welcome (the draft is not kept; nothing was created yet)
+- checkpoint: after-crash
+- key: ret
+- wait-stable:
+  timeout: 30
+- note: "Language card: Return continues. With a cable (wolvm's user network) Wi-Fi is skipped (wired)."
+- key: ret
+- wait-stable:
+  timeout: 30
+  caption: Create Your Account, Full name focused
+- type: "Alice Liddell"
+- key: tab
+- key: tab
+- type: "curiouser"
+- key: tab
+- type: "curiouser"
+- key: tab
+- type: "white rabbit"
+- key: ret
+  caption: Continue (enabled only once the form is valid) -> Appearance
+- wait-stable:
+  timeout: 30
+- checkpoint: appearance
+- key: ret
+  caption: Continue creates the account through wol-login -> You're All Set
+- wait-stable:
+  timeout: 60
+- ssh: "id alice && grep -q '^alice:' /etc/passwd && echo account-made"
+  expect: "account-made"
+- ssh: "id -nG alice"
+  expect: "wheel"
+  caption: the first account is an administrator
+- key: esc
+- sleep: 2
+- ssh: "pgrep -a wol-setup >/dev/null && echo still-on-done"
+  rc: any
+  expect: "still-on-done"
+  caption: "Escape goes nowhere from Done (the account exists: no way back)"
+- key: ret
+  caption: Get Started -> the session
+- wait-stable:
+  timeout: 120
+- ssh: "loginctl list-sessions --no-legend | grep -q alice && echo session-up"
+  expect: "session-up"
+  timeout: 120
+- checkpoint: desktop
+# Second boot: one account, so the session starts behind its lock screen (ADR 0012), not Setup.
+- stop
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+  caption: the lock screen of alice's session, not Setup, not the login window
+- ssh: "pgrep -a wol-setup && echo setup-again || echo no-setup"
+  rc: any
+  expect: "no-setup"
+- ssh: "loginctl list-sessions --no-legend | grep -q alice && echo locked-session"
+  expect: "locked-session"
+- logs:
+  n: 500

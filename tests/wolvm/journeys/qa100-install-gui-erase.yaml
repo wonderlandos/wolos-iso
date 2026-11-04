@@ -1,0 +1,115 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H3: the Install WolOS app itself, driven by keyboard on a blank disk, Erase Disk, Password
+# protection (no --tpm, so Password is the default row), then the installed disk boots. A template:
+# the agent reads every screenshot and corrects the keys to what it sees (tests/README-wolvm.md), then
+# reruns with --from N. Cards take Return for Continue and Escape for Back (kit::assistant::keys).
+#   wolvm new gui --iso wolos.iso --direct --disk 40G --append "wolos.try quiet audit=0"
+#   wolvm journey gui tests/wolvm/journeys/qa100-install-gui-erase.yaml
+name: Install WolOS by keyboard, Erase Disk with a password, then boot
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: Welcome to WolOS (Install WolOS, Try WolOS)
+- checkpoint: begin
+- key: ret
+  caption: Install WolOS -> Language and Keyboard
+- wait-stable:
+  timeout: 30
+- key: ret
+  caption: English (United States), U.S. -> Time Zone
+- wait-stable:
+  timeout: 30
+- key: ret
+  caption: the guessed zone -> Choose a Disk
+- wait-stable:
+  timeout: 60
+  caption: one disk, already ticked (set_disks picks the only one)
+- key: ret
+  caption: -> How to Install (Erase Disk is the only method on a blank disk)
+- wait-stable:
+  timeout: 30
+- key: ret
+  caption: "-> Protect Your Files (Password ticked: no chip in this VM)"
+- wait-stable:
+  timeout: 30
+- note: "Password page: the list has focus; Tab reaches the Password field. Correct the Tab count from the screenshot."
+- key: tab
+- type: "white rabbit"
+- key: tab
+- type: "white rabbit"
+- key: ret
+  caption: -> Secure Boot (when offered) or Create Your Account
+- wait-stable:
+  timeout: 30
+- checkpoint: after-protect
+- note: "If the Secure Boot page shows (switch off), Return continues; if the Account page shows already, skip the next Return with --from."
+- key: ret
+- wait-stable:
+  timeout: 30
+- note: "Create Your Account: Full name has focus (apply() grabs it). Account name follows the full name; Tab skips it."
+- type: "Alice Liddell"
+- key: tab
+- key: tab
+- type: "curiouser"
+- key: tab
+- type: "curiouser"
+- key: ret
+  caption: -> Apps for What You Do (none ticked)
+- wait-stable:
+  timeout: 30
+- key: ret
+  caption: -> Music and Video Formats (off)
+- wait-stable:
+  timeout: 30
+- key: ret
+  caption: -> Ready to Install
+- wait-stable:
+  timeout: 30
+- checkpoint: summary
+- ssh: "journalctl -b --no-pager -n 40 -t wol-installer"
+  rc: any
+  save: installer-journal-before-install.txt
+- key: ret
+  caption: Install -> Installing WolOS
+- sleep: 5
+- shot: installing
+- ssh: "for i in $(seq 1 180); do journalctl -b --no-pager -t wol-installer | grep -q 'Done 100%' && echo installed && exit 0; journalctl -b --no-pager -t wol-installer | grep -q 'Failed' && echo failed && exit 0; sleep 10; done; echo timeout"
+  expect: "installed"
+  timeout: 1900
+  caption: the app's own progress log reached Done (wol-installer prints every report to its journal)
+- wait-stable:
+  timeout: 60
+  caption: WolOS Is Installed, with the recovery key and the toggle
+- checkpoint: done
+- ssh: "journalctl -b --no-pager -t wol-installer | tail -n 30"
+  rc: any
+  save: installer-journal.txt
+- note: "The toggle 'I wrote the key down or saved it' must be on before Restart works: Tab to it, Space, then Return."
+- key: tab
+- key: spc
+- key: ret
+  caption: Restart
+- wait-text: "reboot: Restarting"
+  timeout: 120
+  shot: false
+- stop:
+  force: true
+- boot disk
+- start
+- wait-stable:
+  timeout: 240
+  caption: the disk password prompt (plymouth) or the login window
+- type: "white rabbit"
+- key: ret
+- wait-agent:
+  timeout: 600
+- ssh: "id alice && echo account-ok"
+  expect: "account-ok"
+  caption: the account the app made exists
+- ssh: "ls /efi/loader/entries"
+  expect: "wolos-a.conf"
+- logs:
+  n: 500

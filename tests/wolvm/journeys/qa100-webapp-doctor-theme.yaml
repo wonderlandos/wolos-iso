@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H9: theme and accent sync of a system web app (ADR 0048, H9-02). The person sets dark and
+# the green accent before Doctor opens: the page must open dark and green (not light and violet);
+# a flip to light while it is open must reach the page; a page reload must keep the current theme.
+# Pictures are the evidence (doctor-dark-green, doctor-light, doctor-reloaded). Needs wolos-webapps.
+# Run on an installed disk: wolvm journey <vm> tests/wolvm/journeys/qa100-webapp-doctor-theme.yaml
+name: Doctor web app follows theme and accent
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: the installed system is up (login window)
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: the desktop session is up
+- ssh: "runuser -u $(id -nu 1000) -- env XDG_RUNTIME_DIR=/run/user/1000 sh -c 'wol theme dark && (wol theme accent green || wol accent green)' && echo themed"
+  expect: "themed"
+  caption: dark theme and the green accent, before the app opens
+- sleep: 2
+- ssh: "runuser -u $(id -nu 1000) -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$') sh -c 'nohup /usr/bin/wol-webhost /usr/share/wolos/webapps/doctor/app.toml >/tmp/qa100-doctor-theme.log 2>&1 &' && echo launched"
+  expect: "launched"
+  caption: Doctor opens
+- sleep: 5
+# caption: expected dark surfaces and a green current item in the sidebar (H9-02 - today it is light and violet)
+- shot doctor-dark-green
+- ssh: "runuser -u $(id -nu 1000) -- env XDG_RUNTIME_DIR=/run/user/1000 wol theme light && echo flipped"
+  expect: "flipped"
+  caption: the person flips to light while Doctor is open
+- sleep: 3
+# caption: expected light surfaces, still the green accent
+- shot doctor-light
+- key: f5
+  caption: reload the page (F5)
+- sleep: 4
+# caption: expected still light (H9-02 - a stale init would paint light-violet or revert on reload)
+- shot doctor-reloaded
+- ssh: "runuser -u $(id -nu 1000) -- env XDG_RUNTIME_DIR=/run/user/1000 wol theme dark && echo dark-again"
+  expect: "dark-again"
+- sleep: 3
+# caption: expected dark again with the green accent
+- shot doctor-dark-again
+- ssh: "cat /tmp/qa100-doctor-theme.log; journalctl -b --no-pager -t wold -n 50 | grep -i theme || true"
+  rc: any
+  save: doctor-theme-log.txt
+- ssh: "runuser -u $(id -nu 1000) -- env XDG_RUNTIME_DIR=/run/user/1000 sh -c 'wol theme light; wol theme accent violet || wol accent violet' && pkill -u 1000 -x wol-webhost; echo cleaned"
+  expect: "cleaned"
+  caption: back to the defaults, Doctor closed
+- checkpoint: qa100-webapp-doctor-theme
+- stop

@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H2: a system update into the other root slot that FAILS must leave the computer exactly as
+# it was: the running slot untouched, no boot entry that points at a deleted slot, the other slot's
+# image not deleted while its entry remains, and a second update must not run beside the first.
+# Needs a VM made from install-auto.yaml (checkpoint installed-up), network up for the first apply.
+# Findings covered: U3 (dangling entry after a failed replace), U4 (no update lock), U5 (Restore
+# page offers a deleted slot), U6 (failure sentence names 'wolos-a').
+name: a failed slot update leaves no trace, and two updates never run at once
+steps:
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+- ssh: "cat /proc/cmdline | tr ' ' '\\n' | grep rootflags; bootctl list --json=short"
+  save: before.txt
+- ssh: "wol update plan 2>&1"
+  rc: any
+  save: plan.txt
+  caption: the dry run lists the steps (snapshot, pacman, mkinitcpio, seal, esp-sync, set-default)
+# First: a good apply of the same release (no --release: [wolos] fixes only), so slot B exists.
+- ssh: "timeout 1700 wol update apply --yes >/tmp/apply1.log 2>&1; echo rc=$?; tail -5 /tmp/apply1.log"
+  timeout: 1800
+  rc: any
+  save: apply1.txt
+- ssh: "grep -q 'updated into wolos-b' /tmp/apply1.log && echo apply1-ok"
+  expect: "apply1-ok"
+  caption: slot B built and waits for its first boot
+- ssh: "ls /efi/loader/entries; ls /efi/EFI/wolos; btrfs subvolume list /run/wolos/top | grep -o '@wolos-[ab]\\|@wolos-tx'"
+  save: after-apply1.txt
+- ssh: "test -f /efi/loader/entries/wolos-b+3.conf && test -f /efi/EFI/wolos/wolos-b.efi && echo b-entry-and-image"
+  expect: "b-entry-and-image"
+# Boot B, bless it, so A becomes the previous restore point with a blessed entry wolos-a.conf.
+- stop
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+- ssh: "cat /proc/cmdline"
+  expect: "subvol=@wolos-b"
+  caption: the new slot boots
+- ssh: "timeout 120 systemctl is-system-running --wait; sleep 10; ls /efi/loader/entries"
+  rc: any
+  save: entries-after-b-boot.txt
+- ssh: "test -f /efi/loader/entries/wolos-b.conf && test -f /efi/loader/entries/wolos-a.conf && test -f /efi/EFI/wolos/wolos-a.efi && echo both-blessed"
+  expect: "both-blessed"
+  caption: both slots have blessed entries and images; A is the restore point
+# Now a failing update into A: offline, pacman cannot sync. The plan deletes @wolos-a first.
+- ssh: "nmcli networking off || true; sleep 2; timeout 900 wol update apply --yes >/tmp/apply2.log 2>&1; echo rc=$?; tail -5 /tmp/apply2.log"
+  timeout: 1000
+  rc: any
+  save: apply2.txt
+- ssh: "grep -q 'failed' /tmp/apply2.log && echo apply2-failed-as-expected"
+  expect: "apply2-failed-as-expected"
+- ssh: "ls /efi/loader/entries /efi/EFI/wolos; btrfs subvolume list /run/wolos/top | grep -o '@wolos-[ab]\\|@wolos-tx'; bootctl list --no-pager"
+  rc: any
+  save: after-failed-apply.txt
+- ssh: "for e in /efi/loader/entries/wolos-a*.conf; do [ -f \"$e\" ] || continue; img=$(sed -n 's/^uki //p' \"$e\"); test -f \"/efi$img\" || { echo dangling=$e; exit 1; }; done; echo no-dangling-entry"
+  expect: "no-dangling-entry"
+  caption: "U3: no boot entry points at an image or slot that is gone"
+- ssh: "if btrfs subvolume list /run/wolos/top | grep -q '@wolos-a$'; then echo slot-a-present; else ls /efi/loader/entries | grep -q '^wolos-a' && echo entry-without-slot || echo slot-a-gone-no-entry; fi"
+  rc: any
+  save: slot-a-state.txt
+  caption: "U3: either the restore point survived, or nothing offers it any more"
+- ssh: "wol restore list 2>&1; wol restore list --json 2>&1"
+  rc: any
+  save: restore-list.txt
+- ssh: "wol restore list --json | grep -o '\"name\":\"wolos-a\"' | wc -l | grep -q '^0$' && echo not-offered || (btrfs subvolume list /run/wolos/top | grep -q '@wolos-a$' && echo offered-and-exists)"
+  expect: "offered-and-exists|not-offered"
+  caption: "U5: the Restore page never offers a slot that does not exist"
+- ssh: "nmcli networking on || true; sleep 5"
+  rc: any
+# U4: two updates at once. The second must refuse at once (a lock), not race the first.
+- ssh: "(timeout 1700 wol update apply --yes >/tmp/apply3.log 2>&1; echo rc=$? >>/tmp/apply3.log) & sleep 3; timeout 60 wol update apply --yes >/tmp/apply4.log 2>&1; echo second-rc=$?; cat /tmp/apply4.log"
+  timeout: 120
+  rc: any
+  save: concurrent.txt
+- ssh: "grep -qiE 'already|in progress|another update|lock' /tmp/apply4.log && echo second-refused"
+  expect: "second-refused"
+  caption: "U4: a second update while one runs is refused with a sentence, not run beside it"
+- ssh: "n=0; while [ $n -lt 1700 ] && ! grep -q '^rc=' /tmp/apply3.log; do sleep 5; n=$((n+5)); done; tail -3 /tmp/apply3.log"
+  timeout: 1800
+  rc: any
+  save: apply3.txt
+- ssh: "btrfs subvolume list /run/wolos/top | grep -c '@wolos-tx' | grep -q '^0$' && echo no-scratch-left"
+  expect: "no-scratch-left"
+  caption: no scratch subvolume is left behind
+- logs:
+  n: 600
+- stop
