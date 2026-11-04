@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 P1 (persona "first day"): the everyday devices of a first day on an installed disk:
+# Wi-Fi on a computer without a radio, a printer, Bluetooth headphones, a USB stick, a video.
+# Runs on a VM from install-auto.yaml or qa100-p1-first-boot-ptbr.yaml (checkpoint desktop, account
+# aliceliddell / curiouser). Proves P1-10 (Wi-Fi reads On with no adapter), P1-15 (printer discovery
+# as a non-administrator says "No other printers found" instead of why), P1-12, P1-13, P1-14.
+#   wolvm journey fb tests/wolvm/journeys/qa100-p1-everyday-devices.yaml
+name: first day, part 3: Wi-Fi, printer, headphones, a stick and a video
+steps:
+- wait-agent:
+  timeout: 120
+- ssh: "nmcli radio wifi; ls /sys/class/net/*/wireless 2>/dev/null | wc -l"
+  save: wifi-radio.txt
+  caption: P1-10, nmcli says enabled with zero wireless interfaces, so Settings > Wi-Fi shows the switch On and "No other networks in range"
+- ssh: "systemctl is-active cups.socket avahi-daemon bluetooth udisks2 | tr '\\n' ' '"
+  expect: "active active active active"
+  save: daemons.txt
+- ssh: "useradd -m -G seat,video dinah && echo dinah:cheshire | chpasswd && echo second-account"
+  expect: "second-account"
+  caption: a second account that is not an administrator
+- ssh: "su -l dinah -c 'timeout 20 lpinfo -v </dev/null; echo rc=$?' 2>&1 | tail -3"
+  rc: any
+  save: lpinfo-nonadmin.txt
+  caption: P1-15, CUPS asks a non-administrator for a password that no sheet shows; the pane then says "No other printers found. Check that the printer is on"
+- ssh: "su -l aliceliddell -c 'timeout 20 lpinfo -v </dev/null; echo rc=$?' 2>&1 | tail -3"
+  rc: any
+  save: lpinfo-admin.txt
+  caption: the administrator is let through over the local socket (SystemGroup includes wheel)
+- ssh: "grep -i '^SystemGroup' /etc/cups/cups-files.conf"
+  save: cups-systemgroup.txt
+- ssh: "bluetoothctl show 2>&1 | head -2; wol bluetooth 2>&1 | head -3"
+  rc: any
+  save: bluetooth.txt
+  caption: P1-12, with or without an adapter there is no screen that scans for a new device
+- ssh: "grep -rl 'bluetoothctl.*scan\\|bt-pair' /usr/bin/wol-settings /usr/bin/wol-shell 2>/dev/null | wc -l"
+  rc: any
+  save: pairing-callers.txt
+  caption: P1-12, the pairing verbs exist in wol-admind but no shipped binary string refers to them from a screen (0 expected)
+- ssh: "pgrep -af 'volume-monitor|automount' | grep -v pgrep || echo no-automount"
+  rc: any
+  expect: "no-automount"
+  caption: P1-13, nothing mounts a plugged stick; Files must be opened and the stick clicked
+- ssh: "grep -E 'video/mp4|audio/mpeg|audio/mp4' /usr/share/wolos/mimeapps.list /etc/xdg/mimeapps.list 2>/dev/null | head -4"
+  rc: any
+  save: mimeapps.txt
+- ssh: "pacman -Q mpv ffmpeg gst-plugins-good 2>&1; pacman -Q gst-libav 2>&1"
+  rc: any
+  save: codec-packages.txt
+  caption: P1-14, Videos (mpv) plays H.264/HEVC/AAC/AC3 without the Kit; Music (GStreamer) lacks AAC until gst-libav arrives; media-formats.md says the opposite for video
+- ssh: "cat /sys/power/state; su -l aliceliddell -c 'wol power status 2>&1 | head -6'"
+  rc: any
+  save: power.txt
+  caption: sleep support as the Energy pane and Super+Esc see it (a VM wake needs QMP; sleep itself is not driven here)
+- logs:
+  n: 200

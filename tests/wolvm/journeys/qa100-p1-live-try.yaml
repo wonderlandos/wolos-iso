@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 P1 (persona "first day"): boot the ISO, click Try WolOS, look around the live desktop
+# the way a person who just downloaded WolOS does. Proves the first-day findings P1-07 (live
+# Lock Screen is a dead end), P1-11 (Flathub is not a remote on the live stick), P1-12 (no
+# Bluetooth pairing path), P1-13 (nothing mounts a USB stick by itself) and records what the
+# live desktop offers (Install WolOS first in the Dock, no idle lock).
+#   wolvm new live --iso wolos.iso --tpm --ssh --disk 40G --res 1280x800
+#   wolvm journey live tests/wolvm/journeys/qa100-p1-live-try.yaml
+name: first day, part 1: the live stick and Try WolOS
+steps:
+- start
+- wait-text: "Install WolOS: the first screen of the live image"
+  timeout: 240
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 120
+  caption: Welcome to WolOS, Try WolOS and Install WolOS (screenshot 01)
+- checkpoint: welcome
+- click: 710 599
+  caption: Try WolOS (the button left of Install WolOS at 1280x800)
+- sleep: 3
+- shot: black-between-installer-and-desktop
+  caption: P1-01, a black screen with no word while the compositor restarts into the live desktop
+- wait-stable:
+  timeout: 120
+  caption: the live desktop, Install WolOS first in the Dock
+- checkpoint: live-desktop
+- ssh: "test -e /run/wolos/try && test -e /etc/wolos-live && echo try-mark"
+  expect: "try-mark"
+- ssh: "pgrep -x hypridle >/dev/null && echo idle-lock-runs || echo no-idle-lock"
+  expect: "no-idle-lock"
+  caption: the live session never locks by itself (hyprland.lua exits before hypridle on /etc/wolos-live)
+- ssh: "passwd -S live | cut -d' ' -f2"
+  expect: "L"
+  save: live-password.txt
+  caption: P1-07, the live account has a locked password, so nothing can unlock a lock screen
+- ssh: "su -l live -c 'flatpak remotes 2>&1' | grep -q flathub && echo flathub-present || echo flathub-missing"
+  rc: any
+  expect: "flathub-missing"
+  caption: P1-11, no Flatpak remote on the live stick (/var/lib/flatpak does not exist; remotes.d is not read for the account)
+- ssh: "for b in gvfsd-mtp gvfsd-gphoto2 gvfsd-smb; do test -x /usr/lib/gvfs/$b && echo has-$b || echo no-$b; done"
+  rc: any
+  save: gvfs-backends.txt
+  caption: H4-6, phones and shares are not reachable from Files
+- ssh: "pgrep -af 'automount|udiskie|gvfs-udisks2-volume-monitor' | grep -v pgrep || echo no-automounter"
+  rc: any
+  expect: "no-automounter"
+  caption: P1-13, nothing on the desktop mounts a plugged stick or says it arrived
+- ssh: "wol bluetooth --help 2>&1 | grep -qi pair && echo cli-can-pair || echo no-pair-anywhere; grep -c pair /usr/share/wolos/agents/skills/wolos/SKILL.md"
+  rc: any
+  save: bluetooth-pair.txt
+  caption: P1-12, no pairing verb in the CLI either (Settings and Control Center list paired devices only)
+- ssh: "pacman -Q gst-libav gst-plugins-bad gst-plugins-ugly 2>&1 | grep -c 'was not found'"
+  rc: any
+  save: codecs-missing.txt
+  caption: P1-14, what the Media Codecs Kit adds; mpv and ffmpeg (Videos) already decode H.264/HEVC/AAC/AC3
+# The live Lock Screen dead end (P1-07): WolOS menu > Lock Screen, then any password.
+- click: 22 14
+  caption: the WolOS menu
+- sleep: 1
+- click: 59 133
+  caption: Lock Screen
+- sleep: 4
+- shot: live-locked
+- type: anything
+- key: ret
+- sleep: 4
+- shot: live-lock-incorrect
+  caption: '"Incorrect password" with no Restart or Shut Down on the screen: the only way out is the power button'
+- ssh: "pgrep -x wol-lock >/dev/null && echo still-locked"
+  expect: "still-locked"
+- logs:
+  n: 300
+- stop
+  caption: forced off, as the person would

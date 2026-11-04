@@ -1,0 +1,161 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 P1 (persona "first day"): first boot of an installed disk with no account, the Setup
+# Assistant in Portuguese (Brasil), the desktop that follows, Software Update, the Store, Lock,
+# the Shut Down sheet and the second boot. Proves P1-02 (language chosen in Setup never reaches
+# the session: LANG stays C.UTF-8, no pt_BR locale generated; builds on H4-3 and H1 D1), P1-03
+# (Updates Available notice next to "WolOS is up to date"; builds on H2 U7), P1-05 (no Sleep or
+# Restart reachable with the mouse), P1-06 (second boot shows the lock screen, the manual says the
+# login window; builds on H3-7) and P1-08 (hostname and time zone untouched: H3-8).
+#   wolvm new fb --iso wolos.iso --tpm --ssh --direct --disk 32G --res 1280x800 --append "wolos.autoinstall=/dev/vda"
+#   wolvm journey fb tests/wolvm/journeys/qa100-p1-first-boot-ptbr.yaml
+name: first day, part 2: Setup in Portuguese, the first desktop, update, store, lock, shut down
+steps:
+- start
+- wait-text: "wolos-install: done"
+  timeout: 1800
+- wait-text: "reboot: Power down"
+  timeout: 300
+  shot: false
+- stop
+- boot disk
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+  caption: Welcome to WolOS (the Setup Assistant; no account exists)
+- ssh: "pgrep -x wol-setup >/dev/null && echo setup-running"
+  expect: "setup-running"
+- checkpoint: setup-welcome
+- key: ret
+- wait-stable:
+  timeout: 30
+  caption: Language & Region, English (United States) ticked, Keyboard U.S.
+- click: 640 413
+  caption: Português (Brasil); the Keyboard menu follows to Brazilian (ABNT2)
+- sleep: 2
+- shot: language-ptbr
+- click: 838 599
+  caption: Continue (Wi-Fi is skipped on wolvm's wired network)
+- sleep: 3
+- shot: account-empty
+  caption: Create Your Account, still in English although Português was chosen (no translations ship)
+- type: "Alice Liddell"
+- key: tab
+- key: tab
+- type: curiouser
+- key: tab
+- type: curiouser
+- key: tab
+- type: "white rabbit"
+- sleep: 1
+- shot: account-filled
+  caption: P1-09, violet outline rectangles appear around the form groups after Tab (focus ring on containers)
+- key: ret
+- sleep: 3
+- shot: appearance
+- key: ret
+- sleep: 8
+- shot: done
+  caption: You're All Set
+- ssh: "id aliceliddell && echo account-made"
+  expect: "account-made"
+- click: 831 599
+  caption: Get Started
+- sleep: 8
+- wait-stable:
+  timeout: 120
+  caption: the first desktop
+- checkpoint: desktop
+- ssh: "loginctl list-sessions --no-legend | grep -q aliceliddell && echo session-up"
+  expect: "session-up"
+- ssh: "cat /etc/locale.conf; locale -a"
+  save: locale.txt
+  caption: P1-02, the disk has LANG=C.UTF-8 and only the C locales
+- ssh: "P=$(pgrep -u 1000 -n wol-shell); tr '\\0' '\\n' < /proc/$P/environ | grep '^LANG='"
+  expect: "LANG=C.UTF-8"
+  caption: P1-02, the session is not Portuguese (Setup wrote ~/.login_conf, a FreeBSD file: H4-3)
+- ssh: "cat /home/aliceliddell/.login_conf"
+  expect: "pt_BR"
+  save: login_conf.txt
+- ssh: "timedatectl show | grep Timezone; cat /etc/hostname"
+  save: zone-host.txt
+  caption: P1-08 / H3-8, UTC and the name wolos, nothing in Setup asked
+# Software Update: Check Now says up to date while the shell's notice counts the running release.
+- click: 891 756
+  caption: System Settings from the Dock
+- sleep: 5
+- click: 254 339
+  caption: General
+- sleep: 2
+- click: 750 281
+  caption: Software Update
+- sleep: 3
+- shot: software-update-idle
+  caption: '"Check for new WolOS packages.", no "Last checked" line (updates.md promises one)'
+- click: 1017 283
+  caption: Check Now
+- sleep: 15
+- shot: software-update-checked
+  caption: '"WolOS is up to date. All packages are current."'
+- ssh: "cat /var/lib/wolos/updates/base; echo; cat /usr/lib/wolos-release.json; echo; su -l aliceliddell -c 'wol update check --json'"
+  save: update-files.txt
+  caption: P1-03, the fetched manifest is the running version; the installed release file has only version and snapshot, so the shell cannot match them
+- ssh: "journalctl -b --no-pager -t wol-shell 2>/dev/null | grep -i 'updates' | tail -3"
+  rc: any
+  save: shell-update-log.txt
+- note: "P1-03: within a minute of the daily check a banner says 'Updates Available: WolOS has 1 update ready' while this page says up to date (screenshot after the lock below)."
+# The WolOS menu: Lock Screen, Log Out…, Shut Down…; no Sleep, no Restart (P1-05).
+- click: 22 14
+- sleep: 2
+- shot: wolos-menu
+  caption: P1-05, the menu has no Sleep and no Restart; power.md says Sleep is in "the Shut Down… panel"
+- click: 60 181
+  caption: Shut Down…
+- sleep: 3
+- shot: shutdown-sheet
+  caption: '"Are you sure you want to shut down your computer now?", a 60 s countdown, Cancel and Shut Down; no Sleep here either'
+- key: esc
+- sleep: 2
+- click: 22 14
+- sleep: 1
+- click: 59 133
+  caption: Lock Screen
+- sleep: 4
+- shot: lock
+- type: curiouser
+- key: ret
+- sleep: 5
+- shot: unlocked-with-notice
+  caption: P1-03, the Updates Available banner next to a Software Update page that says up to date
+# The Store: a system package through wol-admind (works on this ISO: a layer is made).
+- click: 827 756
+  caption: App Store from the Dock
+- sleep: 4
+- click: 1025 531
+  caption: Get on VLC
+- sleep: 4
+- shot: authenticate-sheet
+- type: curiouser
+- key: ret
+- sleep: 60
+- shot: vlc-open
+  caption: Get became Open
+- ssh: "pacman -Q vlc && ls /var/lib/extensions"
+  expect: "wolos-layer"
+  save: layer.txt
+# Second boot: one account, the lock screen (not the login window first-day.md describes).
+- stop
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+  caption: P1-06, the lock screen of aliceliddell's session with the password field, not a list of accounts
+- ssh: "pgrep -x wol-setup && echo setup-again || echo no-setup"
+  rc: any
+  expect: "no-setup"
+- ssh: "loginctl list-sessions --no-legend | grep -q aliceliddell && echo locked-session"
+  expect: "locked-session"
+- logs:
+  n: 500
