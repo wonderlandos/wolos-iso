@@ -1,0 +1,89 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA hunt 1, classes (c), (d), (e): two administrator changes before one password. General > Sharing has
+# two admin switches (Remote Login, AirPlay Receiver). Flip both before answering the sheet:
+#  - round 1 (796d66e): the sheet opens within ~300 ms of the first flip, says "2 changes are waiting",
+#    Cancel flips BOTH switches back, Allow applies BOTH with one password (bugs 3, 6, 7);
+#  - hunt-1 E1 (needs brief Y/B): after Cancel the status line must NOT say "Incorrect password. Try again."
+#  - hunt-1 C1 is the helper approval sheet, not covered here (needs `wol pkg` from a terminal).
+# The agent checks the screenshots; the ssh steps check the host state behind the switches.
+# Needs an installed disk with the test account (Alice Liddell / curiouser, an administrator).
+# Coordinates: none; the switches are reached with Tab (adjust the Tab count to the screen seen).
+name: Authenticate sheet, two requests at once, Cancel wording, Allow applies both
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop up
+- ssh: "systemctl is-enabled sshd 2>/dev/null; systemctl is-active sshd 2>/dev/null; echo before"
+  rc: any
+  save: sshd-before.txt
+  caption: Remote Login state before (sshd)
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings Sharing >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: Settings opens on General > Sharing (a subpage name works as the argument)
+- wait-stable:
+  timeout: 60
+- shot: sharing-open
+  caption: Computer name, Remote Login, AirPlay Receiver switches (AirPlay only when the build has the verb)
+# Tab: back button, name field, Remote Login switch (adjust from the screenshot).
+- key: tab tab tab
+- shot: sharing-focus-remote
+  caption: "ring on the Remote Login switch (adjust Tab count if not)"
+- key: spc
+- sleep: 0.4
+- shot: sharing-first-flip-400ms
+  caption: "ASSERT (c, bug 3/7): within 0.4 s the switch shows a spinner/insensitive AND the Authenticate sheet is already sliding in; no multi-second blank wait"
+- key: tab
+- key: spc
+  caption: "second flip (AirPlay) while the sheet is up — the Tab after the first Space may already be in the sheet's field; if the ring went into the sheet, this Space does nothing and the journey still documents the first case. Rerun with --from and adjust."
+- wait-stable:
+  timeout: 20
+- shot: sharing-two-pending
+  caption: "ASSERT (d, bug 6): both switches wait (insensitive, spinner); the sheet says the two changes are waiting"
+# Cancel: Esc is not wired on the sheet; Tab to Cancel. The sheet order is field, Cancel, Allow.
+- key: tab tab
+- shot: sharing-focus-cancel
+  caption: "ring on Cancel (adjust)"
+- key: ret
+- wait-stable:
+  timeout: 20
+- shot: sharing-after-cancel
+  caption: "ASSERT (d): BOTH switches are back to their first state and sensitive. ASSERT (e, hunt-1 E1, needs brief Y/B): the status line under the section is EMPTY — not 'Incorrect password. Try again.' (no password was typed)"
+- ssh: "systemctl is-enabled sshd 2>/dev/null; systemctl is-active sshd 2>/dev/null; echo after-cancel"
+  rc: any
+  save: sshd-after-cancel.txt
+  caption: nothing changed on the host
+# Allow path: flip Remote Login again, type the password in the sheet, Return.
+- key: shift-tab shift-tab shift-tab
+- key: spc
+- wait-stable:
+  timeout: 20
+- shot: sharing-sheet-again
+  caption: the sheet with the field focused
+- type: curiouser
+- key: ret
+- sleep: 0.5
+- shot: sharing-allow-500ms
+  caption: "ASSERT (c): the sheet shows its spinner (busy) at once; the switch still waits"
+- wait-stable:
+  timeout: 60
+- shot: sharing-allowed
+  caption: "ASSERT: the sheet is gone, Remote Login is on, status line empty"
+- ssh: "for i in $(seq 1 20); do systemctl is-active sshd >/dev/null 2>&1 && break; sleep 1; done; systemctl is-enabled sshd; systemctl is-active sshd; echo remote-login-on"
+  expect: "remote-login-on"
+  save: sshd-after-allow.txt
+  timeout: 60
+  caption: sshd is running (Remote Login on)
+- ssh: "journalctl -b --no-pager -n 60 -t wol-admind"
+  rc: any
+  save: admind-journal.txt
+- note: "Wrong-password path (round 1 bug 4): rerun from the sheet with 'type: wrong' + ret three times: the sheet says 'Incorrect password. Try again.' twice, then closes and the switch flips back (MAX_REFUSALS = 3); the status line then reads the Denied sentence — that one is legitimate."
+- checkpoint: qa-auth-two
+- stop

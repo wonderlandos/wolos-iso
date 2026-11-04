@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA hunt 1, class (f): Edit Widgets from System Settings. The gallery must come up ABOVE the Settings
+# window (round 1: its own Top-layer surface), Done must close it, Esc must close it, and `wol shell hide
+# widgets` must close it (QA 0.12.0 bug 5). Hunt-1 F1 (needs brief Z): Esc pressed while Settings still
+# has the keyboard does nothing — the gallery is OnDemand and only takes keys once clicked.
+# Needs an installed disk with the test account. The Done click needs coordinates from the screenshot.
+name: Widgets gallery above Settings; Done, Esc and hide close it
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop up
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings Widgets >/dev/null 2>&1; echo opened"
+  expect: "opened"
+- wait-stable:
+  timeout: 60
+- shot: widgets-page
+  caption: "Settings > Widgets with the 'Edit Widgets…' button"
+- key: tab tab tab
+- shot: widgets-focus-edit
+  caption: "ring on 'Edit Widgets…' (adjust the Tab count)"
+- key: ret
+- sleep: 0.5
+- shot: gallery-500ms
+  caption: "ASSERT (f, bug 5): the gallery is appearing at the bottom, drawn OVER the Settings window, not behind it"
+- wait-stable:
+  timeout: 30
+- shot: gallery-up
+  caption: "ASSERT (f): gallery fully above Settings; desktop cards show their remove buttons (edit mode). Read the Done button's centre for the click below."
+- ssh: "u=$(id -nu 1000); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" sh -c 'hyprctl layers 2>/dev/null | grep -B2 -A2 \"wol-panel-widgets\"; hyprctl -j layers 2>/dev/null | grep -o \"\\\"namespace\\\": *\\\"wol-panel-widgets\\\"\" | head -1'; echo layers-read"
+  rc: any
+  save: layers.txt
+  caption: "ASSERT (f): the compositor lists wol-panel-widgets under level 2 (top), not level 1 (bottom)"
+- key: esc
+- sleep: 1
+- shot: gallery-after-esc-unfocused
+  caption: "hunt-1 F1 (needs brief Z): Esc with Settings focused should close the gallery; today it does nothing because the OnDemand layer has no keyboard yet"
+- note: "EDIT the click below to the Done button's centre from gallery-up.png (bottom right of the gallery), then rerun with --from this step."
+- click: 1200 760
+  caption: Done
+- wait-stable:
+  timeout: 20
+- shot: gallery-after-done
+  caption: "ASSERT (f, bug 5): the gallery is gone, the cards have no remove buttons, Settings is still up"
+# Esc path with the gallery focused: open again from the socket, click inside the gallery, Esc.
+- ssh: "u=$(id -nu 1000); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" wol shell show widgets && echo shown"
+  expect: "shown"
+- wait-stable:
+  timeout: 20
+- shot: gallery-again
+- click: 640 700
+  caption: "a click on the gallery's glass (adjust: an empty spot, not a card) gives it the keyboard"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: gallery-after-esc-focused
+  caption: "ASSERT (f): Esc closed the gallery"
+- ssh: "u=$(id -nu 1000); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" sh -c 'wol shell show widgets; sleep 2; wol shell hide widgets' && echo toggled"
+  expect: "toggled"
+- wait-stable:
+  timeout: 20
+- shot: gallery-after-hide
+  caption: "ASSERT (f): hidden by the socket verb too"
+- ssh: "journalctl -b --no-pager -n 80 | grep -i 'wol-shell\\|widgets\\|layer' | tail -40"
+  rc: any
+  save: shell-journal.txt
+- checkpoint: qa-widgets
+- stop

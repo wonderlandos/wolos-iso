@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA hunt 1, class (h): Undo after two changes. Appearance: pick Light, then Dark, within the toast's
+# 6 s; "Appearance changed · Undo"; Undo reverts BOTH (the burst) and the saved theme file is what it was
+# before (round 1: the journal id travels with the change, QA 0.12.0 bug 9). Hunt-1 H1 (needs brief Z): a
+# burst over two topics names only the last one.
+# Needs an installed disk with the test account. The Undo pill is clicked (coordinates from the screenshot).
+name: Undo after two Appearance changes restores the first state
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop up
+- ssh: "h=$(getent passwd 1000 | cut -d: -f6); f=\"$h/.config/wolos/theme\"; if [ -f \"$f\" ]; then cat \"$f\"; else echo ABSENT; fi; echo; ls \"$h/.local/share/wolos/journal\" 2>/dev/null | tail -3; echo theme-before"
+  expect: "theme-before"
+  save: theme-before.txt
+  caption: the saved theme (or ABSENT = Auto) and the journal tail before
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings Appearance >/dev/null 2>&1; echo opened"
+  expect: "opened"
+- wait-stable:
+  timeout: 60
+- shot: appearance-open
+  caption: "Light / Dark / Auto tiles, accent swatches"
+- key: tab tab tab
+- shot: appearance-focus-light
+  caption: "ring on the Light tile (adjust the Tab count)"
+- key: spc
+- wait-stable:
+  timeout: 20
+- shot: appearance-light
+  caption: "ASSERT: the window restyles light; a toast 'Appearance changed · Undo' at the bottom. Read the Undo pill's centre."
+- key: tab
+- key: spc
+  caption: Dark, inside the toast's 6 s
+- wait-stable:
+  timeout: 20
+- shot: appearance-dark
+  caption: "ASSERT: dark; the toast still up (its timer restarted). hunt-1 H1: the line says 'Appearance changed' (one topic, correct here)"
+- ssh: "h=$(getent passwd 1000 | cut -d: -f6); cat \"$h/.config/wolos/theme\" 2>/dev/null; echo; echo theme-mid"
+  expect: "theme-mid"
+  save: theme-mid.txt
+  caption: the file now names the dark theme
+- note: "EDIT the click below to the Undo pill's centre from appearance-dark.png (bottom centre of the window), then rerun with --from this step. Do it within 6 s of the Dark pick: run from the 'appearance-focus-light' step."
+- click: 700 770
+  caption: Undo
+- wait-stable:
+  timeout: 20
+- shot: appearance-undone
+  caption: "ASSERT (h, bug 9): the look is back to the start (before Light); a toast 'Change undone'; no 'This was changed again later'"
+- ssh: "h=$(getent passwd 1000 | cut -d: -f6); f=\"$h/.config/wolos/theme\"; if [ -f \"$f\" ]; then cat \"$f\"; else echo ABSENT; fi; echo; echo theme-after"
+  expect: "theme-after"
+  save: theme-after.txt
+  caption: "ASSERT (h): theme-after.txt equals theme-before.txt (both ABSENT, or the same id)"
+- ssh: "h=$(getent passwd 1000 | cut -d: -f6); u=$(id -nu 1000); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 wol restore list 2>/dev/null | head -12; echo history"
+  rc: any
+  save: history.txt
+  caption: the journal: the two picks are marked undone
+- note: "H1 variant (needs brief Z): Sound > Allow louder, then within 6 s Appearance > Light. Today the toast says 'Appearance changed · Undo' and Undo reverts both; expected '2 changes · Undo' or two toasts."
+- checkpoint: qa-undo
+- stop

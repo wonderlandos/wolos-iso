@@ -1,0 +1,590 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA hunt 1, classes (a) and (b): System Settings by keyboard only. Every sidebar page is reached
+# with the arrow keys (a focus ring must sit on exactly one control: the row the cursor is on, never
+# the search row, a gap, a card or the page), then on each page Tab moves through the controls and
+# Esc leaves the page as it was. The agent inspects every screenshot (Read tool): ONE accent ring,
+# on a leaf control, no ring around a list row box, card, section or page (QA 0.12.0 bug 1), no
+# empty outlined box between groups (bug 2), and Up from "Wi-Fi" lands IN the search field, not on a
+# ring around it (hunt-1 B1, needs brief Y).
+# Needs an installed disk with the test account (Alice Liddell / curiouser) and a shell >= 796d66e.
+# wolvm journey <vm> tests/wolvm/journeys/qa-settings-keynav.yaml
+name: Settings keyboard traversal, focus rings and sidebar arrows
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop up
+# Launch helper: Settings as the person, on their Wayland display. Later launches re-use the window.
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings Wi-Fi >/dev/null 2>&1; sleep 3; pgrep -u 1000 -x wol-settings >/dev/null && echo settings-running"
+  expect: "settings-running"
+  caption: System Settings opens on Wi-Fi (the first sidebar row)
+- wait-stable:
+  timeout: 60
+- shot: keynav-00-open
+  caption: "ASSERT (a): no focus ring anywhere yet, or one ring on the first row only"
+# Class (b): Up from the first page row. Tab once puts the focus in the sidebar list (search field first).
+- key: tab
+- shot: keynav-01-tab-search
+  caption: "ASSERT: the ring is inside the search field (entry), not a rectangle around the search ROW (hunt-1 B1)"
+- key: tab
+- shot: keynav-02-tab-sidebar
+  caption: "ASSERT: ring on the Wi-Fi row only"
+- key: up
+- shot: keynav-03-up-from-first
+  caption: "ASSERT (B1, needs brief Y): focus went into the search entry (caret visible), no ring around an empty row"
+- type: wall
+- wait-stable:
+  timeout: 20
+- shot: keynav-04-search-wall
+  caption: "search narrows the sidebar to Wallpaper; no gap space while searching"
+- key: esc
+- key: backspace backspace backspace backspace
+- wait-stable:
+  timeout: 20
+- key: tab
+- key: down
+- shot: keynav-05-back-on-rows
+  caption: "ASSERT: ring on one row; the group gaps are plain space (bug 2)"
+# ---- Sidebar walk: Down once per page; a ring on the new row and nothing else. Groups end after
+# Network, Sound, Battery, Users & Groups, Hardware: the Down across a group boundary must land on
+# the next page row directly (bug 2), with no empty outlined box (screenshots 10, 14, 24, 27, 31).
+- wait-stable:
+  timeout: 30
+- shot: keynav-10-row-wi-fi
+  caption: "ASSERT (a/b): the Wi-Fi row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-11-row-bluetooth
+  caption: "ASSERT (a/b): the Bluetooth row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-12-row-network
+  caption: "ASSERT (a/b): the Network row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-13-row-notifications
+  caption: "ASSERT (a/b): the Notifications row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-14-row-sound
+  caption: "ASSERT (a/b): the Sound row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-15-row-general
+  caption: "ASSERT (a/b): the General row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-16-row-appearance
+  caption: "ASSERT (a/b): the Appearance row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-17-row-accessibility
+  caption: "ASSERT (a/b): the Accessibility row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-18-row-control-center
+  caption: "ASSERT (a/b): the Control Center row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-19-row-desktop-dock
+  caption: "ASSERT (a/b): the Desktop & Dock row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-20-row-displays
+  caption: "ASSERT (a/b): the Displays row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-21-row-wallpaper
+  caption: "ASSERT (a/b): the Wallpaper row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-22-row-effects-looks
+  caption: "ASSERT (a/b): the Effects & Looks row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-23-row-widgets
+  caption: "ASSERT (a/b): the Widgets row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-24-row-battery
+  caption: "ASSERT (a/b): the Battery row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-25-row-lock-screen
+  caption: "ASSERT (a/b): the Lock Screen row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-26-row-privacy-security
+  caption: "ASSERT (a/b): the Privacy & Security row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-27-row-users-groups
+  caption: "ASSERT (a/b): the Users & Groups row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-28-row-keyboard
+  caption: "ASSERT (a/b): the Keyboard row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-29-row-trackpad-mouse
+  caption: "ASSERT (a/b): the Trackpad & Mouse row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-30-row-printers
+  caption: "ASSERT (a/b): the Printers row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-31-row-hardware
+  caption: "ASSERT (a/b): the Hardware row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-32-row-assistants-automation
+  caption: "ASSERT (a/b): the Assistants & Automation row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-33-row-modules
+  caption: "ASSERT (a/b): the Modules row shows the ring, the page content shows none"
+- key: down
+- wait-stable:
+  timeout: 30
+- shot: keynav-34-row-restore
+  caption: "ASSERT (a/b): the Restore row shows the ring, the page content shows none"
+# ---- Per page: open by name, Tab through the first controls, Esc. Rings must be on leaf controls
+# (buttons, switches, sliders, entries, dropdowns) and never around a list-row box, a card-list,
+# a section or the page. Esc must not close Settings (it has no Esc binding) nor change a value.
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Wi-Fi' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Wi-Fi"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-wi-fi-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Wi-Fi; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-wi-fi-tab8
+  caption: "ASSERT (a): same, further down Wi-Fi"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-wi-fi-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Bluetooth' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Bluetooth"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-bluetooth-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Bluetooth; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-bluetooth-tab8
+  caption: "ASSERT (a): same, further down Bluetooth"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-bluetooth-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Network' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Network"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-network-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Network; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-network-tab8
+  caption: "ASSERT (a): same, further down Network"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-network-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Notifications' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Notifications"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-notifications-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Notifications; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-notifications-tab8
+  caption: "ASSERT (a): same, further down Notifications"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-notifications-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Sound' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Sound"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-sound-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Sound; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-sound-tab8
+  caption: "ASSERT (a): same, further down Sound"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-sound-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'General' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "General"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-general-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of General; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-general-tab8
+  caption: "ASSERT (a): same, further down General"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-general-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Appearance' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Appearance"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-appearance-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Appearance; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-appearance-tab8
+  caption: "ASSERT (a): same, further down Appearance"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-appearance-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Accessibility' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Accessibility"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-accessibility-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Accessibility; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-accessibility-tab8
+  caption: "ASSERT (a): same, further down Accessibility"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-accessibility-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Control Center' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Control Center"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-control-center-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Control Center; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-control-center-tab8
+  caption: "ASSERT (a): same, further down Control Center"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-control-center-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Desktop & Dock' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Desktop & Dock"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-desktop-dock-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Desktop & Dock; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-desktop-dock-tab8
+  caption: "ASSERT (a): same, further down Desktop & Dock"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-desktop-dock-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Displays' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Displays"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-displays-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Displays; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-displays-tab8
+  caption: "ASSERT (a): same, further down Displays"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-displays-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Wallpaper' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Wallpaper"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-wallpaper-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Wallpaper; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-wallpaper-tab8
+  caption: "ASSERT (a): same, further down Wallpaper"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-wallpaper-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Effects & Looks' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Effects & Looks"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-effects-looks-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Effects & Looks; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-effects-looks-tab8
+  caption: "ASSERT (a): same, further down Effects & Looks"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-effects-looks-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Widgets' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Widgets"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-widgets-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Widgets; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-widgets-tab8
+  caption: "ASSERT (a): same, further down Widgets"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-widgets-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Battery' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Battery"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-battery-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Battery; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-battery-tab8
+  caption: "ASSERT (a): same, further down Battery"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-battery-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Lock Screen' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Lock Screen"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-lock-screen-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Lock Screen; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-lock-screen-tab8
+  caption: "ASSERT (a): same, further down Lock Screen"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-lock-screen-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Privacy & Security' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Privacy & Security"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-privacy-security-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Privacy & Security; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-privacy-security-tab8
+  caption: "ASSERT (a): same, further down Privacy & Security"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-privacy-security-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Users & Groups' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Users & Groups"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-users-groups-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Users & Groups; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-users-groups-tab8
+  caption: "ASSERT (a): same, further down Users & Groups"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-users-groups-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Keyboard' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Keyboard"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-keyboard-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Keyboard; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-keyboard-tab8
+  caption: "ASSERT (a): same, further down Keyboard"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-keyboard-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Trackpad & Mouse' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Trackpad & Mouse"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-trackpad-mouse-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Trackpad & Mouse; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-trackpad-mouse-tab8
+  caption: "ASSERT (a): same, further down Trackpad & Mouse"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-trackpad-mouse-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Printers' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Printers"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-printers-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Printers; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-printers-tab8
+  caption: "ASSERT (a): same, further down Printers"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-printers-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Hardware' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Hardware"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-hardware-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Hardware; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-hardware-tab8
+  caption: "ASSERT (a): same, further down Hardware"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-hardware-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Assistants & Automation' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Assistants & Automation"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-assistants-automation-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Assistants & Automation; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-assistants-automation-tab8
+  caption: "ASSERT (a): same, further down Assistants & Automation"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-assistants-automation-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Modules' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Modules"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-modules-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Modules; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-modules-tab8
+  caption: "ASSERT (a): same, further down Modules"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-modules-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Restore' >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: "Restore"
+- wait-stable:
+  timeout: 30
+- key: tab tab tab tab
+- shot: page-restore-tab4
+  caption: "ASSERT (a): one ring, on a leaf control of Restore; no ring around a row box, card or page"
+- key: tab tab tab tab
+- shot: page-restore-tab8
+  caption: "ASSERT (a): same, further down Restore"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: page-restore-esc
+  caption: "ASSERT: Esc changed nothing (same values as tab8) and Settings is still open"
+- ssh: "journalctl -b --no-pager -n 120 -t wol-settings --user-unit='*' 2>/dev/null; journalctl -b --no-pager -n 60 | grep -i 'wol-settings\\|gtk' | tail -40"
+  rc: any
+  save: settings-journal.txt
+  caption: GTK criticals during the traversal, if any
+- checkpoint: qa-keynav-done
+- stop

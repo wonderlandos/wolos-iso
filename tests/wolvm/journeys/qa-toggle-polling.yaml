@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA hunt 1, class (g): a switch flipped while the page's 1 s poll rewrites it. Sound > "Automatic input
+# level" and "Reduce background noise" are redrawn from every SoundState; three fast flips must end with
+# the knob fully on one side and that side equal to the service's state (QA 0.12.0 bug 8; round 1 added
+# `Echoes`). Then the Control Center Night Light tile: tapped, the tile must not flash back to the old
+# state on the next poll (hunt-1 G2, needs brief X).
+# Needs an installed disk with the test account and PipeWire running (the VM's virtio sound or a null sink).
+# Keyboard only on Settings; the Control Center needs a click (coordinates from the screenshot).
+name: switches flipped during polling keep the user's flip
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop up
+- ssh: "u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 wpctl status 2>/dev/null | head -40; echo wpctl-done"
+  rc: any
+  save: wpctl-before.txt
+  caption: the audio graph before
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings Sound >/dev/null 2>&1; echo opened"
+  expect: "opened"
+- wait-stable:
+  timeout: 60
+- shot: sound-open
+  caption: "Sound page: output, input, the Input section's switches"
+# Tab to "Automatic input level" (count from the screenshot: sliders and mutes come first).
+- key: tab tab tab tab tab tab
+- shot: sound-focus-auto-level
+  caption: "ring on the Automatic input level switch (adjust the Tab count)"
+- key: spc spc spc
+  caption: three flips 0.2 s apart (press delay), inside one poll period
+- sleep: 0.6
+- shot: sound-auto-level-600ms
+  caption: "ASSERT (g, bug 8): the knob is fully on one side (no half-way handle); the switch may be insensitive while it waits"
+- wait-stable:
+  timeout: 20
+- shot: sound-auto-level-settled
+  caption: "ASSERT: knob on one side, sensitive again; note which side"
+- ssh: "h=$(getent passwd 1000 | cut -d: -f6); ls \"$h/.config/wireplumber/wireplumber.conf.d/\" 2>/dev/null; grep -rl 'auto\\|agc\\|filter' \"$h/.config/wireplumber\" \"$h/.config/pipewire\" 2>/dev/null; u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 wpctl status 2>/dev/null | grep -i -A3 'Filters\\|Sources' | head -30; echo state-read"
+  rc: any
+  save: sound-state-after.txt
+  caption: "the service/config state: the agent compares it with the side the switch shows (they must agree)"
+- key: tab
+- key: spc spc spc
+  caption: the same on Reduce background noise
+- sleep: 0.6
+- shot: sound-noise-600ms
+  caption: "ASSERT (g): knob fully on one side"
+- wait-stable:
+  timeout: 20
+- shot: sound-noise-settled
+- key: tab
+- key: spc
+- sleep: 2.5
+  caption: a single flip of Allow louder, then two poll periods
+- shot: sound-louder-after-2-polls
+  caption: "ASSERT (g): the switch did not flip back and forth (compare with the previous shot: one state, no handle mid-way); the sliders' ranges follow boost"
+# Control Center tile echo (hunt-1 G2). Open it from the shell socket as the person; tap Night Light.
+- ssh: "u=$(id -nu 1000); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" wol shell show control-center && echo cc-shown"
+  expect: "cc-shown"
+- wait-stable:
+  timeout: 20
+- shot: cc-open
+  caption: "Control Center: find the Night Light tile (or Appearance/Dark) and read its pixel centre for the click below"
+- note: "EDIT the click below to the Night Light tile's centre from cc-open.png, then rerun with --from this step."
+- click: 1100 300
+  caption: tap Night Light
+- sleep: 0.3
+- shot: cc-tile-300ms
+  caption: "ASSERT (g, G2, needs brief X): the tile shows the NEW state"
+- sleep: 1.2
+- shot: cc-tile-1500ms
+  caption: "ASSERT (g, G2): still the new state — a flash back to the old state here is the poll rewriting a tile the user just touched"
+- wait-stable:
+  timeout: 20
+- shot: cc-tile-settled
+- ssh: "u=$(id -nu 1000); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" wol shell hide control-center; echo hidden"
+  expect: "hidden"
+- checkpoint: qa-toggle-polling
+- stop
