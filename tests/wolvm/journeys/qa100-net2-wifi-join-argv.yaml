@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H11 round 2 (network, live) NET2-1: every password join from Settings, Control Center,
+# `wol wifi join` and wol-admind runs `nmcli dev wifi connect <ssid> passwd-file /dev/stdin`,
+# which nmcli 1.58 rejects ("invalid extra argument 'passwd-file'", rc 2) in 50 ms. The person
+# reads "didn't accept that password". Two virtual Wi-Fi networks come from mac80211_hwsim (in
+# the shipped kernel): one access point in a network namespace with a tiny DHCP server, the
+# station on wlan0 managed by NetworkManager + iwd. Runs from the welcome screen.
+#   wolvm new net2 --iso wolos.iso --ssh
+#   wolvm journey net2 tests/wolvm/journeys/qa100-net2-wifi-join-argv.yaml
+name: "network r2, part 1: Wi-Fi join argv vs nmcli, hwsim AP, roaming"
+steps:
+- start
+- wait-agent:
+  timeout: 300
+# One AP (QA-Roam / roam12345) on phy1 inside netns ap1; DHCP 192.168.51.0/24 from a 30-line python server.
+- ssh: "modprobe mac80211_hwsim radios=3 && sleep 3 && systemctl restart iwd && sleep 3; ip netns add ap1; iw phy phy1 set netns name ap1; ip netns exec ap1 iw phy phy1 interface add wlan1 type managed 2>/dev/null; ip netns exec ap1 ip link set lo up; ip netns exec ap1 ip link set wlan1 up; ip netns exec ap1 ip addr add 192.168.51.1/24 dev wlan1; printf 'ctrl_interface=/tmp/wpa_ap1\\nnetwork={\\n ssid=\"QA-Roam\"\\n mode=2\\n frequency=2412\\n key_mgmt=WPA-PSK\\n proto=RSN\\n pairwise=CCMP\\n psk=\"roam12345\"\\n}\\n' > /tmp/ap1.conf; ip netns exec ap1 wpa_supplicant -B -i wlan1 -c /tmp/ap1.conf -f /tmp/ap1.log; sleep 2; ip netns exec ap1 iw dev wlan1 info | grep -E 'type|ssid'; sleep 8; nmcli dev wifi list --rescan yes | grep -c QA-Roam"
+  rc: any
+  expect: "type AP"
+  save: hwsim-ap.txt
+  caption: "an AP named QA-Roam is up and NetworkManager lists it"
+# NET2-1: the exact argv the shell and admind use (controls.rs wifi_join, admin.rs nm_join).
+- ssh: "printf '802-11-wireless-security.psk:roam12345\\n' | nmcli dev wifi connect QA-Roam passwd-file /dev/stdin 2>&1; echo argv-rc=$?; echo roam12345 | wol wifi join QA-Roam 2>&1; echo wol-rc=$?"
+  rc: any
+  save: join-argv.txt
+  caption: "BUG (NET2-1) if nmcli prints 'invalid extra argument' with argv-rc=2 and wol says the network refused the password"
+# The documented form works (no DHCP server here, so NM reports IP configuration failure; the point is the argv is accepted).
+- ssh: "timeout 90 nmcli dev wifi connect QA-Roam password roam12345 2>&1 | tail -1; echo password-form-rc=$?"
+  rc: any
+  save: join-password-form.txt
+  caption: "the 'password' form is accepted by nmcli (association happens; IP may fail without DHCP)"
+- ssh: "pkill -F /tmp/ap1.pid 2>/dev/null; pkill wpa_supplicant; ip netns del ap1; nmcli con delete QA-Roam 2>/dev/null; echo cleaned"
+  rc: any
+  expect: cleaned
+- checkpoint: qa100-net2-wifi-join-argv
+- stop

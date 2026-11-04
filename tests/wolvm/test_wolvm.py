@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Unit tests for wolvm: step parser, key/QMP builders, qemu command, PNG writer, report.
 Run: python3 tests/wolvm/test_wolvm.py   (no QEMU needed; also runs on Windows)."""
-import contextlib, io, json, os, struct, subprocess, sys, tempfile, unittest, unittest.mock, zlib
+import contextlib, io, json, os, shutil, struct, subprocess, sys, tempfile, unittest, unittest.mock, zlib
 from importlib.machinery import SourceFileLoader
 sys.dont_write_bytecode = True  # no __pycache__ next to the wolvm script
 from importlib.util import module_from_spec, spec_from_loader
@@ -842,7 +842,8 @@ class AllJourneys(unittest.TestCase):
             j, needs, expect, why = cols
             self.assertNotIn(j, rows, f"{j} twice")
             rows[j] = (needs, expect)
-            self.assertRegex(expect, r"^(pass|fail:(QA-[A-Z0-9]+(-[A-Z0-9]+)?-\d+[a-z]?|[a-z0-9-]+:[A-Z0-9]+-\d+))$", ln)
+            self.assertRegex(expect, r"^(pass|fail:(QA-[A-Z0-9]+(-[A-Z0-9]+)?-\d+[a-z]?|[a-z0-9-]+:[A-Z0-9]+-\d+)"
+                                     r"(@(visual|\d+(,\d+)*))?)$", ln)
             self.assertTrue(why, ln)
             base = [n for n in needs.split(",") if n in ("live", "installed", "iso-install")]
             self.assertEqual(len(base), 1, f"{j}: exactly one of live/installed/iso-install")
@@ -851,6 +852,17 @@ class AllJourneys(unittest.TestCase):
                                     r"secureboot|drive|ssh|release-0120|displays:[2-4]|account:[a-z0-9]+)$", f"{j}: {n}")
         qa = sorted(f[:-5] for f in os.listdir(os.path.join(HERE, "journeys")) if f.startswith(("qa-", "qa100-")))
         self.assertEqual(sorted(rows), qa)
+        # a pinned step exists and really asserts (a wait, or an expect): a step that cannot fail
+        # would turn every run into INFRA
+        for j, (_, expect) in rows.items():
+            if "@" not in expect or expect.endswith("@visual"):
+                continue
+            steps = W.load_journey(os.path.join(HERE, "journeys", j + ".yaml"))[1]
+            for n in expect.split("@")[1].split(","):
+                self.assertLessEqual(int(n), len(steps), f"{j}: no step {n}")
+                st = steps[int(n) - 1]
+                self.assertTrue(st["verb"] in ("wait-agent", "wait-text", "wait-stable", "power-cut") or "expect" in st["opts"],
+                                f"{j} step {n} ({st['verb']}) asserts nothing")
         # the hardware a journey's own header asks for is in its needs
         for j, (needs, _) in rows.items():
             text = get(os.path.join(HERE, "journeys", j + ".yaml"))
@@ -863,6 +875,53 @@ class AllJourneys(unittest.TestCase):
                 self.assertIn("displays:", needs, j)
             if "qemu-nbd" in text or "disk-edit" in verbs:
                 self.assertIn("disk-edit", needs, j)
+
+
+@unittest.skipUnless(shutil.which("sh") and shutil.which("python3"), "needs a POSIX sh")
+class Gate(unittest.TestCase):
+    """run-installed.sh qa100 on a stub wolvm: each journey's journey.jsonl decides the result."""
+    STUB = """#!/bin/sh
+case "$1" in
+  status) exit 0 ;;
+  journey) f=$(basename "$3" .yaml); out=$6; mkdir -p "$out"
+    printf '{"journey": "%s"}\\n' "$f" > "$out/journey.jsonl"
+    case $f in
+      ok|fixed|vis-ok) printf '{"n": 1, "step": "ssh a", "ok": true}\\n' >> "$out/journey.jsonl"; exit 0 ;;
+      at3) printf '{"n": 2, "step": "ssh a", "ok": true}\\n{"n": 3, "step": "ssh bug", "ok": false}\\n' >> "$out/journey.jsonl" ;;
+      *) printf '{"n": 1, "step": "wait-agent", "ok": false}\\n{"n": 3, "step": "ssh bug", "ok": false}\\n' >> "$out/journey.jsonl" ;;
+    esac; exit 1 ;;
+esac
+exit 2
+"""
+
+    def test_results(self):
+        with tempfile.TemporaryDirectory() as d:
+            stub = os.path.join(d, "wolvm")
+            put(stub, self.STUB)
+            os.chmod(stub, 0o755)
+            man = os.path.join(d, "m")
+            put(man, "# x\nok | live | pass | a\nbroke | live | pass | b\nat3 | live | fail:QA-X-1@3,5 | c\n"
+                     "early | live | fail:QA-X-2@3 | d\nfixed | live | fail:QA-X-3@1 | e\nloose | live | fail:QA-X-4 | f\n"
+                     "vis-ok | live | fail:QA-X-5@visual | g\nvis | live | fail:QA-X-6@visual | h\nfar | live,s3 | pass | i\n")
+            env = dict(os.environ, WOLOS_WOLVM=stub, QA100_MANIFEST=man)
+            gate = os.path.join(os.path.dirname(HERE), "run-installed.sh")
+            r = subprocess.run(["sh", gate, "qa100", "--vm", "v", "--have", "live", "--out", os.path.join(d, "o")],
+                               env=env, text=True, capture_output=True)
+            res = {ln.split("\t")[0]: ln.split("\t") for ln in get(os.path.join(d, "o", "qa100-summary.tsv")).splitlines()[1:]}
+            self.assertEqual({k: v[1] for k, v in res.items()},
+                             {"ok": "PASS", "broke": "FAIL", "at3": "XFAIL", "early": "INFRA", "fixed": "XPASS",
+                              "loose": "XFAIL", "vis-ok": "REVIEW", "vis": "REVIEW", "far": "SKIP"}, r.stdout)
+            self.assertEqual(res["early"][5], "1 wait-agent")
+            self.assertIn("first failure: step 1 wait-agent; expected at 3", r.stdout)
+            self.assertIn("1 PASS, 2 XFAIL, 1 FAIL, 1 XPASS, 2 REVIEW, 1 SKIP; INFRA 1", r.stdout)
+            self.assertEqual(r.returncode, 1)  # the FAIL
+            put(man, "early | live | fail:QA-X-2@3 | d\nat3 | live | fail:QA-X-1@3 | c\n")
+            r = subprocess.run(["sh", gate, "qa100", "--vm", "v", "--have", "live", "--out", os.path.join(d, "o2")],
+                               env=env, text=True, capture_output=True)
+            self.assertEqual(r.returncode, 0, r.stdout)  # INFRA alone is not fatal...
+            r = subprocess.run(["sh", gate, "qa100", "--vm", "v", "--have", "live", "--strict", "--out", os.path.join(d, "o3")],
+                               env=env, text=True, capture_output=True)
+            self.assertEqual(r.returncode, 1, r.stdout)  # ...but is with --strict
 
 
 if __name__ == "__main__":

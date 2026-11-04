@@ -221,13 +221,23 @@ tests/run-installed.sh qa100 --vm inst --have installed,account:alice,network,di
     --restore desktop --out /scratch/<you>/qa100
 ```
 
-A journey whose needs `--have` does not cover is SKIP; a run journey is PASS, XFAIL (it failed and
-the manifest expects a failure), FAIL (it failed, expected to pass: the gate exits 1) or XPASS (it
-passed although a failure is expected: the bug may be fixed, check and set `pass`; fatal with
-`--strict`). XFAIL only says the journey failed somewhere: read its report to see it failed at the
-bug's step and not earlier. `--restore TAG` restores a wolvm snapshot before each journey so they
-start from the same state; `--only 'qa100-gfx*'` picks a subset. Results: `DIR/qa100-summary.tsv`,
-one journey dir and log per journey.
+The expect column is `pass`, `fail:<id>`, `fail:<id>@<steps>` or `fail:<id>@visual`. `@3,7` pins
+the step numbers (as `wolvm journey` prints them) whose assertion is the bug; `@visual` says no
+step asserts it (the screenshots, saved output or always-passing probes are the evidence). A
+journey whose needs `--have` does not cover is SKIP; a run journey ends:
+
+| Result | Meaning |
+|---|---|
+| PASS / FAIL | expected to pass, and it passed / failed (FAIL: the gate exits 1) |
+| XFAIL | failed as expected; for a pinned journey, its first failed step is a pinned one |
+| INFRA | pinned, but the first failure is another step (named in the output and the summary): setup, harness or VM state, not the bug |
+| XPASS | passed although a failure is expected: the bug may be fixed, check and set `pass` |
+| REVIEW | an `@visual` journey ran (passed or failed): a person reads its report |
+
+XPASS and INFRA are fatal only with `--strict`. An unpinned `fail:<id>` still counts any failure as
+XFAIL. `--restore TAG` restores a wolvm snapshot before each journey so they start from the same
+state; `--only 'qa100-gfx*'` picks a subset. Results: `DIR/qa100-summary.tsv` (with the first
+failed step of each journey), one journey dir and log per journey.
 
 ## Tests
 

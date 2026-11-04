@@ -10,16 +10,24 @@
 #   run-installed.sh qa100 --vm NAME --have NEEDS [--restore TAG] [--only GLOB] [--out DIR] [--strict]
 # NEEDS is a comma list of what this VM offers (installed,account:alice,network,displays:2,audio,s3,
 # usb,disk-edit,tpm,...; account:any is met by any account:NAME). A journey whose needs are not all
-# met is SKIP. Each run journey ends PASS, XFAIL (failed, as the manifest expects: the BUGS.md id),
-# FAIL (failed, expected to pass) or XPASS (passed, expected to fail: fixed? update the manifest).
-# --restore TAG restores wolvm snapshot TAG before each journey. Exit 1 on any FAIL (and, with
-# --strict, any XPASS). Summary: DIR/qa100-summary.tsv. Env: WOLVM_HOME as for wolvm.
+# met is SKIP. The manifest's expect is pass, fail:<id>, fail:<id>@<steps> (the step numbers, comma
+# list, where the bug shows: the journey must fail first at one of them) or fail:<id>@visual (no step
+# asserts the bug; screenshots and saved output are the evidence). Each run journey ends
+#   PASS   passed, expected to pass          FAIL   failed, expected to pass
+#   XFAIL  failed as expected (at a pinned step, when the manifest pins one)
+#   INFRA  expected to fail at a pinned step, but the first failure is another step (named): setup,
+#          harness or VM state, not the bug
+#   XPASS  passed although a failure is expected (fixed? check, then set pass)
+#   REVIEW an @visual journey ran (passed or failed): a person judges its report
+# --restore TAG restores wolvm snapshot TAG before each journey. Exit 1 on any FAIL (with --strict
+# also on any XPASS or INFRA). Summary: DIR/qa100-summary.tsv. Env: WOLVM_HOME as for wolvm;
+# WOLOS_WOLVM (another wolvm) and QA100_MANIFEST (another manifest) for the gate's own tests.
 set -eu
 
 qa100() {
   here=$(cd "$(dirname "$0")" && pwd)
-  manifest=$here/wolvm/qa100.manifest
-  wolvm="python3 $here/wolvm/wolvm"
+  manifest=${QA100_MANIFEST:-$here/wolvm/qa100.manifest}
+  wolvm=${WOLOS_WOLVM:-"python3 $here/wolvm/wolvm"}
   vm="" have="" restore="" only="*" out="" mode=run strict=0
   while [ $# -gt 0 ]; do
     case $1 in
@@ -41,9 +49,9 @@ qa100() {
     $wolvm status "$vm" >/dev/null 2>&1 || { echo "run-installed.sh qa100: no wolvm VM $vm (WOLVM_HOME=${WOLVM_HOME:-default})" >&2; exit 2; }
     out=${out:-$PWD/qa100-$(date +%Y%m%d-%H%M%S)}
     mkdir -p "$out"
-    printf 'journey\tresult\texpect\tneeds\tmissing\n' > "$out/qa100-summary.tsv"
+    printf 'journey\tresult\texpect\tneeds\tmissing\tfirst_failed_step\n' > "$out/qa100-summary.tsv"
   fi
-  n=0 pass=0 xfail=0 fail=0 xpass=0 skip=0 bad=0
+  n=0 pass=0 xfail=0 fail=0 xpass=0 skip=0 infra=0 review=0 bad=0
   while IFS='|' read -r j needs expect why; do
     j=$(trim "$j")
     case $j in ''|'#'*) continue ;; esac
@@ -61,26 +69,58 @@ qa100() {
         else echo "BAD     $j: $(printf '%s\n' "$steps" | tail -n 1)"; bad=$((bad + 1)); fi
         continue ;;
     esac
-    miss=$(missing "$needs" "$have")
+    miss=$(missing "$needs" "$have") first=""
+    case $expect in
+      *@*) pin=${expect#*@} ;;
+      *) pin="" ;;
+    esac
     if [ -n "$miss" ]; then
       result=SKIP; skip=$((skip + 1))
     elif [ -n "$restore" ] && ! $wolvm snapshot "$vm" restore "$restore" >"$out/$j.restore.log" 2>&1; then
       result=FAIL; fail=$((fail + 1)); why="snapshot restore $restore failed ($out/$j.restore.log)"
     elif $wolvm journey "$vm" "$file" --keep-going --out "$out/$j" >"$out/$j.log" 2>&1; then
-      if [ "$expect" = pass ]; then result=PASS; pass=$((pass + 1)); else result=XPASS; xpass=$((xpass + 1)); fi
+      if [ "$expect" = pass ]; then result=PASS; pass=$((pass + 1))
+      elif [ "$pin" = visual ]; then result=REVIEW; review=$((review + 1)); first="(passed)"
+      else result=XPASS; xpass=$((xpass + 1)); fi
     else
-      if [ "$expect" = pass ]; then result=FAIL; fail=$((fail + 1)); else result=XFAIL; xfail=$((xfail + 1)); fi
+      first=$(first_failed "$out/$j/journey.jsonl")
+      if [ "$expect" = pass ]; then result=FAIL; fail=$((fail + 1))
+      elif [ "$pin" = visual ]; then result=REVIEW; review=$((review + 1))
+      elif [ -z "$pin" ] || in_list "${first%% *}" "$pin"; then result=XFAIL; xfail=$((xfail + 1))
+      else result=INFRA; infra=$((infra + 1)); fi
     fi
-    printf '%-6s %-40s %s%s\n' "$result" "$j" "$expect" "${miss:+ (missing $miss)}"
-    printf '%s\t%s\t%s\t%s\t%s\n' "$j" "$result" "$expect" "$needs" "$miss" >> "$out/qa100-summary.tsv"
+    note=${miss:+ (missing $miss)}
+    [ "$result" = INFRA ] && note=" (first failure: step ${first:-none recorded}; expected at $pin)"
+    printf '%-6s %-40s %s%s\n' "$result" "$j" "$expect" "$note"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$j" "$result" "$expect" "$needs" "$miss" "$first" >> "$out/qa100-summary.tsv"
   done < "$manifest"
   case $mode in
     list) echo "$n journeys"; summary_needs "$manifest"; return 0 ;;
     dry) echo "$n journeys, $bad not parsed"; [ "$bad" -eq 0 ]; return ;;
   esac
-  echo "qa100: $n journeys: $pass PASS, $xfail XFAIL, $fail FAIL, $xpass XPASS, $skip SKIP ($out/qa100-summary.tsv)"
+  echo "qa100: $n journeys: $pass PASS, $xfail XFAIL, $fail FAIL, $xpass XPASS, $review REVIEW, $skip SKIP; INFRA $infra ($out/qa100-summary.tsv)"
   [ "$fail" -eq 0 ] || return 1
-  [ "$strict" -eq 0 ] || [ "$xpass" -eq 0 ]
+  [ "$strict" -eq 0 ] || { [ "$xpass" -eq 0 ] && [ "$infra" -eq 0 ]; }
+}
+
+# first_failed JSONL: "N step words" of the first failed step of a journey run, or "" (no record:
+# the journey did not even start, e.g. wolvm refused the VM).
+first_failed() {
+  [ -f "$1" ] || return 0
+  python3 -c 'import json, sys
+first = ""
+for line in open(sys.argv[1]).read().splitlines():
+    r = json.loads(line)
+    if "journey" in r:
+        first = ""
+    elif not r.get("ok") and not first:
+        first = "%d %s" % (r["n"], r["step"][:60])
+print(first)' "$1"
+}
+
+# in_list N "3,7,9": is N one of them?
+in_list() {
+  case ",$2," in *",$1,"*) [ -n "$1" ] ;; *) return 1 ;; esac
 }
 
 trim() { printf '%s' "$1" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'; }
