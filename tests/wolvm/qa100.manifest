@@ -63,7 +63,7 @@ qa100-live-search-first-click | installed,account:alice | fail:QA-LIVE1-11 | A8:
 qa100-live-shutdown-unsaved | installed,account:alice | fail:QA-LIVE1-22@visual | A8: close request to every window before poweroff (unrun)
 qa100-ln-launcher-toggle | installed,account:tester | fail:launcher-notify:LN-01@visual | Search's process stays after it closes; the next toggle needs two presses
 qa100-ln-notify-burst | installed,account:tester | fail:launcher-notify:LN-10@visual | a notification burst floods the screen; QA-DESIGN-29, LN-12..14
-qa100-ln-shell-crash | installed,account:tester | fail:launcher-notify:LN-20@visual | SIGKILL on wol-shell leaves a black screen (no supervisor in 0.12.1)
+qa100-ln-shell-crash | installed,account:tester | fail:launcher-notify:LN-20@visual | SIGKILL on wol-shell leaves a black screen (no supervisor in 0.12.1); a compositor crash restarts with the config, never --safe-mode, QA-LIVE-22
 qa100-ln-tray | installed,account:alice | fail:QA-LN-22 | A8: a StatusNotifierItem appears in the menu bar (unrun)
 qa100-net-ethernet-states | live,ssh,network | fail:QA-NET-11@visual | Network pane read once; QA-NET-12 three meanings of online
 qa100-net-firewall-state | live,ssh | fail:QA-NET-1@visual | firewall state wrong; QA-NET-4, QA-NET-13
@@ -103,6 +103,7 @@ qa100-update-power-loss | installed,network | fail:QA-STORE-8@17 | leftover @wol
 qa100-update-slot-failure | installed,network | fail:QA-STORE-3@20 | a failed replace leaves a dangling entry (confirmed on 0.12.1); QA-STORE-4 no update lock
 qa100-upg-0120-to-0121 | iso-install,release-0120,tpm,network | fail:upgrade-path:UPG-2@10 | Update Now fails in 3 s on 0.12.0; UPG-1, UPG-3, UPG-4, UPG-6
 qa100-upg-survival | installed,release-0120,account:aliceliddell | fail:upgrade-path:UPG-5@16 | what survives 0.12.0 -> 0.12.1 and back; UPG-7
+qa100-wd-adr-crash-evidence | installed,account:any | fail:crash-surface:CRASH-4@3 | a crash leaves no stack trace in the journal (coredump ProcessSizeMax=0 on 0.12.1); no core file on disk either way
 qa100-webapp-doctor-launch | installed,account:alice | fail:QA-WEB-1@17,24 | Doctor web app launch (feature not in 0.12.1: fails on absence); QA-WEB-24
 qa100-webapp-doctor-theme | installed,account:alice | fail:QA-WEB-2@visual | Doctor ignores the theme (feature not in 0.12.1)
 qa100-webapp-lifecycle | installed,account:alice | fail:QA-WEB-5@29 | closing the window leaves the approval sheet's child (feature not in 0.12.1)
