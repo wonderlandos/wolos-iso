@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-STORE-58 (WD-STORE): a live install's layer chroot (rbind of /, /usr and /opt overlays,
+# arch-chroot) lives in a mount namespace of its own. Before the fix every `wol pkg` copied the
+# whole mount tree into every service's namespace (NetworkManager, logind, udevd ...) and after
+# about nine installs/removals the next mount failed (fs.mount-max). Twelve changes in a row
+# must succeed and leave no layer-root mount in any namespace.
+# Needs a VM from install-auto.yaml (checkpoint installed-up), network up.
+name: layer installs leak no mounts into other namespaces
+steps:
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+- ssh: "btrfs property get -ts / ro | grep -q 'ro=true' && echo sealed"
+  expect: "sealed"
+  caption: the root is sealed, so pacman changes go to layers
+- ssh: "for p in /proc/[0-9]*; do n=$(nsenter -t ${p#/proc/} -m grep -c layer-root /proc/self/mountinfo 2>/dev/null) || continue; echo \"$(readlink $p/ns/mnt) $n\"; done | sort -u | awk '{s+=$2} END {print \"leaked=\" s+0}'"
+  expect: "leaked=0"
+  save: census-before.txt
+  caption: no namespace holds a layer-root mount before any change
+- ssh: "fail=0; for p in sl fortune-mod cowsay htop; do wol pkg -- -S --noconfirm $p >/dev/null 2>&1 || fail=$((fail+1)); wol pkg -- -R --noconfirm $p >/dev/null 2>&1 || fail=$((fail+1)); done; for p in sl cowsay htop fortune-mod; do wol pkg -- -S --noconfirm $p >/dev/null 2>&1 || fail=$((fail+1)); done; echo failed=$fail"
+  timeout: 1800
+  expect: "failed=0"
+  save: twelve-changes.txt
+  caption: twelve installs and removals in a row all succeed
+- ssh: "pid=$(systemctl show -p MainPID --value NetworkManager); nsenter -t $pid -m grep -c layer-root /proc/self/mountinfo; grep -c layer-root /proc/self/mountinfo"
+  rc: any
+  save: nm-and-host.txt
+- ssh: "for p in /proc/[0-9]*; do n=$(nsenter -t ${p#/proc/} -m grep -c layer-root /proc/self/mountinfo 2>/dev/null) || continue; echo \"$(readlink $p/ns/mnt) $n\"; done | sort -u | awk '{s+=$2} END {print \"leaked=\" s+0}'"
+  expect: "leaked=0"
+  save: census-after.txt
+  caption: after twelve changes no namespace (NetworkManager's included) holds a layer-root mount
+- ssh: "wol update apply --yes 2>&1 | tail -3; echo rc=$?"
+  timeout: 3600
+  rc: any
+  save: update-after.txt
+  caption: a slot update still builds after the twelve changes
+- logs:
+  n: 300
+- stop
