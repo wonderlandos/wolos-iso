@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # QA-100 NET-3 / QA-NET-21 (VPN): `wol vpn import` of a WireGuard file whose name is not an
 # interface name ("My Office.conf" -> profile My-Office), the list, connect (the tunnel is a VPN in
-# `wol network`, QA-NET-28), disconnect, forget; an OpenVPN file says the plugin is missing (the
-# image has no networkmanager-openvpn yet). Keys are random 32 bytes (no wireguard-tools on the
+# `wol network`, QA-NET-28), disconnect, forget; an OpenVPN file imports with the plugin the image
+# ships (networkmanager-openvpn, openvpn in wolos-system's depends). Keys are random 32 bytes (no wireguard-tools on the
 # image): the peer never answers, the tunnel still comes up. As root (no login keyring there: the
 # key stays in the root-only profile); the keyring path is the Settings shot as the live user.
 #   wolvm new net3 --iso wolos.iso --ssh
 #   wolvm journey net3 tests/wolvm/journeys/qa100-net3-vpn.yaml
-name: "NET-3 VPN: WireGuard import, connect, disconnect, forget; OpenVPN without its plugin"
+name: "NET-3 VPN: WireGuard import, connect, disconnect, forget; OpenVPN import with its plugin"
 steps:
 - start
 - wait-agent:
@@ -50,10 +50,20 @@ steps:
   expect: "0"
   save: vpn-forgotten.txt
   caption: "forgotten: no profile left"
-- ssh: "printf 'client\\ndev tun\\nproto udp\\nremote 10.0.2.2 1194\\n' > /tmp/office.ovpn; wol vpn import /tmp/office.ovpn 2>&1; echo rc=$?"
+- ssh: "pacman -Q networkmanager-openvpn openvpn; test -e /usr/lib/NetworkManager/VPN/nm-openvpn-service.name && echo plugin-present"
   rc: any
-  expect: "networkmanager-openvpn"
-  save: vpn-openvpn-no-plugin.txt
-  caption: "RECORD (image gap): the OpenVPN plugin is not installed, said in one sentence, rc not 0"
+  expect: "plugin-present"
+  save: vpn-openvpn-plugin.txt
+  caption: "the image ships NetworkManager's OpenVPN plugin (wolos-system depends: networkmanager-openvpn, openvpn)"
+- ssh: "printf 'client\\ndev tun\\nproto udp\\nremote 10.0.2.2 1194\\nauth-user-pass\\n' > /tmp/office.ovpn; wol vpn import /tmp/office.ovpn --json 2>&1 | tr -d ' \\n'; echo; wol vpn --json | tr -d ' \\n'; echo"
+  rc: any
+  expect: "\"kind\":\"openvpn\""
+  save: vpn-openvpn-imported.txt
+  caption: "FIXED (NET-21): the .ovpn file is imported (profile office, kind openvpn, listed); RECORD the sentence if NetworkManager refuses a file without certificates"
+- ssh: "echo wrongpass | timeout 60 wol vpn connect office 2>&1 | tail -1; wol vpn forget office >/dev/null 2>&1; nmcli -t -f NAME con show | grep -c '^office$'"
+  rc: any
+  expect: "0"
+  save: vpn-openvpn-connect.txt
+  caption: "connect takes the password on stdin (no server answers: the sentence says the VPN did not connect, never a crash); forget leaves no profile"
 - checkpoint: qa100-net3-vpn
 - stop

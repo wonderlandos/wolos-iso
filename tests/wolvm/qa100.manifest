@@ -117,7 +117,7 @@ qa100-net2-wifi-join-argv | live,ssh | fail:QA-NET-23@visual | network r2 part 1
 qa100-net-static-ip | live,ssh,network | fail:QA-LIVE3-14 | NET-3: `wol network ip` read, refuse, keep, 15 s rollback to DHCP; IP Settings page (unrun)
 qa100-net3-airplane | live,ssh | fail:QA-NET-21 | NET-3 airplane mode: rfkill block all with the radios remembered, menu bar plane, Control Center tile, off restores (mac80211_hwsim; unrun)
 qa100-net3-proxy-dns | live,ssh,network | fail:QA-NET-21 | NET-3 proxy (proxy.conf, login environment) and DNS over TLS (resolved drop-in, strict refused without a server) (unrun)
-qa100-net3-vpn | live,ssh | fail:QA-NET-21 | NET-3 WireGuard import (name to interface name), connect, disconnect, forget; OpenVPN says its plugin is missing (unrun)
+qa100-net3-vpn | live,ssh | fail:QA-NET-21 | NET-3 WireGuard import (name to interface name), connect, disconnect, forget; OpenVPN imported with networkmanager-openvpn from the image (unrun)
 qa100-update-rollback-layers | installed,network,ssh | fail:QA-LIVE3-1@visual | B4: a rollback to the restore point keeps the programs installed live (layers-kept) (unrun)
 qa100-wd-session-lock-menu-refocus | installed,account:alice | fail:QA-FILES-20 | WD-SESSION: lock from the WolOS menu, unlock, keys reach the terminal (unrun)
 qa100-wd-session-widgets-add | installed,account:alice | fail:QA-LIVE1-8 | WD-SESSION: widgets added in Settings show on the desktop within 2 s (unrun)
