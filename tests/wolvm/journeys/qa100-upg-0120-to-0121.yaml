@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H23 (upgrade path): what a 0.12.0 computer does when 0.12.1 is the latest release.
+# VM: the released 0.12.0 ISO, unattended install, Setup Assistant done by hand (account made),
+# at least one layer present (a Store app installed), e.g.
+#   wolvm new u --iso wolos-2026.11.03-x86_64.iso --tpm --direct --disk 40G --append "wolos.autoinstall=/dev/vda"
+#   ... first boot: Setup Assistant -> account; then: pacman -S --noconfirm sl   (one layer)
+#   wolvm journey u tests/wolvm/journeys/qa100-upg-0120-to-0121.yaml
+# Findings covered (qa100/upgrade-path.md): UPG-1 the daily check never finds the release on 0.12.0
+# (fakeroot missing), UPG-2 Update Now / wol update apply fail in 3 s on 0.12.0, UPG-3 the slot built
+# by the 0.12.1 updater falls back to 0.12.0 at its first boot when layers exist (seal check vs
+# sysext merge), UPG-4 both slots end up marked, UPG-6 the new slot keeps [wolos-testing].
+name: 0.12.0 to 0.12.1 as the person meets it
+steps:
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+- ssh: "grep VERSION_ID /etc/os-release"
+  expect: "0.12.0"
+- ssh: "ls /var/lib/extensions | grep -q wolos-layer && echo has-layer"
+  expect: "has-layer"
+  caption: a Store app (layer) is installed, as most people will have
+# UPG-1: the daily check on 0.12.0 finds nothing, ever.
+- ssh: "rm -f /var/lib/wolos/updates/checked; /usr/lib/wolos/update-check now; echo rc=$?; ls /var/lib/wolos/updates; checkupdates --nocolor 2>&1 | head -2"
+  rc: any
+  save: check-0120.txt
+- ssh: "test -s /var/lib/wolos/updates/checked && echo check-stamped || echo no-stamp"
+  expect: "check-stamped"
+  caption: "UPG-1: the 0.12.0 daily check must leave a stamp and a package list (it exits 0 with nothing: fakeroot missing)"
+- ssh: "wol update check --json"
+  save: wol-check-0120.txt
+  caption: Check Now does see the packages (pacman -Qu against a copy of the db)
+# UPG-2: Update Now (wol-admind PkgUpgrade = pacman -Syu through the wrapper) and wol update apply.
+- ssh: "timeout 900 wol update apply --yes > /tmp/apply-0120.log 2>&1; echo rc=$?; tail -4 /tmp/apply-0120.log"
+  timeout: 1000
+  rc: any
+  save: apply-0120.txt
+- ssh: "grep -q 'updated into wolos-b' /tmp/apply-0120.log && echo built || echo not-built"
+  expect: "built"
+  caption: "UPG-2: the 0.12.0 updater cannot build the new slot ('could not determine cachedir mount point')"
+- ssh: "btrfs subvolume list / | grep -c wolos-b; ls /efi/loader/entries"
+  rc: any
+  save: after-failed-0120.txt
+  caption: the failure leaves no half slot and no ghost entry (good)
+# The documented way out: the new wolos-system first (a layer), then the update.
+- ssh: "pacman -S --noconfirm wolos-system 2>&1 | tail -2; pacman -Q wolos-system"
+  expect: "0.12.1"
+  timeout: 600
+- ssh: "rm -f /var/lib/wolos/updates/checked; /usr/lib/wolos/update-check now; wol update status --json"
+  expect: "\"base\":\"0.12.1\""
+  caption: with the new check script the release is found
+- ssh: "timeout 1700 wol update apply --yes > /tmp/apply-0121.log 2>&1; echo rc=$?; tail -3 /tmp/apply-0121.log"
+  timeout: 1800
+  rc: any
+  save: apply-0121.txt
+- ssh: "grep -q 'updated into wolos-b' /tmp/apply-0121.log && echo built"
+  expect: "built"
+- ssh: "grep -A1 '^\\[wolos' /run/wolos/top/@wolos-b/etc/pacman.conf; cat /run/wolos/top/@wolos-b/etc/pacman.d/wolos-mirrorlist | grep -v '^#'"
+  rc: any
+  save: slot-b-repos.txt
+- ssh: "grep -q 'wolos-testing' /run/wolos/top/@wolos-b/etc/pacman.conf && echo still-testing || echo release-repo"
+  expect: "release-repo"
+  caption: "UPG-6: the upgraded slot must read the release repo, not [wolos-testing] (the new mirrorlist lands as .pacnew)"
+- checkpoint: slot-b-built
+# First boot of the new slot.
+- stop
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+- ssh: "cat /proc/cmdline"
+  expect: "subvol=@wolos-b"
+  caption: "UPG-3: the computer must start 0.12.1 (it falls back to 0.12.0: 'did not pass its safety check: N protected system file(s) were changed')"
+- ssh: "journalctl -b -1 -t wol --no-pager -o cat | grep -i safety; journalctl -b -t wol --no-pager -o cat | grep -i safety; ls /var/lib/wolos | grep verity-failed"
+  rc: any
+  save: safety-check.txt
+- ssh: "test ! -e /var/lib/wolos/verity-failed-wolos-a && test ! -e /var/lib/wolos/verity-failed-wolos-b && echo no-marks"
+  expect: "no-marks"
+  caption: "UPG-4: after the fall-back both slots carry a verity-failed mark; the Restore page still offers the marked slot"
+- ssh: "grep VERSION_ID /etc/os-release; ls /efi/loader/entries; bootctl list --no-pager | grep title"
+  rc: any
+  save: after-first-boot.txt
+- logs:
+  n: 600
+- stop

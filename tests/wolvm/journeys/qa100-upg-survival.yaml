@@ -1,0 +1,85 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H23 (upgrade path): once the 0.12.1 slot does start (layers set aside, see
+# qa100-upg-0120-to-0121.yaml), what survived, what the Software Update page says, the Restore page,
+# rollback to 0.12.0 through Restore and forward again. Needs checkpoint slot-b-built, then:
+#   wolvm ssh u 'mv /var/lib/extensions /var/lib/extensions.off; rm -f /var/lib/wolos/verity-failed-*'
+# The account is aliceliddell (theme kanagawa, wallpaper wonderland-night, plugin alice.cheshire,
+# Wi-Fi profile Wonderland, printer LookingGlass, apps sl and cowsay folded into the slot).
+# Findings covered: UPG-5 stale '10 updates available' after the upgrade, UPG-7 no Restore Points
+# for a normal account (wol restore list: 'this system does not boot WolOS root slots', /efi 0700),
+# survival table, rollback and forward.
+name: after the upgrade - survival, stale updates, restore and back
+steps:
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+- ssh: "grep VERSION_ID /etc/os-release"
+  expect: "0.12.1"
+- ssh: "cat /proc/cmdline"
+  expect: "subvol=@wolos-b"
+- ssh: "timeout 120 systemctl is-system-running --wait; systemctl --failed --no-legend"
+  rc: any
+  save: system-state.txt
+- ssh: "sleep 12; ls /efi/loader/entries"
+  expect: "wolos-b.conf"
+  caption: the new slot is blessed after its first good boot
+- ssh: "pacman -Q sl cowsay && which sl cowsay && echo apps-folded"
+  expect: "apps-folded"
+  caption: apps installed live on 0.12.0 are in the new slot
+- ssh: "su - aliceliddell -c 'cat ~/.config/wolos/theme ~/.config/wolos/wallpaper; wol plugin list --json | grep -c alice.cheshire; wc -l < ~/.local/state/wolos/journal.jsonl'"
+  save: home-state.txt
+- ssh: "su - aliceliddell -c 'cat ~/.config/wolos/theme'"
+  expect: "kanagawa"
+- ssh: "nmcli -t con show | grep -q '^Wonderland:' && lpstat -p LookingGlass >/dev/null && echo wifi-and-printer-kept"
+  expect: "wifi-and-printer-kept"
+- ssh: "wol restore list --json"
+  save: restore-root.txt
+- ssh: "su - aliceliddell -c 'wol restore list --json'; echo rc=$?"
+  rc: any
+  save: restore-user.txt
+- ssh: "su - aliceliddell -c 'wol restore list --json' | grep -q wolos-a && echo user-sees-points"
+  expect: "user-sees-points"
+  caption: "UPG-7: the Restore page (runs as the person) must list the restore points; /efi is root-only, so it shows none"
+# UPG-5: the daily check's list from before the upgrade is still shown as pending.
+- ssh: "wol update status --json"
+  save: status-after-upgrade.txt
+- ssh: "wol update status --json | grep -q '\"count\":0' && echo count-zero"
+  expect: "count-zero"
+  caption: "UPG-5: right after the upgrade the stale list says '10 updates available' until the next check (20 h)"
+- ssh: "wol update check --json"
+  expect: "[]"
+  caption: a fresh Check Now answers up to date
+- ssh: "wol update status --json | grep -q '\"count\":0' && echo count-zero-after-check"
+  expect: "count-zero-after-check"
+# Rollback to 0.12.0 as Settings > Restore > Start From This does, then forward again.
+- ssh: "wol restore activate wolos-a"
+  expect: "starts next time"
+- stop
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+- ssh: "grep VERSION_ID /etc/os-release; cat /proc/cmdline | tr ' ' '\\n' | grep subvol; journalctl -b -t wol --no-pager -o cat | grep -i safety"
+  rc: any
+  save: rolled-back.txt
+- ssh: "grep -q 'VERSION_ID=0.12.0' /etc/os-release && echo back-on-0120"
+  expect: "back-on-0120"
+- ssh: "su - aliceliddell -c 'cat ~/.config/wolos/theme'"
+  expect: "kanagawa"
+  caption: settings are shared between the slots
+- ssh: "wol restore activate wolos-b"
+  expect: "starts next time"
+- stop
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+- ssh: "grep -q 'VERSION_ID=0.12.1' /etc/os-release && echo forward-again"
+  expect: "forward-again"
+- logs:
+  n: 400
+- stop
