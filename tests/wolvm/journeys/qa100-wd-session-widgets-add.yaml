@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# WD-SESSION QA-LIVE1-8: widgets added in Settings > Widgets show on the desktop at once (0.12.1:
+# nothing until logout and login). The shell watches ~/.config/wolos/widgets.json (ui/ipc.rs
+# watch_prefs, WATCHED) and re-splits the boards; the empty desktop surface keeps one pixel so it
+# is mapped from the start (ui/widgets.rs mark_presence).
+# Needs an installed disk with the test account (Alice Liddell / curiouser), no widgets placed.
+name: Widgets added in Settings show on the desktop within 2 s
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop up
+- ssh: "rm -f /home/aliceliddell/.config/wolos/widgets.json; WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell wol shell reload; echo empty"
+  expect: "empty"
+- shot: desktop-empty
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell setsid -f wol-settings Widgets >/dev/null 2>&1; echo opened"
+  expect: "opened"
+- wait-stable:
+  timeout: 60
+- shot: widgets-page
+  caption: "Settings > Widgets: read the Add buttons of Clock and Weather for the clicks below"
+- click: 900 300
+  caption: Add Clock (adjust from widgets-page)
+- click: 900 360
+  caption: Add Weather (adjust from widgets-page)
+- ssh: "grep -c '\"kind\"' /home/aliceliddell/.config/wolos/widgets.json"
+  rc: any
+  save: widgets-json.txt
+  caption: the file holds both widgets
+- key: super-q
+  caption: close Settings so the desktop shows
+- sleep: 2
+- shot: desktop-widgets
+  caption: "ASSERT Clock and Weather are on the desktop (top left) within 2 s, no relogin"
+- stop

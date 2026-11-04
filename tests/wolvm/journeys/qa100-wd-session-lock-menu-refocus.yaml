@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# WD-SESSION QA-FILES-20: Lock Screen from the WolOS menu, unlock, then type: the text lands in the
+# terminal that was in front (0.12.1: the keyboard was dead for every open window; the menu's popup
+# had the keyboard when the lock came up and was gone at unlock). wol-lock now refocuses the
+# window that was in front (shell ui/lock.rs refocus_after_unlock).
+# Needs an installed disk with the test account (Alice Liddell / curiouser). The logo click is at
+# the menu bar's left edge; the "Lock Screen" row needs coordinates from the menu shot.
+name: Lock from the WolOS menu, unlock, the terminal still takes the keyboard
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop up
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell setsid -f foot >/dev/null 2>&1; sleep 3; echo foot"
+  expect: "foot"
+- wait-stable:
+  timeout: 30
+  caption: Terminal in front
+- click: 18 14
+  caption: the WolOS menu (logo)
+- shot: menu-open
+  caption: "the WolOS menu: read the Lock Screen row's centre for the next click"
+- click: 70 150
+  caption: Lock Screen (adjust from menu-open)
+- wait-stable:
+  timeout: 30
+- shot: locked
+  caption: lock screen up
+- type: curiouser
+- key: ret
+- sleep: 8
+  caption: the 8 s of the 0.12.1 report
+- type: "echo refocused > /tmp/wd-session-files20"
+- key: ret
+- sleep: 1
+- ssh: "cat /tmp/wd-session-files20 2>/dev/null || echo dead-keyboard"
+  expect: "refocused"
+  caption: ASSERT the keys reached the terminal after the unlock
+- shot: after-unlock
+- stop
