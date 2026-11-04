@@ -39,11 +39,11 @@ steps:
   rc: any
   save: 10-kill-bluetooth.txt
   caption: bluetoothd killed with SIGKILL: Restart=no leaves Bluetooth off until reboot
-- ssh: "systemctl kill -s SIGKILL wold.service; sleep 12; systemctl is-active wold.service; systemctl show -p NRestarts --value wold.service; pgrep -a wol-login; pgrep -a Hyprland; journalctl -b -u wold --no-pager | tail -15"
+- ssh: "b=$(pgrep -x wol-login | head -1); systemctl kill --kill-whom=main -s SIGKILL wold.service; sleep 12; a=$(pgrep -x wol-login | head -1); echo login-before=$b login-after=$a; if [ -n \"$b\" ] && [ \"$a\" = \"$b\" ]; then echo ADOPTED; else echo LOGIN-TREE-REPLACED; fi; echo STATE=$(systemctl is-active wold.service); systemctl show -p NRestarts --value wold.service; pgrep -a Hyprland; journalctl -b -u wold --no-pager | grep -i 'adopt' | tail -5"
   rc: any
-  expect: active
+  expect: ADOPTED
   save: 11-kill-wold.txt
-  caption: wold killed: restarts, stops the stale login tree (the screen goes away and comes back)
+  caption: wold killed (the main process only, as a crash does): it restarts and adopts the running login tree, the screen never goes away (QA-SYS-2)
 - wait-stable:
   timeout: 120
 - shot after-wold-kill
@@ -54,10 +54,11 @@ steps:
 - wait-stable:
   timeout: 120
 - shot after-compositor-kill
-- ssh: "for i in 1 2 3 4 5 6; do systemctl kill -s SIGKILL wold.service; sleep 1.5; done; sleep 10; systemctl is-active wold.service; systemctl show -p NRestarts -p Result -p ActiveState wold.service; pgrep -a Hyprland"
+- ssh: "for i in 1 2 3 4 5 6; do systemctl kill --kill-whom=main -s SIGKILL wold.service; sleep 1.5; done; sleep 10; echo STATE=$(systemctl is-active wold.service); systemctl show -p NRestarts -p Result -p ActiveState -p StartLimitIntervalUSec -p OOMScoreAdjust wold.service; pgrep -a Hyprland"
   rc: any
+  expect: STATE=active
   save: 13-wold-crash-storm.txt
-  caption: six wold crashes in ten seconds: the default start limit (5 in 10 s) leaves wold dead and the screen black
+  caption: six wold crashes in ten seconds: StartLimitIntervalSec=0 keeps restarting it, the screen stays (QA-SYS-1)
 - sleep 15
 - shot after-wold-storm
 - ssh: "systemctl is-active wold.service; systemctl --failed --no-legend --plain"
@@ -71,5 +72,15 @@ steps:
 - wait-stable:
   timeout: 120
 - shot recovered
+- ssh: "systemctl show -p ActiveState -p Result wolos-boot-ok.service; systemctl cat wolos-boot-ok.service | grep -E '^(After|WantedBy|RequiredBy|TimeoutStartSec)='; journalctl -b -u wolos-boot-ok.service -o cat --no-pager | tail -5"
+  rc: any
+  expect: "After=wolos-verity-check.service"
+  save: 20-boot-ok.txt
+  caption: "QA-SYS-3 (B5): boot-ok ran after the seal check and blessed only once the login window was on screen"
+- ssh: "WOLOS_BOOT_OK_LIMIT=10 WOLOS_BOOT_OK_WAIT=1 WOLOS_PROC=/nonexistent /usr/lib/wolos/boot-ok; echo rc=$?"
+  rc: any
+  expect: "rc=1"
+  save: 21-boot-ok-no-screen.txt
+  caption: "QA-SYS-3 (B5): with nothing a person can use on screen boot-ok refuses to bless (wold alone is not enough)"
 - logs:
   n: 800

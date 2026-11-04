@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# B2 wold-supervisor-resilience (wave B), UNRUN (written without a VM): with a person signed in,
+# restarting or killing wold must not touch the session (QA-SYS-2), a second login window must not
+# be started on the busy seat (QA L2-39), Log Out must bring the login screen back within seconds
+# (QA L2-39b), and the compositor's OOM protection must not be inherited by the apps (QA L2-30).
+# Needs an installed disk with the test account (Alice Liddell / curiouser, an administrator).
+name: B2 wold restart and crash keep the session; apps do not inherit the OOM shield
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop up
+- sleep: 12
+# QA L2-30: the compositor and the shell sit at -900; nothing below them keeps the value.
+- ssh: "h=$(pgrep -u aliceliddell -x Hyprland | head -1); echo hyprland=$h adj=$(cat /proc/$h/oom_score_adj); leaks=0; for p in $(ps -u aliceliddell -o pid=); do c=$(cat /proc/$p/comm 2>/dev/null); a=$(cat /proc/$p/oom_score_adj 2>/dev/null); case $c in Hyprland|wol-shell) ;; *) [ \"$a\" = -900 ] && { echo LEAK $p $c; leaks=1; } ;; esac; done; [ $leaks = 0 ] && echo NO-INHERITED-900; for u in systemd-logind seatd wold NetworkManager; do echo $u $(cat /proc/$(pgrep -x $u | head -1)/oom_score_adj); done"
+  rc: any
+  expect: NO-INHERITED-900
+  save: 20-oom-adj.txt
+  caption: only Hyprland and wol-shell carry -900; the apps and helpers started from them are back at 0 (QA L2-30)
+# QA-SYS-2: a restart keeps the jobs.
+- ssh: "h=$(pgrep -u aliceliddell -x Hyprland | head -1); l=$(pgrep -x wol-login | head -1); systemctl restart wold; sleep 8; echo STATE=$(systemctl is-active wold.service); if [ \"$h\" = \"$(pgrep -u aliceliddell -x Hyprland | head -1)\" ] && [ \"$l\" = \"$(pgrep -x wol-login | head -1)\" ]; then echo SESSION-AND-LOGIN-KEPT; else echo SESSION-LOST; fi; journalctl -b -u wold --no-pager | grep -i 'restarting\\|adopt' | tail -6"
+  rc: any
+  expect: SESSION-AND-LOGIN-KEPT
+  save: 21-restart-wold.txt
+  caption: systemctl restart wold leaves the desktop and the login supervisor running; the new wold adopts wol-login
+- shot: after-restart
+  caption: the desktop, untouched
+# QA L2-39: a crash of wold with the session on seat0.
+- ssh: "systemctl kill --kill-whom=main -s SIGKILL wold.service; sleep 15; echo STATE=$(systemctl is-active wold.service); echo greeter-compositors=$(pgrep -u _wollogin -x Hyprland | wc -l); echo session-compositors=$(pgrep -u aliceliddell -x Hyprland | wc -l); journalctl -b -u wold --no-pager | grep -ci 'CBackend\\|seat is VT-bound'"
+  rc: any
+  expect: greeter-compositors=0
+  save: 22-kill-wold-in-session.txt
+  caption: wold killed in a session, no login window is started on the busy seat, no crash loop (QA L2-39)
+# QA L2-39b: Log Out brings the screen back at once, not after a back-off.
+- ssh: "s=$(loginctl list-sessions --no-legend | awk '$3==\"aliceliddell\" && $4==\"seat0\"{print $1; exit}'); t=$(date +%s); loginctl terminate-session \"$s\"; for i in $(seq 1 20); do pgrep -u _wollogin -x Hyprland >/dev/null && { echo SCREEN-IN-$(( $(date +%s) - t ))s; exit 0; }; pgrep -u aliceliddell -x wol-lock >/dev/null && { echo SCREEN-IN-$(( $(date +%s) - t ))s; exit 0; }; sleep 1; done; echo BLACK-SCREEN"
+  rc: any
+  expect: SCREEN-IN-
+  save: 23-logout-returns.txt
+  caption: after the session ends the login window (or the locked session of the only account) is up within 20 s (QA L2-39b)
+- wait-stable:
+  timeout: 120
+- shot: after-logout
+  caption: login screen
+- logs:
+  n: 400
