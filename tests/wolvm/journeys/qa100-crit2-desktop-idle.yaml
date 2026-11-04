@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-PERF-1 (H17-01), CRIT-2: at idle the compositor does nothing. The empty desktop widgets layer
+# (wol-desktop) and the click-catcher under a panel app (wol-catcher) used to render nothing, so GTK
+# never attached a buffer and Hyprland answered every empty commit with a configure and a redraw of
+# the whole output: 60 a second for ever, 2.2-4.2 cores of compositor on the 0.12.1 VMs
+# (performance-r2.md). VM: an installed image with the wave3 shell, logged in, no widget on the
+# desktop (a fresh account), one window open (foot), e.g.
+#   wolvm journey i tests/wolvm/journeys/qa100-crit2-desktop-idle.yaml
+# Before the fix: Hyprland 2220-4195 ms CPU per s, ctxt 5694/s; after it (r2 live proof with content
+# on the desktop): ctxt ~403/s. Budget here: Hyprland under 50 ms CPU per s (5 % of a core) and the
+# shell's desktop surface 0 commits in 5 s.
+name: idle compositor, empty desktop and click-catcher commit nothing
+steps:
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+- ssh: "P=$(pgrep -u 1000 -x wol-shell | head -1); tr '\\0' '\\n' < /proc/$P/environ | grep -E '^(WAYLAND_DISPLAY|HYPRLAND_INSTANCE_SIGNATURE|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR|HOME|USER)=' > /tmp/sess.env; wc -l < /tmp/sess.env"
+  expect: "6"
+- ssh: "R=\"runuser -u $(id -nu 1000) -- env $(tr '\\n' ' ' < /tmp/sess.env)\"; $R sh -c 'setsid foot >/dev/null 2>&1 &'; sleep 5; test -s $(getent passwd 1000 | cut -d: -f6)/.config/wolos/widgets.json && echo has-widgets || echo empty-desktop"
+  expect: "empty-desktop"
+  caption: a fresh account, nothing on the desktop, one window open
+- sleep: 20
+- ssh: |
+    H=$(pgrep -x Hyprland | head -1); S=$(pgrep -u 1000 -x wol-shell | head -1)
+    t() { awk '{print $14+$15}' /proc/$1/stat; }
+    c0=$(awk '/^ctxt/{print $2}' /proc/stat); h0=$(t $H); s0=$(t $S); sleep 30
+    c1=$(awk '/^ctxt/{print $2}' /proc/stat); h1=$(t $H); s1=$(t $S)
+    hz=$(getconf CLK_TCK)
+    echo "hyprland_ms_per_s=$(( (h1 - h0) * 1000 / hz / 30 )) shell_ms_per_s=$(( (s1 - s0) * 1000 / hz / 30 )) ctxt_per_s=$(( (c1 - c0) / 30 ))"
+    [ $(( (h1 - h0) * 1000 / hz / 30 )) -lt 50 ] && echo idle-ok || echo idle-burning
+  expect: "idle-ok"
+  save: idle-cpu.txt
+  caption: "QA-PERF-1: Hyprland under 5 % of a core at idle (0.12.1: 2220-4195 ms/s)"
+# The client side, counted on the wire: a fresh shell under WAYLAND_DEBUG, 10 s, then the old one back.
+- ssh: |
+    U=$(id -nu 1000); R="runuser -u $U -- env $(tr '\n' ' ' < /tmp/sess.env)"
+    pkill -u 1000 -x wol-shell; sleep 2
+    $R sh -c 'WAYLAND_DEBUG=client timeout 15 wol-shell 2>/tmp/wl.log >/dev/null'
+    L=$(grep -o 'get_layer_surface(new id zwlr_layer_surface_v1#[0-9]*, wl_surface#[0-9]*, [^,]*, [0-9], "wol-desktop")' /tmp/wl.log | head -1)
+    S=$(echo "$L" | grep -o 'wl_surface#[0-9]*')
+    echo "surface=$S attach=$(grep -c "$S.attach(wl_buffer" /tmp/wl.log) commits=$(grep -c "$S.commit()" /tmp/wl.log)"
+    $R sh -c 'setsid wol-shell 2>>/run/user/1000/wol-shell.log </dev/null >/dev/null &'
+    [ -n "$S" ] && [ "$(grep -c "$S.attach(wl_buffer" /tmp/wl.log)" -ge 1 ] && [ "$(grep -c "$S.commit()" /tmp/wl.log)" -lt 30 ] && echo desktop-idle-ok || echo desktop-loop
+  expect: "desktop-idle-ok"
+  save: desktop-census.txt
+  caption: "the wol-desktop surface attaches a buffer and commits a handful of times in 15 s (0.12.1: ~900)"
+- shot: idle-desktop
+- logs:
+  n: 100
