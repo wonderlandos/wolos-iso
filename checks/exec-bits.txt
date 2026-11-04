@@ -37,6 +37,7 @@ tests/test/lock-user.sh
 tests/test/serial_expect.py
 tests/test/shell-shots.sh
 tests/test/verdict.sh
+tests/wolvm/atlas-update-repo.sh
 tests/wolvm/mok-esp.sh
 tests/wolvm/test_wolvm.py
 tests/wolvm/wolvm

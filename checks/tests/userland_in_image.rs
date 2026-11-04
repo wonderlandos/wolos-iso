@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! What this file checks (wolos-iso): The image ships the everyday userland (and leaves the Firefox folder alone).
 //! Everyday userland from the real-GPU run: sudo for administrators, zsh for every account, user
-//! folders, unlocked keyring, printing, removable media and default apps (Helium the browser).
+//! folders, unlocked keyring, printing, removable media and default apps (Atlas the browser).
 //! Scripts run on the host with fakes.
 #![allow(dead_code, unused_imports)]
 #[path = "support/siblings.rs"]
@@ -66,7 +66,7 @@ fn image_ships_the_everyday_userland() {
         "baobab",
         "gnome-text-editor",
         "eog",
-        "helium-browser",
+        "atlas-browser",
     ] {
         assert!(pkgs.iter().any(|x| x == p), "packages.txt lacks {p}");
     }

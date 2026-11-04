@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # QA-100 H12 R2 (devices, live): removable disks and the camera. A USB disk with no readable
 # filesystem is shown nowhere (no sidebar row in Files, no notice: DEV2-5); the kernel's `vivid`
-# test camera stands in for a webcam: the browser (helium) opens /dev/video0 directly (not through
+# test camera stands in for a webcam: the browser (atlas) opens /dev/video0 directly (not through
 # PipeWire), shows its own permission prompt with a live preview before the person answers, and the
 # WolOS menu bar and Control Center show no camera or microphone indicator while it streams (H12
 # DEV-9/DEV-15 confirmed live; the PipeWire stream list is empty, so an indicator fed from it alone

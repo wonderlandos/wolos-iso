@@ -523,6 +523,20 @@ fn the_live_key_signs_the_live_medium_only() {
             "sb-key.sh",
             ENROL,
         ] {
+            // QA-DOC-29: boot-setup copies the machine's OWN certificate (boot-keys' db.der) to the
+            // startup partition's root under the stick's file name, so 'Enroll key from disk' lists
+            // it first and the key screen is reachable from the stick: the name is shared, the key
+            // is not. Every line of it that names the file copies db.der.
+            if bad == ENROL && p.ends_with("usr/lib/wolos/boot-setup") {
+                for l in s.lines().filter(|l| l.contains(ENROL)) {
+                    assert!(
+                        l.contains("cp \"$S/db.der\""),
+                        "{}: {ENROL} is only the destination of this machine's db.der: {l}",
+                        p.display()
+                    );
+                }
+                continue;
+            }
             assert!(
                 !s.contains(bad),
                 "{}: names the live-image key ({bad})",

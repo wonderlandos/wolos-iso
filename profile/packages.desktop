@@ -18,7 +18,7 @@ vulkan-radeon            # RADV
 lib32-vulkan-radeon
 vulkan-icd-loader
 lib32-vulkan-icd-loader
-intel-media-driver       # VA-API iHD (Gen8+): Helium/mpv GPU decode; LIBVA_DRIVER_NAME=iHD from wol-session
+intel-media-driver       # VA-API iHD (Gen8+): the browser/mpv GPU decode; LIBVA_DRIVER_NAME=iHD from wol-session
 # NVIDIA: nvidia-open-dkms + nvidia-utils are installed by `wol hw boot --online` when an NVIDIA GPU is
 # present (DKMS builds against linux-wolos-headers).
 # GPU proof tools (wolos/files/usr/lib/wolos/verify-gpu.sh)
@@ -72,7 +72,7 @@ noto-fonts               # Latin, Greek, Cyrillic, Arabic, Hebrew, Devanagari, T
 noto-fonts-emoji
 noto-fonts-cjk           # Chinese, Japanese, Korean: the language picker and the terminal (70-wolos-cjk-arabic.conf)
 # Apps
-helium-browser
+atlas-browser
 nautilus
 foot
 gnome-text-editor

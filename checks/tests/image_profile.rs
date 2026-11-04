@@ -134,12 +134,13 @@ fn every_tool_wol_install_runs_ships_in_the_image() {
         ),
         ("ntfsprogs", &["ntfsresize"]),
         ("xfsprogs", &["mkfs.xfs", "xfs_growfs"]),
+        ("cryptsetup", &["cryptsetup"]),
         // base: coreutils, systemd, util-linux.
         (
             "wolos-base",
             &[
-                "blkid", "cat", "df", "lsblk", "mkdir", "mkswap", "mount", "partx", "sfdisk",
-                "test", "udevadm", "umount",
+                "blkid", "cat", "df", "head", "lsblk", "mkdir", "mkswap", "mount", "partx",
+                "sfdisk", "test", "udevadm", "umount",
             ],
         ),
     ];
@@ -186,7 +187,7 @@ fn packages_are_arch_names_with_linux_wolos_only() {
         "bluez",
         "udisks2",
         "steam",
-        "helium-browser",
+        "atlas-browser",
         "inter-font",
         "adw-gtk-theme",
     ] {
@@ -264,8 +265,10 @@ fn profile_boots_linux_wolos_quietly_with_an_install_entry() {
         "{wait}"
     );
     let session = read("files/usr/lib/wolos/installer-session");
+    // The compositor starts from the Lua config (every writer emits Lua since DT-8); the .conf
+    // stays beside it for a compositor that still reads that format and is checked below.
     assert!(
-        session.contains("hypr/installer.conf")
+        session.contains("hypr/installer.lua")
             && session.contains("start --no-block wold.service")
     );
     let conf = read("desktop/overlay/usr/share/wolos/hypr/installer.conf");
@@ -852,75 +855,38 @@ fn iso_fits_one_release_asset() {
     );
 }
 
-/// Helium (the default browser) is the official x86_64 tarball repackaged: pinned version and
-/// checksum, signature checked against the release key pinned by fingerprint, Wayland wrapper.
+/// Atlas (the default browser, ADR 0043) is the package of the image, not the 0.12 tarball
+/// browser: the profile lists atlas-browser and no longer helium-browser, and the recipe that
+/// builds it is in the packages list and says it replaces the old package, so an upgrade swaps
+/// them. The recipe's own contract (the signed artifact, the launcher, the locale split) is
+/// tested where the recipe is: wolos-pkgbuilds checks/tests/recipe_atlas_browser.rs.
 #[test]
-fn helium_browser_is_the_signed_official_tarball_repackaged() {
-    let pkg = read("helium-browser/PKGBUILD");
-    bash_n("helium-browser/PKGBUILD");
-    bash_n("helium-browser/helium.sh");
-    assert!(pkg.contains("pkgname=helium-browser"));
-    assert!(pkg.contains("pkgver=0.20.3.1"));
-    assert!(pkg.contains("helium-${pkgver}-x86_64_linux.tar.xz"));
-    assert!(pkg.contains(".tar.xz.asc"));
-    // The release key (docs: README "Signature"), by fingerprint; its file is makepkg's keys/pgp.
-    let fpr = "BE677C1989D35EAB2C5F26C9351601AD01D6378E";
+fn atlas_browser_is_the_default_browser_package_of_the_image() {
+    let profile = read("profile/packages.desktop");
+    let listed = |name: &str| {
+        profile
+            .lines()
+            .map(|l| l.split('#').next().unwrap_or_default().trim())
+            .any(|l| l == name)
+    };
+    assert!(listed("atlas-browser"), "packages.desktop lacks atlas-browser");
     assert!(
-        pkg.contains(&format!("validpgpkeys=('{fpr}'")),
-        "validpgpkeys"
+        !listed("helium-browser"),
+        "helium-browser is replaced by atlas-browser"
     );
-    let key = read(&format!("helium-browser/keys/pgp/{fpr}.asc"));
-    assert!(key.starts_with("-----BEGIN PGP PUBLIC KEY BLOCK-----"));
-    // sha256sums: the tarball is pinned (first), the .asc is checked by gpg (SKIP), and the two
-    // files beside the recipe carry their hash.
-    let sums = pkg
-        .split("sha256sums=(")
-        .nth(1)
-        .unwrap()
-        .split(')')
-        .next()
-        .unwrap();
-    let hashes: Vec<&str> = sums
-        .split_whitespace()
-        .map(|w| w.trim_matches('\''))
-        .collect();
-    assert_eq!(hashes.len(), 4, "{sums}");
-    assert_eq!(
-        hashes[0],
-        "3759ea4e95bf4ef4a0a6477e3d73576b0f03906f2e80357275bfc6cacafb5fac"
+    let pkg = read("atlas-browser/PKGBUILD");
+    bash_n("atlas-browser/PKGBUILD");
+    assert!(pkg.contains("pkgname=(atlas-browser atlas-browser-locales)"));
+    assert!(
+        pkg.lines()
+            .any(|l| l.trim_start().starts_with("replaces=") && l.contains("helium-browser")),
+        "the recipe must replace helium-browser"
     );
-    assert_eq!(hashes[1], "SKIP", "the .asc is verified, not hashed");
-    for h in [hashes[0], hashes[2], hashes[3]] {
-        assert!(
-            h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit()),
-            "{h}"
-        );
-    }
-    for want in [
-        "/opt/helium",
-        "/usr/bin/helium",
-        "helium.desktop",
-        "hicolor",
-    ] {
-        assert!(pkg.contains(want), "PKGBUILD lacks {want}");
-    }
-    // Wrapper: Wayland by default, Wayland app-id `helium` (the Dock's running dot), VA-API only
-    // with a render node, per-user flags file.
-    let w = read("helium-browser/helium.sh");
-    for want in [
-        "--ozone-platform-hint=auto",
-        "CHROME_DESKTOP=helium.desktop",
-        "/dev/dri/renderD",
-        "AcceleratedVideoDecodeLinuxGL",
-        "exec /opt/helium/helium-wrapper",
-        "helium-flags.conf",
-    ] {
-        assert!(w.contains(want), "helium.sh lacks {want}");
-    }
     // Built with the other [wolos] packages, rebuilt when its recipe changes.
     let list = read("packages");
     assert!(
         list.lines()
-            .any(|l| l.starts_with("helium-browser ") && l.contains("helium-browser/"))
+            .any(|l| l.starts_with("atlas-browser ") && l.contains("atlas-browser/")),
+        "packages lists no recipe for atlas-browser"
     );
 }
