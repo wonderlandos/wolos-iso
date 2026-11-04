@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 WEB-24 / H3-2 (SETTINGS-F): the Doctor never answers with nothing. A failing check, a fix
+# that fails (wol-admind down), an unknown id, and the Doctor window while a check fails and while
+# wold does not answer: each is a report (what was checked, what failed, the error text, what to
+# do) in the CLI (exit status + JSON) and in the app. JOURNEY WRITTEN, NOT RUN (no ISO at the time).
+# Needs an installed disk with the test account (Alice Liddell / curiouser, uid 1000) and ssh.
+#   wolvm journey inst tests/wolvm/journeys/qa100-doctor-failure-report.yaml
+name: Doctor failures are reports
+steps:
+- start
+- wait-agent:
+  timeout: 600
+# 1. A failing check: the firewall stopped. The list still prints, exit 1, `ready` false.
+- ssh: "systemctl stop nftables; sleep 1; wol doctor --json > /run/doctor-fail.json; echo rc=$?; python3 -I -c \"import json;d=json.load(open('/run/doctor-fail.json'));print('ready',d['ready']);print('rows',len(d['checks']))\""
+  rc: any
+  expect: "rc=1"
+  save: doctor-failing-check.txt
+  caption: "a failing check exits 1 and still prints the whole report"
+- ssh: "python3 -I -c \"import json;d=json.load(open('/run/doctor-fail.json'));assert d['ready'] is False and len(d['checks'])>=8;print('report-full')\""
+  expect: "report-full"
+# 2. The app's bridge call gets the report as an answer, not 'It did not work.' (QA-WEB-24).
+- ssh: "runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 wol webapp-call org.wolos.webapp.doctor doctor.check '{}' > /run/doctor-call.json; python3 -I -c \"import json;r=json.load(open('/run/doctor-call.json'));assert 'err' not in r, r;c=[x for x in r['ok']['checks'] if x['id']=='security.firewall'][0];print('bridge-report', c['status'])\""
+  rc: any
+  expect: "bridge-report fail"
+  save: doctor-bridge-report.txt
+  caption: "wol webapp-call doctor.check while a check fails: ok + the rows (0.12.x answered 'It did not work.')"
+# 3. A fix that cannot work: wol-admind stopped. JSON carries message, error, next, exit, check.
+- ssh: "systemctl stop wol-admind.socket wol-admind.service; wol doctor fix security.firewall --json > /run/doctor-fix.json; echo rc=$?; python3 -I -c \"import json;r=json.load(open('/run/doctor-fix.json'));print(r['ran'],r['ok'],r['exit']);print(r['message']);print(r.get('error'));print(r['next']);print(r['check']['id'])\""
+  rc: any
+  expect: "False"
+  save: doctor-fix-failed.txt
+  caption: "the fix report: ran true, ok false, the message, the error text, what to do, the row as it is"
+- ssh: "python3 -I -c \"import json;r=json.load(open('/run/doctor-fix.json'));assert r['ran'] is True and r['ok'] is False and r['message'] and r['next'] and r['exit']!=0 and r['check']['id']=='security.firewall';print('fix-report-ok')\""
+  expect: "fix-report-ok"
+- ssh: "systemctl stop nftables; wol doctor fix security.firewall 2>&1 >/dev/null | tail -n 3; true"
+  rc: any
+  save: doctor-fix-failed-text.txt
+  caption: "the text report: 'is not fixed' with the reason and what to do on stderr"
+# 4. An id that does not exist: exit 66 and a JSON answer on stdout (not an empty one).
+- ssh: "wol doctor fix security.nope --json; echo rc=$?"
+  rc: any
+  expect: "rc=66"
+  save: doctor-fix-unknown.txt
+  caption: "an unknown id: not found, and the JSON says so"
+- ssh: "wol doctor fix security.nope --json | python3 -I -c \"import json,sys;r=json.load(sys.stdin);assert r['ran'] is False and r['ok'] is False and 'security.nope' in r['error'] and r['next'];print('unknown-report-ok')\""
+  expect: "unknown-report-ok"
+# 5. The Doctor window while a check fails: the row shows, not the error state.
+- ssh: "systemctl start wol-admind.socket; systemctl stop nftables; echo ready-for-window"
+  expect: "ready-for-window"
+- wait-stable:
+  timeout: 180
+  caption: "login window"
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: "desktop up"
+- ssh: "runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$') sh -c 'nohup /usr/bin/wol-webhost /usr/share/wolos/webapps/doctor/app.toml >/tmp/doctor-failure.log 2>&1 &'; sleep 6; echo launched"
+  expect: "launched"
+- wait-stable:
+  timeout: 60
+- shot: doctor-with-failing-check
+  caption: "EXPECT: the Security row 'Firewall / Needs a fix' on screen; 0.12.x: 'Doctor could not check your computer' exactly because a check failed (QA-WEB-24)"
+# 6. wold refuses / does not answer: the error state says what was checked, what to do, and the raw text.
+- ssh: "systemctl --user -M aliceliddell@ stop wold.service 2>/dev/null || pkill -u 1000 -x wold; echo wold-stopped"
+  rc: any
+  expect: "wold-stopped"
+- key: tab
+- key: tab
+- key: ret
+  caption: "Check again with wold not answering"
+- sleep: 8
+- shot: doctor-wold-not-answering
+  caption: "EXPECT: 'Doctor could not check your computer', 'Doctor was looking at: All checks.', 'Choose Try again. If it keeps happening, restart the computer.', and 'Show what happened' (never a blank page or 'Everything is fine')"
+- ssh: "systemctl start nftables; echo firewall-back"
+  expect: "firewall-back"
+- checkpoint: qa100-doctor-failure-report
+- stop
