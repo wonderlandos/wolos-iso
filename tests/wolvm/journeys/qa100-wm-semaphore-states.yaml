@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-H21 (window management): the title-bar buttons (hyprbars + realtime titlebar.rs) in every
+# state at 1280x800: focused, inactive, zoomed, double-click, drag clamps. Geometry: a bar is 28 px
+# above the window's 'at', buttons 12 px, centres at width-23 (close), -45 (zoom), -67 (minimise).
+#   wolvm journey wm tests/wolvm/journeys/qa100-wm-semaphore-states.yaml
+name: window management, title-bar buttons in every state
+steps:
+- start
+- wait-text: "Install WolOS"
+  timeout: 240
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 120
+- click: 710 599
+- sleep: 3
+- wait-stable:
+  timeout: 120
+- ssh: "runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 systemd-run --user --collect foot; sleep 2; runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl dispatch resizewindowpixel exact 340 300,activewindow; runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl dispatch movewindowpixel exact 20 420,activewindow; runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 systemd-run --user --collect wol-settings; sleep 4; runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl dispatch movewindowpixel exact 380 80,activewindow; echo placed"
+  expect: placed
+- sleep: 1
+- shot: two-windows
+  caption: foot at 20,420 (bar y 392-420, close 337,406 zoom 315,406 min 293,406); Settings at 380,80 (bar y 52-80)
+- click: 315 406
+  caption: zoom button of the INACTIVE foot
+- sleep: 1.5
+- ssh: "runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl -j clients | python3 -c 'import json,sys; print([ (c[\"class\"],c[\"fullscreen\"],c[\"at\"]) for c in json.load(sys.stdin) if c[\"class\"]==\"foot\"])'"
+  save: inactive-zoom.txt
+  caption: EXPECT foot fullscreen 1 at [0, 56] on the first click
+- click: 1235 42
+  caption: zoom button of the zoomed window unzooms
+- sleep: 1.2
+- click: 690 66
+  double: true
+  caption: double-click the Settings title zooms it
+- sleep: 1.5
+- ssh: "runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl -j clients | python3 -c 'import json,sys; print([ (c[\"class\"],c[\"fullscreen\"],c[\"at\"],c[\"size\"]) for c in json.load(sys.stdin)])'"
+  save: after-dblclick.txt
+  caption: EXPECT org.wolos.settings fullscreen 1 at [0, 56] size [1280, 666]
+- click: 690 42
+  double: true
+- sleep: 1.2
+- click: 293 406
+  caption: minimise foot
+- sleep: 1.2
+- ssh: "runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl -j clients | python3 -c 'import json,sys; print([ (c[\"class\"],c[\"workspace\"][\"name\"]) for c in json.load(sys.stdin)])'"
+  save: after-minimise.txt
+  caption: EXPECT foot on special:hidden
+- click: 795 755
+  caption: Dock Terminal icon brings it back (fork patch 0008)
+- sleep: 1.5
+- ssh: "runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl -j clients | python3 -c 'import json,sys; print([ (c[\"class\"],c[\"workspace\"][\"name\"]) for c in json.load(sys.stdin)])'"
+  save: after-dock.txt
+  caption: EXPECT foot on workspace 1 again
+- stop

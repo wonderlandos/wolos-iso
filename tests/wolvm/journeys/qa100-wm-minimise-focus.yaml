@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-H21 (window management): minimise leaves the keyboard focus on the hidden window.
+# WM-1: after Minimise (title-bar button, ⌘M, Window > Minimise) the hidden window is still the
+# active window; typed keys land in it; the menu bar still names it. Live image, Try WolOS.
+#   wolvm new wm --iso wolos.iso --tpm --ssh --disk 40G --res 1280x800
+#   wolvm journey wm tests/wolvm/journeys/qa100-wm-minimise-focus.yaml
+name: window management, minimise keeps the focus on the hidden window
+steps:
+- start
+- wait-text: "Install WolOS"
+  timeout: 240
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 120
+- click: 710 599
+  caption: Try WolOS
+- sleep: 3
+- wait-stable:
+  timeout: 120
+- ssh: "runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 systemd-run --user --collect foot; sleep 2; runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl dispatch resizewindowpixel exact 340 300,activewindow; runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl dispatch movewindowpixel exact 20 420,activewindow; echo placed"
+  expect: placed
+- sleep: 1
+- type: "echo VISIBLE"
+- shot: terminal-before
+- key: super-m
+  caption: Window > Minimise (⌘M) on the only window
+- sleep: 1.5
+- ssh: "runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl -j activewindow | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get(\"class\"), d.get(\"workspace\",{}).get(\"name\"))'"
+  save: active-after-minimise.txt
+  caption: EXPECT no active window or a visible one. BUG WM-1 if 'foot special:hidden'
+- type: " HIDDENTYPED"
+- shot: typed-into-hidden
+  caption: EXPECT the keys go nowhere visible; the menu bar must not still say Terminal
+- ssh: "runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl dispatch focuswindow class:foot; echo restored"
+  expect: restored
+- sleep: 1.5
+- shot: terminal-restored
+  caption: BUG WM-1 if the prompt reads 'echo VISIBLE HIDDENTYPED' (keys typed while hidden)
+- stop

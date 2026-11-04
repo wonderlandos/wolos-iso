@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-H21 (window management): one set of window buttons per window, and Window > Fill geometry.
+# WM-2: a GTK app under Xwayland draws its own header buttons AND gets the compositor strip.
+# WM-3: Fill/Centre assume a 28 px strip on every window (appmenu.rs CSD_TAG 'wol-csd' is never set;
+# wol-hypr tags 'wol-lights-none'), so a header-bar app fills from y=56, not y=28.
+#   wolvm journey wm tests/wolvm/journeys/qa100-wm-decorations-xwayland-fill.yaml
+name: window management, Xwayland decorations and Fill on a header-bar app
+steps:
+- start
+- wait-text: "Install WolOS"
+  timeout: 240
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 120
+- click: 710 599
+- sleep: 3
+- wait-stable:
+  timeout: 120
+- ssh: "runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 systemd-run --user --collect env GDK_BACKEND=x11 gnome-text-editor --new-window; sleep 5; runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl -j clients | python3 -c 'import json,sys; print([ (c[\"class\"],c[\"xwayland\"],c[\"tags\"]) for c in json.load(sys.stdin)])'"
+  save: x11-editor.txt
+  caption: EXPECT the Xwayland editor tagged wol-lights-none. BUG WM-2 if tags are [] (strip + own buttons)
+- wait-stable:
+  timeout: 30
+- shot: x11-editor-two-sets
+  caption: BUG WM-2 if two rows of three buttons show (compositor strip above the GTK header bar)
+- ssh: "runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl dispatch closewindow class:gnome-text-editor; runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 systemd-run --user --collect nautilus; sleep 4; echo files"
+  expect: files
+- wait-stable:
+  timeout: 30
+- click: 140 14
+  caption: Window menu
+- sleep: 1
+- click: 68 100
+  caption: Fill
+- sleep: 1.5
+- ssh: "runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl -j clients | python3 -c 'import json,sys; print([ (c[\"class\"],c[\"at\"],c[\"size\"]) for c in json.load(sys.stdin) if \"Nautilus\" in c[\"class\"]])'"
+  save: fill.txt
+  caption: EXPECT Files at [0, 28] size [1280, 694]. BUG WM-3 if at [0, 56] size [1280, 666]
+- shot: files-filled
+- stop
