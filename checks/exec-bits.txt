@@ -14,6 +14,7 @@ release/release-manifest.sh
 release/sb-key.sh
 release/sb-layout.sh
 release/sign-release.sh
+tests/guest-account.sh
 tests/run-gpu.sh
 tests/run-installed.sh
 tests/run.sh

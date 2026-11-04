@@ -18,6 +18,9 @@ Release
 
 Tests
 - `tests/wolvm`: `stop` treats a guest that already powered itself off (a closed or resetting monitor) as going down, so the install-auto journey no longer reports a failure there; the wait for the process stays and the journey's stop step reports the real status.
+- `test-modules.sh` resolves the module packages through a temporary copy of pacman's database with fresh repo lists, as `modules-install` does: on an installed system the database is on the read-only seal, so a plain `pacman -Sp` saw stale lists and reported a published module as missing.
+- `test-modules.sh` checks Claude Code's managed settings and the WolOS skill only when the AI Assistants module (`wolos-module-ai-claude`) is installed; a plain install has neither, by design.
+- New: `tests/guest-account.sh [USER]` makes the desktop account the guest tests run as (home, wheel/audio/video, lingering so the user manager and PipeWire start) in a VM from the unattended install, which creates no account (the Setup Assistant does on first boot).
 
 ## 0.12.0 (unreleased)
 
