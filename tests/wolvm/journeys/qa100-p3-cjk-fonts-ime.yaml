@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-P3 B-02, B-03, B-04: Japanese and Chinese are offered in Language & Region, but the image
+# has no CJK font (packages.desktop: noto-fonts, noto-fonts-emoji only), no input method (no fcitx5
+# or ibus, no GTK_IM_MODULE/QT_IM_MODULE/XMODIFIERS), and the clock and date are English literals
+# in 24-hour form whatever the language (clock.rs DAYS/MONTHS, datetime.rs clock_line).
+# Needs an installed disk with the test account (Alice Liddell / curiouser).
+# wolvm journey <vm> tests/wolvm/journeys/qa100-p3-cjk-fonts-ime.yaml
+name: CJK fonts, input method and locale-formatted dates
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop up
+- ssh: "echo 'fonts ja:'; fc-list :lang=ja family | head -3; echo 'fonts zh:'; fc-list :lang=zh-cn family | head -3; echo 'fonts ko:'; fc-list :lang=ko family | head -3; echo 'fonts ar:'; fc-list :lang=ar family | head -3; echo 'ime packages:'; pacman -Qq | grep -E '^(fcitx|ibus|anthy|mozc|rime)' ; echo 'im env:'; u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user show-environment | grep -E 'IM_MODULE|XMODIFIERS'; echo probe-done"
+  rc: any
+  expect: "probe-done"
+  save: cjk-fonts-ime.txt
+  caption: "BUG (B-03) if 'fonts ja/zh/ko' are empty; BUG (B-02) if no IME package and no IM env. Arabic is not offered, its line is for the record"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Language & Region' >/dev/null 2>&1; sleep 3; pgrep -u 1000 -x wol-settings >/dev/null && echo settings-running"
+  expect: "settings-running"
+- wait-stable:
+  timeout: 60
+- click: Language
+  caption: open the language picker
+- wait-stable:
+  timeout: 20
+- shot: p3-language-list-cjk-rows
+  caption: "ASSERT (B-03): the 日本語 and 中文 (简体) rows show real glyphs. BUG if they are boxes or blank"
+- key: esc
+- ssh: "pkill -u 1000 -x wol-settings; echo closed"
+  rc: any
+  expect: "closed"
+# B-04: with a German locale the menubar clock and the Date & Time pane must follow it. Generate the
+# locale first (H1's finding: Settings does not), then relaunch the shell clock surfaces by opening
+# the pane under LANG=de_DE.UTF-8 and reading what it prints.
+- ssh: "grep -q '^de_DE.UTF-8' /etc/locale.gen || echo 'de_DE.UTF-8 UTF-8' >> /etc/locale.gen; locale-gen >/dev/null 2>&1; locale -a | grep -i de_DE || echo no-de-locale"
+  rc: any
+  save: de-locale.txt
+  caption: "a German locale exists for the check (sealed /usr may refuse locale-gen: then the line says no-de-locale and the shot still shows the English literals)"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" LANG=de_DE.UTF-8 LC_ALL=de_DE.UTF-8 setsid -f wol-settings 'Date & Time' >/dev/null 2>&1; sleep 3; pgrep -u 1000 -x wol-settings >/dev/null && echo settings-running"
+  expect: "settings-running"
+- wait-stable:
+  timeout: 60
+- shot: p3-datetime-under-de
+  caption: "ASSERT (B-04): the 'Date and time' row reads a German weekday and month (e.g. 'Dienstag, 4. November'); BUG if 'Tuesday 4 November, 14:30'"
+- ssh: "pkill -u 1000 -x wol-settings; echo closed"
+  rc: any
+  expect: "closed"
+- shot: p3-menubar-clock
+  caption: "The menubar clock: English 'Tue 4 Nov' and 24-hour whatever the language (B-04); no 12-hour choice exists in Settings"
+- checkpoint: qa100-p3-cjk
+- stop

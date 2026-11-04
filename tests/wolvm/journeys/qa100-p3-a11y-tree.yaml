@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-P3 A-02, A-03, A-07: what a screen reader would get. (1) The greeter session has no D-Bus
+# session bus, so no AT-SPI bus can start there (wol-greeter-session). (2) In the desktop session
+# the a11y bus starts, but Settings' switches, sliders and menus carry no accessible name
+# (form::row puts the title label beside the control with no LabelledBy relation). (3) Control
+# Center has no keyboard shortcut; the path is Ctrl+F2 (menubar) then arrows.
+# Needs an installed disk with the test account (Alice Liddell / curiouser). Uses busctl only.
+# wolvm journey <vm> tests/wolvm/journeys/qa100-p3-a11y-tree.yaml
+name: AT-SPI reach of the login window and the Settings controls, Control Center by keyboard
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window
+- ssh: "ls -la /var/run/wol-login/bus 2>&1; pgrep -u _wollogin -a dbus 2>&1; pgrep -u _wollogin -a at-spi 2>&1; echo probe-done"
+  rc: any
+  expect: "probe-done"
+  save: greeter-bus.txt
+  caption: "BUG (A-03) if no bus socket and no dbus/at-spi process: nothing can read the login window or Setup"
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop up
+# The session a11y bus: GTK asks org.a11y.Bus for its address; a11y must be enabled for GTK to export.
+- ssh: "u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus sh -c 'busctl --user call org.a11y.Bus /org/a11y/bus org.a11y.Bus GetAddress; busctl --user get-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled; busctl --user get-property org.a11y.Bus /org/a11y/bus org.a11y.Status ScreenReaderEnabled'"
+  rc: any
+  save: session-a11y-bus.txt
+  caption: "EXPECT an address; IsEnabled false by default (no screen reader shipped, A-01)"
+- ssh: "u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus sh -c 'busctl --user set-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled b true; echo enabled'"
+  rc: any
+  expect: "enabled"
+  caption: turn the a11y bus on, as a screen reader would
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus GTK_A11Y=atspi setsid -f wol-settings Accessibility >/dev/null 2>&1; sleep 4; pgrep -u 1000 -x wol-settings >/dev/null && echo settings-running"
+  expect: "settings-running"
+  caption: Settings > Accessibility with the AT-SPI backend forced on
+- wait-stable:
+  timeout: 60
+- shot: p3-a11y-accessibility-pane
+  caption: "The pane: Increase contrast, Reduce transparency, Reduce motion, Pointer size, Zoom. No screen reader, larger text, sticky keys (A-01, A-04, A-05)"
+# Walk the AT-SPI tree of wol-settings on the a11y bus: every object with role "toggle button"/"switch"
+# or "slider" must have a non-empty Name. busctl can list the tree; the names come from the
+# Accessible interface's Name property on each node.
+- ssh: "u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus sh -c 'A=$(busctl --user call org.a11y.Bus /org/a11y/bus org.a11y.Bus GetAddress | sed \"s/^s \\\"//; s/\\\"$//\"); echo \"a11y=$A\"; export DBUS_SESSION_BUS_ADDRESS=$A; for n in $(busctl list --acquired | awk \"/^:/ {print \\$1}\"); do if busctl tree \"$n\" 2>/dev/null | grep -q /org/a11y/atspi/accessible; then for p in $(busctl tree \"$n\" | grep -o \"/org/a11y/atspi/accessible/[0-9]*\" | head -400); do r=$(busctl call \"$n\" \"$p\" org.a11y.atspi.Accessible GetRoleName 2>/dev/null); nm=$(busctl get-property \"$n\" \"$p\" org.a11y.atspi.Accessible Name 2>/dev/null); case \"$r\" in *switch*|*toggle*|*slider*|*combo*|*\"check box\"*) echo \"$r name=$nm\";; esac; done; fi; done'"
+  rc: any
+  save: settings-a11y-names.txt
+  caption: "ASSERT (A-02): every switch/slider line has a non-empty name (the row title). BUG if name=s \"\" for the Accessibility switches"
+- ssh: "pkill -u 1000 -x wol-settings; echo closed"
+  rc: any
+  expect: "closed"
+# A-07: Control Center by keyboard only. There is no bind; try the menubar path.
+- key: ctrl-f2
+- wait-stable:
+  timeout: 20
+- shot: p3-cc-by-keyboard-menubar
+  caption: "ASSERT: the menubar shows with a focus ring on one item (keyboard took focus); otherwise the shortcut only shows it"
+- key: right right right right right
+- key: ret
+- wait-stable:
+  timeout: 20
+- shot: p3-cc-by-keyboard-open
+  caption: "ASSERT (A-07): Control Center opened from the keyboard; if not, there is no keyboard path to Wi-Fi, Bluetooth, volume"
+- key: esc
+- key: esc
+- ssh: "journalctl -b --no-pager -n 80 | grep -iE 'a11y|atspi|wol-settings|gtk' | tail -40"
+  rc: any
+  save: a11y-journal.txt
+  caption: GTK or AT-SPI warnings during the run
+- checkpoint: qa100-p3-a11y-tree
+- stop

@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-P3 C-01, C-05, C-06: a 4 GB laptop on a phone hotspot with a nearly full disk.
+# (1) wolos-update-download.timer runs daily with no metered, battery or free-space condition and
+# pacman -Sw downloads the whole pending set. (2) Swap is zram only (half of RAM), no systemd-oomd
+# or earlyoom, the Memory Saver has no pressure signal. (3) Update Now starts without a free-space
+# check and the 5 % notice sends people to the Trash.
+# Best run with the VM at 4 GB (wolvm <vm> --mem 4096 if the harness allows; else the zram line
+# just reports the real half). Needs an installed disk with the test account (Alice Liddell /
+# curiouser) and a network.
+# wolvm journey <vm> tests/wolvm/journeys/qa100-p3-lowmem-metered.yaml
+name: Low memory, metered connection and a nearly full disk
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop up
+# C-05: memory layout of the machine.
+- ssh: "free -m; echo ---; zramctl; echo ---; swapon --show; echo ---; systemctl is-enabled systemd-oomd earlyoom 2>&1; systemctl show user@1000.service -p MemoryMax -p ManagedOOMMemoryPressure; echo probe-done"
+  rc: any
+  expect: "probe-done"
+  save: memory-layout.txt
+  caption: "RECORD (C-05): zram = half of RAM, no disk swap, oomd/earlyoom not enabled, user slice MemoryMax=80% only"
+# C-01: the automatic download unit's conditions, then a metered connection and a forced run.
+- ssh: "systemctl cat wolos-update-download.service | grep -E 'Condition|Exec' ; systemctl show wolos-update-download.service -p ConditionACPower -p ExecCondition; echo probe-done"
+  rc: any
+  expect: "probe-done"
+  save: download-unit.txt
+  caption: "BUG (C-01) if there is no Condition*/ExecCondition line at all"
+- ssh: "c=$(nmcli -g NAME,DEVICE connection show --active | awk -F: '$2!=\"\" && $2!=\"lo\" {print $1; exit}'); echo \"conn=$c\"; nmcli connection modify \"$c\" connection.metered yes && nmcli connection up \"$c\" >/dev/null 2>&1; nmcli -g GENERAL.METERED device show $(nmcli -g DEVICE connection show --active | grep -v '^lo$' | head -1)"
+  rc: any
+  save: metered-set.txt
+  caption: "the connection is now metered (expect 'yes')"
+- ssh: "du -sm /var/cache/pacman/pkg 2>/dev/null | cut -f1 > /tmp/cache-before; cat /tmp/cache-before; timeout 240 systemctl start wolos-update-download.service; echo \"rc=$?\"; journalctl -u wolos-update-download.service --no-pager -n 20"
+  rc: any
+  save: download-run.txt
+  caption: "BUG (C-01) if the unit ran pacman -Sw on a metered connection (rc=0 and a download in the journal) instead of skipping with a reason"
+- ssh: "b=$(cat /tmp/cache-before); a=$(du -sm /var/cache/pacman/pkg 2>/dev/null | cut -f1); echo \"cache before=${b}MB after=${a}MB\""
+  rc: any
+  save: download-delta.txt
+  caption: "RECORD: how much the metered connection paid for"
+- ssh: "c=$(nmcli -g NAME,DEVICE connection show --active | awk -F: '$2!=\"\" && $2!=\"lo\" {print $1; exit}'); nmcli connection modify \"$c\" connection.metered unknown; echo unmetered"
+  rc: any
+  expect: "unmetered"
+# C-06: nearly full disk. Fill /var to 4 % free, open Software Update, press Update Now.
+- ssh: "avail=$(df --output=avail -B1 /var | tail -1); total=$(df --output=size -B1 /var | tail -1); keep=$((total * 4 / 100)); fill=$((avail - keep)); [ \"$fill\" -gt 0 ] && fallocate -l \"$fill\" /var/qa100-fill.bin; df -h /var | tail -1"
+  rc: any
+  save: disk-filled.txt
+  caption: "/var at about 4 % free"
+- wait-stable:
+  timeout: 90
+  caption: the 5 % alert has a minute to show
+- shot: p3-disk-almost-full-notice
+  caption: "ASSERT (C-06): 'Your Disk Is Almost Full' names Settings > Storage or Restore; today it says 'Empty the Trash or remove files you don't need'"
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Software Update' >/dev/null 2>&1; sleep 3; pgrep -u 1000 -x wol-settings >/dev/null && echo settings-running"
+  expect: "settings-running"
+- wait-stable:
+  timeout: 60
+- shot: p3-software-update-no-size
+  caption: "ASSERT (C-02): the pending updates show a download size; today a count and names only"
+- click: Update Now
+  caption: start an update with 4 % free
+- wait-stable:
+  timeout: 240
+- shot: p3-update-now-full-disk
+  caption: "ASSERT (C-06): a sentence with the space needed and the space free, before anything is written; BUG if the slot build starts and fails later, or if the failure reads 'Check that you're online'"
+- ssh: "journalctl -b --no-pager -n 60 -u wol-admind -u wold 2>/dev/null | grep -iE 'space|ENOSPC|slot|update' | tail -20"
+  rc: any
+  save: update-journal.txt
+- ssh: "pkill -u 1000 -x wol-settings; rm -f /var/qa100-fill.bin; df -h /var | tail -1; echo cleaned"
+  rc: any
+  expect: "cleaned"
+- checkpoint: qa100-p3-lowmem-metered
+- stop

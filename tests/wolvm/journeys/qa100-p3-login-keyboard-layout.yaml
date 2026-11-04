@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-P3 B-01: the login window always uses the US keyboard layout. login.lua sets no
+# input.kb_layout and wol-greeter-session exports nothing about the keyboard; the account's layout
+# lives in ~/.config/hypr/wolos/keyboard.lua, which only the desktop session reads. A German or
+# ABNT2 password with ß, ç, @, z/y is typed on US at login and fails.
+# Needs an installed disk with the test account (Alice Liddell / curiouser).
+# wolvm journey <vm> tests/wolvm/journeys/qa100-p3-login-keyboard-layout.yaml
+name: Login window keyboard layout follows the account's layout
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window, first boot of the run
+- ssh: "cat /etc/vconsole.conf 2>/dev/null; echo ---; XDG_RUNTIME_DIR=/var/run/wol-login runuser -u _wollogin -- sh -c 'HYPRLAND_INSTANCE_SIGNATURE=$(ls /var/run/wol-login/hypr 2>/dev/null | head -1) hyprctl -j devices' 2>/dev/null | grep -o '\"active_keymap\": \"[^\"]*\"' | sort -u"
+  rc: any
+  save: greeter-keymap-before.txt
+  caption: the greeter compositor's active keymap before any change (expected US on a US install)
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop up
+# Give the account a German layout the way Settings > Keyboard does (first layout = default), and
+# the system console the matching keymap, as the installer does for a German install.
+- ssh: "u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 wol-settings --help >/dev/null 2>&1; h=$(getent passwd 1000 | cut -d: -f6); python3 - \"$h/.config/wolos/desktop.json\" <<'EOF'\nimport json,sys,os\np=sys.argv[1]\nd=json.load(open(p)) if os.path.exists(p) else {}\nd['layouts']=['de']\njson.dump(d,open(p,'w'))\nprint('layouts', d['layouts'])\nEOF\nchown 1000:1000 \"$h/.config/wolos/desktop.json\"; printf 'KEYMAP=de\\n' > /etc/vconsole.conf; echo vconsole-de"
+  rc: any
+  expect: "vconsole-de"
+  save: set-layout.txt
+  caption: account layout = de, console KEYMAP=de
+- ssh: "systemctl reboot"
+  rc: any
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window after the reboot
+- ssh: "XDG_RUNTIME_DIR=/var/run/wol-login runuser -u _wollogin -- sh -c 'HYPRLAND_INSTANCE_SIGNATURE=$(ls /var/run/wol-login/hypr 2>/dev/null | head -1) hyprctl -j devices' 2>/dev/null | grep -o '\"active_keymap\": \"[^\"]*\"' | sort -u"
+  rc: any
+  save: greeter-keymap-after.txt
+  caption: "EXPECT German; BUG (B-01) if still English (US): the greeter never reads the layout"
+- shot: p3-login-no-layout-indicator
+  caption: "ASSERT: the login window shows which layout is active beside the password field (expected); today nothing"
+# A layout-sensitive string in the password field: on German z and y swap. The field hides its text,
+# so the test is the result: with the right layout "curiouser" typed as "curiouser" still logs in;
+# a password containing y or z would not. Type the real password and check the outcome either way.
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+- shot: p3-login-result
+  caption: "If the desktop is up, the password had no layout-dependent letters; the keymap file above is the verdict"
+- ssh: "printf 'KEYMAP=us\\n' > /etc/vconsole.conf; h=$(getent passwd 1000 | cut -d: -f6); python3 - \"$h/.config/wolos/desktop.json\" <<'EOF'\nimport json,sys\np=sys.argv[1]\nd=json.load(open(p))\nd.pop('layouts',None)\njson.dump(d,open(p,'w'))\nprint('restored')\nEOF"
+  rc: any
+  expect: "restored"
+  caption: put the layout back
+- checkpoint: qa100-p3-login-layout
+- stop
