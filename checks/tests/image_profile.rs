@@ -860,7 +860,7 @@ fn helium_browser_is_the_signed_official_tarball_repackaged() {
     bash_n("helium-browser/PKGBUILD");
     bash_n("helium-browser/helium.sh");
     assert!(pkg.contains("pkgname=helium-browser"));
-    assert!(pkg.contains("pkgver=0.20.2.1"));
+    assert!(pkg.contains("pkgver=0.20.3.1"));
     assert!(pkg.contains("helium-${pkgver}-x86_64_linux.tar.xz"));
     assert!(pkg.contains(".tar.xz.asc"));
     // The release key (docs: README "Signature"), by fingerprint; its file is makepkg's keys/pgp.
