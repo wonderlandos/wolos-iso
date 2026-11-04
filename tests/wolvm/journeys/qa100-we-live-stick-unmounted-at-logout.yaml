@@ -5,6 +5,12 @@
 # Make the VM with an extra raw disk (truncate -s 64M stick.img; mkfs.vfat -n STICK stick.img):
 #   wolvm new <vm> --from-image installed.qcow2 --drive /scratch/we-live/stick.img
 # Needs an installed disk with the test account (Alice Liddell / curiouser, uid 1000).
+# Polkit caveat: the unit's ExecStop runs `udisksctl unmount` as the account while the user manager
+# stops, after the session has ended. udisks2 lets an account unmount its own mounts without a
+# password only while polkit sees it as local and active (10-wolos.rules); at logout it may not be
+# either, and then the unmount is refused and the stick stays mounted. This journey is what shows
+# which: if mounted-after.txt still lists the stick, the fix needs the unmount to run earlier (on
+# the session's end, not the manager's) or as root through udisks' unmount-others.
 # wolvm journey <vm> tests/wolvm/journeys/qa100-we-live-stick-unmounted-at-logout.yaml
 name: A stick mounted by the account is unmounted at logout, not left for the next account
 steps:
@@ -19,7 +25,7 @@ steps:
 - wait-stable:
   timeout: 120
   caption: "desktop up"
-- ssh: "su -l aliceliddell -c 'systemctl --user is-active wolos-media-unmount.service' 2>&1"
+- ssh: "su -l aliceliddell -c 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user is-active wolos-media-unmount.service' 2>&1"
   expect: "active"
   caption: "the unit is up for the session (the session target wants it)"
 - ssh: "su -l aliceliddell -c 'XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus udisksctl mount -b /dev/vdb' 2>&1"
