@@ -1,0 +1,134 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# SETUP-firstlogin (0.13): each person's own Setup at their first sign-in, before the desktop
+# (shell::first_login, wol-session, hyprland.lua). On an installed disk with alice (Alice Liddell /
+# curiouser, an administrator). A new account bob gets it at his first sign-in; Later puts it off
+# (asked again at the next sign-in); the second time he goes through the six pages to Done, and the
+# third sign-in goes straight to the desktop. Alice's own setup is closed first (her marker), so the
+# login window shows two accounts.
+#   wolvm journey <vm> tests/wolvm/journeys/qa100-first-login-setup.yaml   (unrun: written by SETUP-firstlogin)
+# Coordinates (1280x800): the bob tile from qa100-plug2-mcp-orphan.yaml; Later in the card foot from the
+# golden firstlogin-privacy-1280 (left of Continue). Adjust to the screenshot when the layout moves.
+name: first sign-in Setup for an account added later, Later once, the six pages, then never again
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: startup lock screen of the only account
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: alice's session (her own first sign-in Setup when this is her first session on the disk)
+- ssh: "u=$(getent passwd 1000 | cut -d: -f1); su -l $u -c 'mkdir -p ~/.local/state/wolos && echo done journey > ~/.local/state/wolos/setup-done'; pkill -u 1000 -f 'wol-setup --first-login'; sleep 3; pgrep -u 1000 -x wol-shell >/dev/null && echo alice-desktop"
+  expect: "alice-desktop"
+  caption: alice's setup closed by her marker; the shell starts after it (the start line runs it next)
+- ssh: "useradd -m -c 'Bob B' -G seat,video bob && echo 'bob:curiouser' | chpasswd && test ! -e /home/bob/.local/state/wolos && echo bob-made"
+  expect: "bob-made"
+  caption: an account added later has no marker yet
+- ssh: "su -l $(getent passwd 1000 | cut -d: -f1) -c 'XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr | head -1) hyprctl dispatch exit'; sleep 8; echo exit-sent"
+  expect: "exit-sent"
+  rc: any
+  caption: alice logs out
+- wait-stable:
+  timeout: 120
+  caption: the login window with Alice and Bob
+# Bob's first sign-in: the setup, before the desktop.
+- click: 719 590
+  caption: the bob tile
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: "Privacy, 1 of 6: Send error reports (read-only: an administrator chooses), Location Services, Later and Continue"
+- ssh: "pgrep -u bob -af 'wol-setup --first-login' && echo setup-running"
+  expect: "setup-running"
+- ssh: "test -e /run/user/$(id -u bob)/wol-first-login && test -e /home/bob/.local/state/wolos/setup-started && echo flag-set"
+  expect: "flag-set"
+  caption: wol-session left the flag for the compositor's start line
+- ssh: "pgrep -u bob -x wol-shell >/dev/null && echo shell-up || echo no-desktop-yet"
+  rc: any
+  expect: "no-desktop-yet"
+  caption: the desktop waits for the setup
+- shot firstlogin-privacy
+- click: 659 609
+  caption: Later
+- wait-stable:
+  timeout: 60
+  caption: bob's desktop
+- ssh: "cat /home/bob/.local/state/wolos/setup-later; test ! -e /home/bob/.local/state/wolos/setup-done && echo later-counted"
+  expect: "later-counted"
+  save: bob-later.txt
+  caption: setup-later says 1, no marker
+- ssh: "pgrep -u bob -x wol-shell >/dev/null && echo shell-up"
+  expect: "shell-up"
+- ssh: "su -l bob -c 'XDG_RUNTIME_DIR=/run/user/$(id -u bob) HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/$(id -u bob)/hypr | head -1) hyprctl dispatch exit'; sleep 8; echo exit-sent"
+  expect: "exit-sent"
+  rc: any
+- wait-stable:
+  timeout: 120
+# Second sign-in: asked again; this time every page, then Done.
+- click: 719 590
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: the setup again, Privacy first
+- ssh: "pgrep -u bob -af 'wol-setup --first-login' && echo asked-again"
+  expect: "asked-again"
+- key: ret
+- wait-stable:
+  timeout: 30
+  caption: "Your Look, 2 of 6: Light, Dark, Auto; the accent colours; Day, Dusk, Night"
+- shot firstlogin-look
+- key: ret
+- wait-stable:
+  timeout: 30
+  caption: "Online Accounts, 3 of 6: the accounts list (none yet), Open Mail"
+- shot firstlogin-accounts
+- key: ret
+- wait-stable:
+  timeout: 30
+  caption: "Keyboard & Typing, 4 of 6: the keyboard list, Try it, other scripts"
+- shot firstlogin-keyboard
+- key: ret
+- wait-stable:
+  timeout: 30
+  caption: "Assistants, 5 of 6: Allow assistants and scripts (off)"
+- shot firstlogin-helper
+- key: ret
+- wait-stable:
+  timeout: 30
+  caption: "You’re All Set, 6 of 6: Get Started"
+- shot firstlogin-done
+- key: ret
+  caption: Get Started
+- wait-stable:
+  timeout: 60
+  caption: bob's desktop
+- ssh: "cat /home/bob/.local/state/wolos/setup-done && test ! -e /home/bob/.local/state/wolos/setup-later && echo done-marked"
+  expect: "done-marked"
+  caption: the marker; the Later count is gone
+- ssh: "pgrep -u bob -x wol-shell >/dev/null && echo shell-up"
+  expect: "shell-up"
+- ssh: "su -l bob -c 'XDG_RUNTIME_DIR=/run/user/$(id -u bob) HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/$(id -u bob)/hypr | head -1) hyprctl dispatch exit'; sleep 8; echo exit-sent"
+  expect: "exit-sent"
+  rc: any
+- wait-stable:
+  timeout: 120
+# Third sign-in: straight to the desktop.
+- click: 719 590
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: bob's desktop, no setup
+- ssh: "test ! -e /run/user/$(id -u bob)/wol-first-login && ! pgrep -u bob -f 'wol-setup --first-login' >/dev/null && echo not-asked"
+  expect: "not-asked"
+- ssh: "su -l bob -c 'gsettings get org.gnome.system.location enabled; cat ~/.config/wolos/theme 2>/dev/null; true'"
+  rc: any
+  save: bob-choices.txt
+  caption: what the pages left (defaults kept: nothing saved)
+- logs:
+  n: 400
