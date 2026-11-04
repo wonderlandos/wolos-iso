@@ -54,7 +54,7 @@ fn image_ships_the_everyday_userland() {
         "nautilus",
         "geary",
         "amberol",
-        // Photos is Gallery (E2E-SET); Shotwell is in the Store (CTO 2026-11-04, ISO room).
+        // Photos is Gallery (E2E-SET); Shotwell is in the Store, not on the image.
         "wolos-app-gallery",
         "gnome-calendar",
         "gnote",
@@ -66,6 +66,7 @@ fn image_ships_the_everyday_userland() {
         "file-roller",
         "baobab",
         "gnome-text-editor",
+        "eog",
         "helium-browser",
     ] {
         assert!(pkgs.iter().any(|x| x == p), "packages.txt lacks {p}");

@@ -831,15 +831,16 @@ fn the_work_dir_is_removed_without_crossing_mounts() {
 }
 
 #[test]
-fn iso_fits_one_release_asset() {
-    // Release assets max out at 2 GiB: xz with the x86 filter packs binaries tighter than zstd,
+fn iso_is_packed_small_and_its_size_reported() {
+    // Smaller downloads: xz with the x86 filter packs binaries tighter than zstd,
     // and GPU drivers load from the squashfs after switch_root instead of from the initramfs.
     let p = read("profile/profiledef.sh");
     assert!(p.contains("'-comp' 'xz' '-Xbcj' 'x86'"), "{p}");
     let hooks = read("profile/airootfs/etc/mkinitcpio.conf.d/archiso.conf");
     let hooks = hooks.lines().find(|l| l.starts_with("HOOKS=")).unwrap();
     assert!(!hooks.split(['(', ' ', ')']).any(|h| h == "kms"), "{hooks}");
-    // The headers' vmlinux loses its DWARF (BTF stays), and the build stops on an oversized ISO.
+    // The headers' vmlinux loses its DWARF (BTF stays). The size is only reported, never a gate
+    // (ISO-GATE): a release over 2 GiB goes to the CDN, not to GitHub.
     let k = read("linux-wolos/PKGBUILD");
     assert!(
         k.contains(r#"strip -v --strip-debug "$builddir/vmlinux""#),
@@ -847,8 +848,8 @@ fn iso_fits_one_release_asset() {
     );
     let b = read("build.sh");
     assert!(
-        b.contains("$((2047 * 1024 * 1024))"),
-        "no ISO size limit in build.sh"
+        !b.contains("$((2047 * 1024 * 1024))") && b.contains("release/iso-size.sh"),
+        "build.sh gates on the ISO size, or does not report it"
     );
 }
 

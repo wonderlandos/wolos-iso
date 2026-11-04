@@ -46,6 +46,8 @@ steps:
   expect: "org.gnome.Nautilus.desktop"
 - ssh: "su -l alice -c 'XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus xdg-mime query default image/png'"
   expect: "org.wolos.gallery.desktop"
+- ssh: "su -l alice -c 'XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus xdg-mime query default image/gif'"
+  expect: "org.gnome.eog.desktop"
 # Removable media: the extra disk mounts for the active session through udisks + polkit (10-wolos.rules).
 - ssh: "lsblk -o NAME,FSTYPE,LABEL,MOUNTPOINT /dev/vdb 2>&1"
   rc: any

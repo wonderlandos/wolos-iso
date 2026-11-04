@@ -21,11 +21,12 @@ lib32-vulkan-icd-loader
 intel-media-driver       # VA-API iHD (Gen8+): Helium/mpv GPU decode; LIBVA_DRIVER_NAME=iHD from wol-session
 # NVIDIA: nvidia-open-dkms + nvidia-utils are installed by `wol hw boot --online` when an NVIDIA GPU is
 # present (DKMS builds against linux-wolos-headers).
-# GPU proof tools (wolos/files/usr/lib/wolos/verify-gpu.sh). glmark2 and vkmark (10.8 MiB compressed with
-# assimp) are not on the image: verify-gpu.sh runs them only when present (`have`), pacman -S adds them.
+# GPU proof tools (wolos/files/usr/lib/wolos/verify-gpu.sh)
 mesa-utils
 vulkan-tools
 libva-utils
+glmark2
+vkmark
 libinput
 seatd
 xkeyboard-config
@@ -75,6 +76,7 @@ helium-browser
 nautilus
 foot
 gnome-text-editor
+eog                      # Image Viewer: the fallback viewer, default for GIF, WebP and SVG (Atlas second; E2E-SET)
 wolos-app-gallery        # Gallery: Photos pin and the default for PNG and JPEG (E2E-SET; libwolkit + libwol come with it)
 # Spell check (E2E-SET, ADR 0059 S14): enchant is the backend of libspelling (Text Editor, Papers, Geary), the
 # dictionaries are the languages of region::LANGUAGES that have one (Japanese and Chinese have no word list).

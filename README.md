@@ -9,6 +9,7 @@ published repo** (+ the Arch snapshot), never from a source tree, so an image is
 |---|---|
 | `profile/` | mkarchiso profile (releng-based): `snapshot`, `pacman.conf` (`[wolos]` first, then core/extra/multilib at the snapshot), `packages.x86_64` + `packages.desktop` (merged at build), systemd-boot entries (live, Install WolOS), live-only `airootfs` |
 | `build.sh` | repo `snapshot` == `profile/snapshot` check -> staged profile (the published repo, checked against `release/wolos-repo.pub.asc`; the live root names its channel) -> `mkarchiso` -> ISO + `<iso>.sha256` + release manifest |
+| `release/iso-size.sh` | prints the ISO's size; never a gate (an ISO of 2 GiB or more goes to the CDN only, not to the GitHub release) |
 | `release/release-manifest.sh` | `release.json`: `{version, snapshot, wolos_repo, kernel, image, sha256, size}`; version and kernel from the repo database |
 | `release/sign-release.sh` | `release.json.sig`: raw Ed25519 with the package key |
 | `release/sb-layout.sh` | Secure Boot (ADR 0025): `layout` (shim, systemd-boot, one UKI), `sign` with the live-image key (+ `/ENROL_THIS_KEY_FOR_WOLOS.cer`, `EFI/wolos/README.txt`), `check` (what `wolos-build release` requires) |
