@@ -1,0 +1,107 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-P2 (persona "power user"): building software on a sealed WolOS. Installs the Developer module
+# as uid 1000 (Alice Liddell / curiouser), then asks: is there a C compiler, make, headers? Where did
+# the packages land (a layer) and can the person list it? Does rootless podman run? Does a user timer
+# work and what does the console say when it fails? Needs network (module download) and a VM from
+# install-auto.yaml (installed, sealed). Findings (.claude/v012/qa100/persona-power-user.md): P2-4
+# (no toolchain in dev), P2-7 (no layer listing), P2-25 (subuid ranges), P2-5 (systemctl --user hint).
+# H2 C1 (admind runs the real pacman on a sealed slot) makes the install step itself fail today; the
+# journey records what the person sees either way.
+# wolvm journey <vm> tests/wolvm/journeys/qa100-p2-dev-module.yaml
+name: developer module on a sealed slot (toolchain, headers, layers, podman, user timer)
+steps:
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop session up
+- ssh: "btrfs property get -ts / ro; cat /etc/wolos/single-copy 2>/dev/null; wol modules status dev"
+  rc: any
+  save: before.txt
+- ssh: "printf 'curiouser\\n' | su -l alice -c 'wol modules install dev' 2>&1 | tail -5; echo rc=$?"
+  timeout: 1800
+  rc: any
+  save: install-dev.txt
+  caption: wol modules install dev with the password on stdin (H2 C1 may make this fail on a sealed slot)
+- ssh: "su -l alice -c 'wol modules enable dev 2>&1; echo rc=$?; wol modules status dev'"
+  rc: any
+  save: enable-dev.txt
+# P2-4: what a developer has after the module.
+- ssh: "su -l alice -c 'for t in cc gcc clang make pkgconf crystal git mise podman code; do printf \"%s=\" $t; command -v $t || echo missing; done'"
+  rc: any
+  save: toolchain.txt
+- ssh: "su -l alice -c 'command -v cc >/dev/null && command -v make >/dev/null && echo toolchain || echo no-toolchain'"
+  expect: "toolchain"
+  rc: any
+  caption: P2-4 the Developer module gives a C compiler and make (fails until dev carries them)
+- ssh: "ls -d /usr/include/stdio.h /usr/include/linux/version.h /usr/lib/modules/$(uname -r)/build 2>&1"
+  rc: any
+  save: headers.txt
+  caption: P2-4 headers live in the sealed slot (glibc, linux-wolos-api-headers, the kernel build tree)
+- ssh: "su -l alice -c 'mkdir -p ~/Work/hello && cd ~/Work/hello && printf \"#include <stdio.h>\\nint main(void){puts(\\\"built\\\");return 0;}\\n\" > h.c && (cc h.c -o h && ./h) 2>&1; echo rc=$?'"
+  rc: any
+  save: build-c.txt
+  caption: P2-4 a hello world against the sealed /usr
+- ssh: "su -l alice -c 'cd ~/Work/hello && printf \"puts \\\"crystal built\\\"\\n\" > h.cr && (crystal build h.cr -o hcr && ./hcr) 2>&1 | tail -3; echo rc=$?'"
+  timeout: 600
+  rc: any
+  save: build-crystal.txt
+  caption: P2-4 crystal build needs cc to link; what it says without one
+# P2-7: the layer the module (or base-devel) landed in, and how the person can see it.
+- ssh: "pacman -S --noconfirm base-devel 2>&1 | tail -2; echo rc=$?"
+  timeout: 1200
+  rc: any
+  save: base-devel.txt
+  caption: the hint's own advice: pacman (wrapper) puts base-devel in a live layer
+- ssh: "ls /var/lib/extensions/ 2>&1; cat /var/lib/extensions/*/wolos-layer.json 2>/dev/null | head -20; systemd-sysext status 2>&1 | head"
+  rc: any
+  save: layers-fs.txt
+- ssh: "su -l alice -c 'wol layers 2>&1; echo rc=$?; wol layers list 2>&1; echo rc=$?'"
+  rc: any
+  save: layers-verb.txt
+  caption: P2-7 nothing lists live layers for the person (fails until a list verb exists; today 'did you mean layers')
+- ssh: "su -l alice -c 'wol layers list >/dev/null 2>&1 && echo listable || echo not-listable'"
+  expect: "listable"
+  rc: any
+# P2-25: rootless podman for an account WolOS created.
+- ssh: "grep -c . /etc/subuid /etc/subgid 2>&1; grep '^alice:' /etc/subuid /etc/subgid 2>&1; ls -l /usr/bin/newuidmap"
+  rc: any
+  save: subuid.txt
+- ssh: "su -l alice -c 'systemctl --user is-active podman.socket; podman info --format \"{{.Host.Security.Rootless}} {{.Store.GraphRoot}}\" 2>&1 | head -3'"
+  rc: any
+  save: podman-info.txt
+- ssh: "su -l alice -c 'timeout 300 podman run --rm docker.io/library/alpine:3.20 echo container-ok 2>&1 | tail -2'"
+  timeout: 400
+  rc: any
+  save: podman-run.txt
+  caption: P2-25 a rootless container runs (subuid ranges present for a WolOS-made account)
+# User timer: the systemd way, since cronie is not shipped; and what the console says on a failure.
+- ssh: "su -l alice -c 'command -v crontab 2>&1; systemctl --user list-timers --all --no-pager 2>&1 | head -5'"
+  rc: any
+  save: timers.txt
+- ssh: "su -l alice -c 'mkdir -p ~/.config/systemd/user; printf \"[Unit]\\nDescription=qa\\n[Service]\\nType=oneshot\\nExecStart=/usr/bin/touch %%h/qa-timer-ran\\n\" > ~/.config/systemd/user/qa.service; printf \"[Unit]\\nDescription=qa\\n[Timer]\\nOnActiveSec=5\\n[Install]\\nWantedBy=timers.target\\n\" > ~/.config/systemd/user/qa.timer; systemctl --user daemon-reload; systemctl --user enable --now qa.timer; sleep 8; ls ~/qa-timer-ran'"
+  expect: "qa-timer-ran"
+  rc: any
+  save: user-timer.txt
+  caption: a user timer runs inside the desktop session
+- ssh: "su -l alice -c 'TERM=foot zsh -ic \"systemctl --user enable nope.timer\" 2>&1' | tail -3"
+  rc: any
+  save: hint-user-unit.txt
+  caption: P2-5 a failing systemctl --user must not be told to use sudo (fails until the hint row excludes --user)
+- ssh: "su -l alice -c 'TERM=foot zsh -ic \"systemctl --user enable nope.timer\" 2>&1' | grep -q 'sudo systemctl --user' && echo wrong-sudo || echo ok"
+  expect: "ok"
+  rc: any
+- ssh: "su -l alice -c 'systemctl --user disable --now qa.timer; rm -f ~/.config/systemd/user/qa.* ~/qa-timer-ran; rm -rf ~/Work/hello' && echo cleaned"
+  expect: "cleaned"
+  rc: any
+- ssh: "journalctl -t wol-admind -t wolos-modules -b --no-pager -o cat | tail -30"
+  rc: any
+  save: admind-log.txt
+- logs:
+  n: 400
+- stop

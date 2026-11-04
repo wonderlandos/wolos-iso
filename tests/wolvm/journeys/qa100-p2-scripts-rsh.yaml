@@ -1,0 +1,94 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-P2 (persona "power user"): scripts the way ADR 0041 promises them, on an installed disk as
+# uid 1000 (Alice Liddell / curiouser): a .rb and a .rsh through `wol script check|run`, the same
+# over ssh with `wol script on` after Remote Login, and the helper gate seen from a script.
+# Findings (.claude/v012/qa100/persona-power-user.md): P2-1 (no ruby on the image), P2-2 (rsh not in
+# the image: no `wol script` kind, no terminal menu entry, no package), P2-3/P2-12/P2-13/P2-14 (rsh
+# semantics, run only when /usr/bin/rsh exists). Needs the network for ssh to localhost only.
+# wolvm journey <vm> tests/wolvm/journeys/qa100-p2-scripts-rsh.yaml
+name: wol script with Ruby and rsh files, here and over ssh
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop session up
+- ssh: "ls -l /usr/bin/ruby /usr/bin/rsh /usr/bin/rubocop 2>&1; pacman -Q ruby rsh 2>&1; wol script"
+  rc: any
+  save: interpreters.txt
+  caption: which interpreters the image has and which kinds wol script lists
+# P2-1: a Ruby script runs (the scripting doc says every WolOS has ruby).
+- ssh: "su -l alice -c 'printf \"#!/usr/bin/env ruby\\nputs :ruby_ok\\n\" > ~/a.rb; wol script check ~/a.rb 2>&1; echo rc=$?'"
+  rc: any
+  save: rb-check.txt
+- ssh: "su -l alice -c 'wol script run ~/a.rb 2>&1; echo rc=$?'"
+  expect: "ruby_ok"
+  rc: any
+  save: rb-run.txt
+  caption: P2-1 wol script run a.rb prints ruby_ok (fails until ruby ships: env says No such file, rc=127)
+- ssh: "su -l alice -c 'wol script run ~/a.rb 2>&1' | grep -q 'No such file' && echo raw-env-error || echo sentence-or-ok"
+  expect: "sentence-or-ok"
+  rc: any
+  caption: P2-1 a missing interpreter is one WolOS sentence, never env's raw error
+# P2-2: an rsh script is a known kind and rsh is a terminal shell.
+- ssh: "su -l alice -c 'printf \"#!/usr/bin/rsh\\necho rsh_ok\\n\" > ~/a.rsh; chmod +x ~/a.rsh; wol script check ~/a.rsh 2>&1; echo rc=$?'"
+  rc: any
+  save: rsh-check.txt
+- ssh: "su -l alice -c 'wol script run ~/a.rsh 2>&1; echo rc=$?'"
+  expect: "rsh_ok"
+  rc: any
+  save: rsh-run.txt
+  caption: P2-2 wol script run a.rsh runs it (fails until the rsh kind and package ship)
+- ssh: "su -l alice -c 'echo rsh > ~/.config/wolos/terminal-shell; /usr/bin/wol-term-shell -c \"echo SHELL=\\$SHELL\" 2>&1; rm -f ~/.config/wolos/terminal-shell'"
+  expect: "SHELL=/usr/bin/rsh"
+  rc: any
+  save: term-shell-rsh.txt
+  caption: P2-2 the terminal menu word rsh starts /usr/bin/rsh (fails until wired)
+# rsh semantics (skipped cleanly when rsh is absent): P2-3 eager #{}, P2-12 one-line def, P2-13 true &&, P2-14 {a,b}.
+- ssh: "if [ -x /usr/bin/rsh ]; then su -l alice -c 'cd /tmp && rm -f z && printf \"touch z && echo exists=#{File.exist?(\\\"z\\\")}\\n\" > e.rsh && rsh e.rsh'; else echo exists=true; fi"
+  expect: "exists=true"
+  rc: any
+  caption: P2-3 the right side of && sees the left side's effect (fails on rsh 0.1.3: exists=false)
+- ssh: "if [ -x /usr/bin/rsh ]; then su -l alice -c 'printf \"def hello; echo hello; end; hello\\n\" > /tmp/d.rsh && timeout 5 rsh /tmp/d.rsh 2>&1 | head -1'; else echo hello; fi"
+  expect: "hello"
+  rc: any
+  caption: P2-12 a one-line def that runs a command (fails on 0.1.3: SystemStackError)
+- ssh: "if [ -x /usr/bin/rsh ]; then su -l alice -c 'printf \"true && echo ok\\n! ls /nope\\n[ -f /etc/passwd ] && echo there\\necho {a,b}\\n\" > /tmp/b.rsh; rsh -n /tmp/b.rsh 2>&1; echo rc=$?'; else echo rsh-absent; fi"
+  rc: any
+  save: rsh-bashisms.txt
+  caption: P2-13/P2-14 what rsh -n says about the five commonest sh lines (the messages should name the rsh form)
+# Remote run over ssh: Remote Login on, keys only, then wol script on localhost.
+- ssh: "su -l alice -c 'ssh-keygen -q -t ed25519 -N \"\" -f ~/.ssh/id_ed25519 <<<y >/dev/null 2>&1; cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys; chmod 600 ~/.ssh/authorized_keys; echo keys'"
+  expect: "keys"
+  rc: any
+- ssh: "printf 'curiouser\\n' | su -l alice -c 'wol admin remote-login on' 2>&1; echo rc=$?; systemctl is-active sshd; nft list ruleset 2>/dev/null | grep -c 'dport 22'"
+  rc: any
+  save: remote-login.txt
+  caption: Remote Login on through wol admin (password on stdin); sshd active; port 22 rule present (H5 M4 fix)
+- ssh: "su -l alice -c 'printf \"#!/bin/sh\\necho from=\\$WOL_HELPER host=\\$(hostname) path=\\$PATH\\nwol about >/dev/null && echo read-ok\\nwol focus on; echo focus_rc=\\$?\\n\" > ~/r.sh; wol script on -o StrictHostKeyChecking=no localhost ~/r.sh 2>&1; echo rc=$?'"
+  rc: any
+  save: script-on-bad-host.txt
+  caption: an option-shaped host word is refused with a sentence
+- ssh: "su -l alice -c 'printf \"Host localhost\\n  StrictHostKeyChecking no\\n  UserKnownHostsFile /dev/null\\n\" >> ~/.ssh/config; wol script on localhost ~/r.sh 2>&1; echo rc=$?'"
+  expect: "read-ok"
+  rc: any
+  save: script-on.txt
+  caption: wol script on localhost runs the sh script with WOL_HELPER; a read works, the change is refused (no session over ssh)
+- ssh: "su -l alice -c 'wol script on localhost ~/a.rb 2>&1; echo rc=$?'"
+  rc: any
+  save: script-on-rb.txt
+  caption: P2-1 the same Ruby file over ssh (/usr/bin/ruby - on the other computer)
+- ssh: "su -l alice -c 'tail -4 ~/.local/state/wolos/actions.jsonl'"
+  rc: any
+  save: actions.txt
+  caption: one audit row per script run and per script on, arguments not recorded
+- ssh: "printf 'curiouser\\n' | su -l alice -c 'wol admin remote-login off' 2>&1; su -l alice -c 'rm -f ~/a.rb ~/a.rsh ~/r.sh' && echo cleaned"
+  expect: "cleaned"
+  rc: any
+- logs:
+  n: 400

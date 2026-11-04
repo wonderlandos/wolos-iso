@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-P2 (persona "power user"): the wol command line as a developer meets it on an installed
+# disk, as uid 1000 (Alice Liddell / curiouser) through `su -l`. Findings in
+# .claude/v012/qa100/persona-power-user.md: P2-6 (group words), P2-15 (help width), P2-16 (piped vs
+# --json), P2-5 (systemctl --user hint), P2-9 (no hints for developer tools), P2-10 (~/.local/bin not
+# on PATH), P2-8 (wol notify from a script). Steps marked "fails until fixed" reproduce a finding.
+# wolvm journey <vm> tests/wolvm/journeys/qa100-p2-cli-power-user.yaml
+name: wol as a power user types it (groups, help, JSON, hints, PATH, notify)
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop session up
+# P2-6: a group word with no bare command must not suggest itself.
+- ssh: "su -l alice -c 'wol layers' 2>&1; echo rc=$?"
+  rc: any
+  save: group-layers.txt
+- ssh: "su -l alice -c 'wol layers' 2>&1 | grep -q \"did you mean 'layers'\" && echo self-suggest || echo ok"
+  expect: "ok"
+  rc: any
+  caption: P2-6 wol layers answers with its sub-commands, not "did you mean 'layers'" (fails until fixed)
+- ssh: "for g in encrypt boot seal mirror gpu base accent files app; do su -l alice -c \"wol $g\" 2>&1 | head -1; done"
+  rc: any
+  save: group-words.txt
+# P2-15: help lines fit a terminal.
+- ssh: "su -l alice -c 'wol help' | awk '{ if (length($0) > 120) n++ } END { print \"over120=\" n+0 }'"
+  expect: "over120=0"
+  rc: any
+  save: help-width.txt
+  caption: P2-15 no help line wider than 120 columns (fails until fixed: shell toggle is 258)
+# P2-16: piped output is JSON for every read verb, or text for every one.
+- ssh: "su -l alice -c 'wol theme list | head -c 1; echo; wol about | head -c 1; echo; wol sessions list | head -c 1; echo'"
+  rc: any
+  save: piped-first-chars.txt
+  caption: P2-16 first character of piped theme list / about / sessions list (all '{' or '[' when consistent)
+# P2-5 and P2-9: hints.
+- ssh: "su -l alice -c 'wol hint \"systemctl --user enable wolos-app-update.timer\" 1' 2>&1; echo rc=$?"
+  rc: any
+  save: hint-systemctl-user.txt
+- ssh: "su -l alice -c 'wol hint \"systemctl --user enable wolos-app-update.timer\" 1' 2>&1 | grep -q 'sudo systemctl --user' && echo wrong-sudo || echo ok"
+  expect: "ok"
+  rc: any
+  caption: P2-5 a failing systemctl --user is never sent to sudo (fails until fixed)
+- ssh: "for c in 'git status' make 'gcc x.c' 'cargo build' python3 node 'docker ps' 'podman ps' 'crontab -e' 'vim x' 'nano x' fish nu pwsh 'ruby x.rb' 'rsh x.rsh' 'code .'; do printf '%s -> ' \"$c\"; su -l alice -c \"wol hint '$c' --not-found\" 2>&1 | head -1; echo; done"
+  rc: any
+  save: hints-dev-tools.txt
+  caption: P2-9 what a developer's first commands get (empty = no hint)
+- ssh: "su -l alice -c 'wol hint \"git status\" --not-found' >/dev/null 2>&1 && echo has-hint || echo no-hint"
+  expect: "has-hint"
+  rc: any
+  caption: P2-9 git (Developer module) has a hint naming wol modules install dev (fails until fixed)
+- ssh: "su -l alice -c 'TERM=foot zsh -ic \"git status\" 2>&1' | head -3; echo rc=$?"
+  rc: any
+  save: zsh-git-not-found.txt
+# P2-10: ~/.local/bin on PATH for a login shell and for wol script.
+- ssh: "su -l alice -c 'mkdir -p ~/.local/bin; printf \"#!/bin/sh\\necho mine\\n\" > ~/.local/bin/qa-mine; chmod +x ~/.local/bin/qa-mine; zsh -lic qa-mine 2>&1'"
+  expect: "mine"
+  rc: any
+  save: local-bin-zsh.txt
+  caption: P2-10 a program in ~/.local/bin runs from a login zsh (fails until fixed)
+- ssh: "su -l alice -c 'printf \"#!/bin/sh\\nqa-mine\\n\" > /tmp/p.sh; wol script run /tmp/p.sh 2>&1; echo rc=$?'"
+  rc: any
+  save: local-bin-script.txt
+  caption: P2-10 the fixed PATH of wol script run (/usr/local/bin:/usr/bin) does not see ~/.local/bin
+# P2-8: notify from a script and --json.
+- ssh: "su -l alice -c 'timeout 10 env XDG_RUNTIME_DIR=/run/user/1000 wol notify QA hello --json; echo rc=$?' 2>&1"
+  rc: any
+  save: notify-json.txt
+  caption: P2-8 wol notify --json prints a JSON answer and returns within 10 s
+- ssh: "su -l alice -c 'printf \"#!/bin/sh\\nwol notify QA from-script\\n\" > /tmp/n.sh; timeout 20 env XDG_RUNTIME_DIR=/run/user/1000 wol script run /tmp/n.sh; echo rc=$?' 2>&1"
+  rc: any
+  save: notify-from-script.txt
+  caption: P2-8 a script's wol notify raises an approval sheet (or is refused without one); notify-send would not
+- screenshot: notify-from-script
+- ssh: "su -l alice -c 'tail -3 ~/.local/state/wolos/actions.jsonl'"
+  rc: any
+  save: actions.txt
+- ssh: "su -l alice -c 'rm -f ~/.local/bin/qa-mine /tmp/p.sh /tmp/n.sh' && echo cleaned"
+  expect: "cleaned"
+- logs:
+  n: 400
