@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H22 R2 (kernel-boot-r2), BOOT2-4: the only slot is below the rollback floor (a signed
+# older kernel put back by hand). `wol boot check` writes /var/lib/wolos/verity-notice ("please
+# reinstall or restore") and the boot goes on - but nothing on the image ever reads that file
+# (grep of /usr/bin and /usr/lib finds only `wol` itself), so the person sees the normal desktop.
+# Host preparation (VM stopped; default install): mount @var as above and
+#   echo 99 | sudo tee /mnt/var/lib/wolos/secureboot/floor
+# 0.12.1 (2026-11-04): FAILS at "someone shows the notice".
+name: a refused rollback is told to the person, not only to a file
+steps:
+- start
+- wait-agent:
+  timeout: 240
+- ssh: "cat /var/lib/wolos/verity-notice"
+  expect: "older than the version last used here"
+  save: notice.txt
+  caption: the check left its message
+- ssh: "grep -rl verity-notice /usr/bin /usr/lib /usr/share/wolos 2>/dev/null | grep -v -c '^/usr/bin/wol$'"
+  expect: "1"
+  rc: any
+  caption: someone shows the notice (fails on 0.12.1 - only wol writes it)
+- screenshot:
+  caption: the desktop, no word about the refused slot
+- stop:
+  force: true

@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H22 R2 (kernel-boot-r2), BOOT2-3: the running slot is below the rollback floor and the
+# other slot has a menu entry whose image is gone (the ghost QA-STORE-3 leaves). `wol boot check`
+# trusts the entry file (may_fall_back_to: entry exists), runs `bootctl set-default wolos-b.conf`
+# and reboots; systemd-boot cannot start the missing image, starts wolos-a again, and the check
+# reboots again: a restart loop every ~25 s with only the firmware logo and plymouth on screen.
+# Host preparation (VM stopped; default install from test-install.sh, unencrypted @var):
+#   sudo qemu-nbd -c /dev/nbd0 vms/install/disk.qcow2
+#   sudo mount /dev/nbd0p1 /mnt/esp; sudo mount -o subvol=@var /dev/nbd0p2 /mnt/var
+#   echo 99 | sudo tee /mnt/var/lib/wolos/secureboot/floor
+#   sudo sed 's/wolos-a/wolos-b/; s/^version 1-/version 2-/' /mnt/esp/loader/entries/wolos-a.conf \
+#     | sudo tee /mnt/esp/loader/entries/wolos-b.conf           # no wolos-b.efi exists
+#   sudo umount /mnt/esp /mnt/var; sudo qemu-nbd -d /dev/nbd0
+# 0.12.1 (2026-11-04): FAILS at "the system comes up": no agent in 256 s, restarts seen on serial.
+name: a slot below the floor with a ghost other entry does not restart for ever
+steps:
+- start
+- wait-text: "older than the version last used here"
+  timeout: 120
+  caption: the floor refuses the running slot (expected)
+- wait-agent:
+  timeout: 240
+  caption: the system comes up and tells the person (fails on 0.12.1 - a restart loop)
+- ssh: "journalctl -b -o cat --no-pager | grep -c 'older than'"
+  rc: any
+  save: refusals.txt
+- stop:
+  force: true

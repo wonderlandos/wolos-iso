@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H22 R2 (kernel-boot-r2), BOOT2-5: the seal's walk keeps regular files only
+# (controller/src/seal.rs walk(): file_type() is lstat, symlinks fall into `_ => {}`), and the check
+# compares only the files the manifest names. A symlinked command (uutils/coreutils multicall:
+# ls, cp, cat...) or a file added to /usr/bin is outside the seal. Confirmed on the 0.12.1 VM
+# (default install): /usr/bin/ls replaced offline by another binary, `wol seal check` passed,
+# no notice, no failed mark. Runs on any installed VM, no host edit needed.
+# 0.12.1 (2026-11-04): FAILS at "every command in /usr/bin is sealed".
+name: every command in /usr/bin is covered by the seal, symlinks too
+steps:
+- start
+- wait-agent:
+  timeout: 240
+- ssh: "ls -l /usr/bin/ls; wc -l /usr/lib/wolos/verity.manifest; find /usr/bin -type l | wc -l"
+  save: facts.txt
+  rc: any
+  caption: how many commands are symlinks (none of them in the manifest today)
+- ssh: "grep -c ' usr/bin/ls$' /usr/lib/wolos/verity.manifest"
+  expect: "1"
+  rc: any
+  caption: every command in /usr/bin is sealed (fails on 0.12.1 - ls is a symlink, so not listed)
+- stop:
+  force: true

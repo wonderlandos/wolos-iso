@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H22 R2 (kernel-boot-r2), BOOT2-1/2: the slot's menu entry is lost or garbage
+# (loader/entries/wolos-a.conf). The image EFI/wolos/wolos-a.efi is intact, but systemd-boot only
+# auto-discovers UKIs under EFI/Linux, so the menu holds nothing but "Reboot Into Firmware
+# Interface" (10 s countdown) and drops into the firmware's device list. No words, no fallback.
+# Host preparation (VM stopped; mok+TPM or default install from test-install.sh):
+#   sudo qemu-nbd -c /dev/nbd0 vms/install/disk.qcow2; sudo mount /dev/nbd0p1 /mnt/esp
+#   sudo sh -c 'printf "\0\377 garbage\n" > /mnt/esp/loader/entries/wolos-a.conf'   # or rm -f it
+#   sudo umount /mnt/esp; sudo qemu-nbd -d /dev/nbd0
+# 0.12.1 (2026-11-04): FAILS at "a copy of WolOS still starts": firmware menu at ~20 s, for ever.
+name: a lost or garbage boot entry still starts WolOS (fallback image)
+steps:
+- start
+- sleep: 25
+- screenshot:
+  caption: what the person sees (0.12.1 - the firmware's "Please select boot device")
+- wait-agent:
+  timeout: 240
+  caption: a copy of WolOS still starts (fails on 0.12.1)
+- ssh: "bootctl status --no-pager | grep -E 'Current Entry'"
+  save: entry.txt
+  rc: any
+- stop:
+  force: true
