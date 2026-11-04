@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H12 (devices): the whole printer path on an installed disk with no real printer: CUPS's own
+# ippeveprinter plays an IPP Everywhere printer announced over mDNS (avahi), lpinfo finds it, lpadmin
+# adds it driverless (what wol-admind `printer-add` runs), a test page prints, then the printer
+# "goes away" (ippeveprinter killed) and the queue is read the way Settings > Printers reads it
+# (`lpstat -p`: Idle / Printing / Stopped only). Proves DEV-3 (a dead printer stays "Printing", jobs
+# and reasons invisible) and gives DEV-4 its lpadmin error texts.
+# Runs on a VM from install-auto.yaml (checkpoint desktop; any logged-in account).
+#   wolvm journey dev tests/wolvm/journeys/qa100-dev-printer-ippeve.yaml
+name: devices, printers: discover, add driverless, test page, printer goes away
+steps:
+- wait-agent:
+  timeout: 120
+- ssh: "systemctl is-active cups.socket avahi-daemon | tr '\\n' ' '"
+  expect: "active active"
+  save: daemons.txt
+- ssh: "mkdir -p /tmp/ippspool; nohup ippeveprinter -p 8631 -d /tmp/ippspool QA-Printer </dev/null >/tmp/ippeve.log 2>&1 & disown; sleep 5; timeout 6 avahi-browse -rtp _ipp._tcp 2>&1 | grep -c '^=' "
+  rc: any
+  save: avahi.txt
+  caption: a virtual IPP Everywhere printer announced on the local network (one resolved _ipp._tcp record expected)
+- ssh: "u=$(id -nu 1000); su -l $u -c 'timeout 120 lpinfo -v </dev/null' 2>&1 | grep '://'"
+  save: lpinfo.txt
+  caption: what Settings > Printers > Add Printer… sees (core/printers.rs discover): one ipps:// or dnssd:// URI for QA-Printer
+- ssh: "URI=$(lpinfo -v | awk '/:\\/\\//{print $2}' | head -1); lpadmin -p QA_Printer -E -v \"$URI\" -m everywhere 2>&1; echo lpadmin-rc=$?"
+  expect: "lpadmin-rc=0"
+  save: lpadmin.txt
+  caption: the exact argv wol-admind printer-add runs (core/printers.rs add_argv)
+- ssh: "lpadmin -p Bad_One -E -v '' -m everywhere 2>&1; echo rc=$?; lpadmin -p Bad_Two -E -v ipp://192.0.2.1/ipp/print -m everywhere 2>&1; echo rc=$?"
+  rc: any
+  timeout: 120
+  save: lpadmin-errors.txt
+  caption: DEV-4, the reasons lpadmin prints (Bad device-uri, Unable to get PPD / connect); wol-admind drops stderr so Settings says only "The change did not work. Try again."
+- ssh: "lpstat -v; lpstat -d; lpstat -p"
+  save: queue-after-add.txt
+- ssh: "lp -d QA_Printer /usr/share/cups/data/testprint; sleep 8; lpstat -o; lpstat -p; ls /tmp/ippspool"
+  save: testpage.txt
+  caption: a test page from the CLI (Settings has no Print Test Page); the job lands in the printer's spool
+- ssh: "pkill -x ippeveprinter; sleep 1; lp -d QA_Printer /usr/share/cups/data/testprint; sleep 60; lpstat -o; echo ---; lpstat -p -l; echo ---; lpstat -p"
+  rc: any
+  timeout: 120
+  save: dead-printer.txt
+  caption: DEV-3, the printer is gone and a job waits: `lpstat -p` still says "now printing" (Settings shows "Printing" with no job, no reason, no Cancel, and never refreshes)
+- ssh: "cancel -a QA_Printer; lpadmin -x QA_Printer; rm -rf /tmp/ippspool; echo cleaned"
+  expect: "cleaned"
+- logs:
+  n: 200

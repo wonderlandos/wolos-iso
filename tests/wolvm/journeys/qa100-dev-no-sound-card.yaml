@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H12 (devices): a computer with no working sound output. wolvm gives the VM no sound card
+# (qemu_cmd adds none), so PipeWire has only WirePlumber's "Dummy Output". Settings > Sound and the
+# Control Center list it as a real device with a tick and a 100 % slider; the volume keys show the
+# OSD rising; nothing says there is no output (DEV-6). With WirePlumber stopped (no default sink)
+# `wol-volume up` fails under `set -e` before `wol shell show osd`: the key gives no feedback (DEV-8).
+# Runs on a VM from install-auto.yaml booted to a logged-in desktop (uid 1000).
+#   wolvm journey dev tests/wolvm/journeys/qa100-dev-no-sound-card.yaml
+name: devices, sound: no sound card, Dummy Output and the volume keys
+steps:
+- wait-agent:
+  timeout: 120
+- ssh: "cat /proc/asound/cards 2>/dev/null | wc -l"
+  save: cards.txt
+  caption: 0 lines expected on a plain wolvm VM (no -device intel-hda)
+- ssh: "runuser -u $(id -nu 1000) -- env XDG_RUNTIME_DIR=/run/user/1000 wpctl status | sed -n '/Sinks/,/Filters/p'"
+  save: sinks.txt
+  caption: DEV-6, WirePlumber's fallback "Dummy Output" is the default sink; Settings and Control Center show it as if it were a speaker
+- ssh: "P=$(pgrep -u 1000 -x wol-shell | head -1); tr '\\0' '\\n' < /proc/$P/environ | grep -E '^(WAYLAND_DISPLAY|HYPRLAND_INSTANCE_SIGNATURE|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR|HOME|USER)=' > /tmp/sess.env; wc -l < /tmp/sess.env"
+  expect: "6"
+- ssh: "runuser -u $(id -nu 1000) -- env $(tr '\\n' ' ' < /tmp/sess.env) wol-volume up; echo rc=$?"
+  expect: "rc=0"
+  caption: the volume key on a Dummy Output: exit 0 and an OSD climbing to 100 %
+- sleep: 0.5
+- shot: osd-dummy
+  caption: DEV-6, the OSD says louder while no sound can play
+- ssh: "runuser -u $(id -nu 1000) -- env $(tr '\\n' ' ' < /tmp/sess.env) systemctl --user stop wireplumber.service; sleep 2; runuser -u $(id -nu 1000) -- env $(tr '\\n' ' ' < /tmp/sess.env) wol-volume up; echo rc=$?"
+  rc: any
+  save: key-no-wireplumber.txt
+  caption: DEV-8, no default sink: wpctl fails, `set -e` ends wol-volume before the OSD, rc 1 and nothing on screen
+- sleep: 0.5
+- shot: osd-none
+- ssh: "runuser -u $(id -nu 1000) -- env $(tr '\\n' ' ' < /tmp/sess.env) systemctl --user start wireplumber.service; echo restarted"
+  expect: "restarted"
+- logs:
+  n: 200
