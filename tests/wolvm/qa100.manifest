@@ -3,8 +3,8 @@
 #   journey | needs | expect | why
 # journey: file name in tests/wolvm/journeys without .yaml.
 # needs (comma list; a journey runs only when the gate's --have covers every one):
-#   live         the VM boots the 0.12.1 ISO (live session, account `live`, uid 1000)
-#   installed    the VM boots an installed 0.12.1 disk
+#   live         the VM boots the ISO under test (0.12.1 today, the wave3/int image for 0.13) (live session, account `live`, uid 1000)
+#   installed    the VM boots a disk installed from that ISO
 #   iso-install  the journey installs itself: a fresh VM with the ISO (and the autoinstall words in its header)
 #   account:NAME a desktop account on the installed disk (alice = Alice Liddell/curiouser, aliceliddell,
 #                bob/curiouser, tester/tester123); account:none = no account yet (Setup Assistant)
@@ -94,9 +94,9 @@ qa100-sheet-handoff-black | live | fail:QA-VIS2-4@visual | Try WolOS hand-off sh
 qa100-sheet-modules-row | installed,account:alice | fail:QA-VIS2-41@visual | the Modules row spinner stretches the list
 qa100-sheet-store-get-label | installed,account:alice,network | fail:QA-VIS2-46@visual | Get flips to Installing before the password; QA-STORE-59
 qa100-store-pkg-paths | installed,network | fail:QA-STORE-32 | ENOSPC wording (partly on 0.12.1); QA-STORE-42 not reproducible in 0.12.1
-qa100-system-installed-faults | installed,account:none | fail:QA-SYS-1@13 | wold start-limit-hit after a crash burst: black screen for good
+qa100-system-installed-faults | installed,account:none | fail:QA-SYS-1@13,18 | wold start-limit-hit after a crash burst: black screen for good
 qa100-system-live-faults | live | fail:QA-SYS-14 | log noise on every live boot
-qa100-update-check | installed,network | fail:QA-STORE-7@16 | a badly signed manifest still counts (U7, unknown on 0.12.1); QA-STORE-1 not reproducible
+qa100-update-check | installed,network | fail:QA-STORE-7@26 | a badly signed manifest still counts (U7, unknown on 0.12.1); QA-STORE-1 not reproducible
 qa100-update-now-installed | installed,network,account:alice | fail:QA-STORE-42 | Update Now on an installed disk (live-4 F1): the slot is built, or the journal carries the step's own words
 qa100-update-power-loss | installed,network | fail:QA-STORE-8@17 | leftover @wolos-tx / half slot after a cut during an update
 qa100-update-slot-failure | installed,network | fail:QA-STORE-3@20 | a failed replace leaves a dangling entry (confirmed on 0.12.1); QA-STORE-4 no update lock
@@ -108,3 +108,9 @@ qa100-webapp-lifecycle | installed,account:alice | fail:QA-WEB-5@29 | closing th
 qa100-wm-decorations-xwayland-fill | live,tpm,ssh | fail:QA-WM-2@visual | XWayland windows undecorated; QA-WM-3
 qa100-wm-minimise-focus | live,tpm,ssh | fail:QA-WM-1@visual | minimise leaves focus on the hidden window
 qa100-wm-semaphore-states | live,tpm,ssh | fail:QA-SHELL-1 | title-bar buttons misbehave (umbrella; QA-VIS1-23..26)
+qa100-b3-groups-pam-session | installed,account:alice,ssh | fail:QA-FILES-2@visual | B3: no account in input/audio, wrong password about 2 s (SHADOW-35/36), keyring in the runtime dir (FILES-11), pwsh login (SHADOW-43), sudo faillock (PRIV-13, LIVE3-24) (unrun)
+qa100-b7-wifi-hotspot-hidden | live,ssh | fail:QA-NET-24@visual | B7: hotspot end to end with dnsmasq (NET2-2), hidden network by name, out-of-range join says so, Disconnect keeps the profile; mac80211_hwsim (unrun)
+qa100-dev-bluetooth | installed,account:alice,ssh | fail:QA-SET-15@visual | A7: Pair and Forget with a fake BlueZ agent, three states (SET-10), bluetoothd back after a kill (SYS-8), headset icon (DEV-12) (unrun)
+qa100-net2-two-nics-portal | live,ssh | fail:QA-NET-25@visual | network r2 part 2: captive portal (NET2-3), slow link, tray delay (NET2-5), AirPlay from the LAN, ssh live@; second NIC on a host tap spliced by hand (unrun)
+qa100-net2-wifi-join-argv | live,ssh | fail:QA-NET-23@visual | network r2 part 1: every password join ran nmcli passwd-file /dev/stdin, rc 2 in 50 ms (NET2-1); mac80211_hwsim AP (unrun)
+qa100-update-rollback-layers | installed,network,ssh | fail:QA-LIVE3-1@visual | B4: a rollback to the restore point keeps the programs installed live (layers-kept) (unrun)
