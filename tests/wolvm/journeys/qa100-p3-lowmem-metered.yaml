@@ -29,21 +29,22 @@ steps:
 # C-01: the automatic download unit's conditions, then a metered connection and a forced run.
 - ssh: "systemctl cat wolos-update-download.service | grep -E 'Condition|Exec' ; systemctl show wolos-update-download.service -p ConditionACPower -p ExecCondition; echo probe-done"
   rc: any
-  expect: "probe-done"
+  expect: "ConditionACPower=true"
   save: download-unit.txt
-  caption: "BUG (C-01) if there is no Condition*/ExecCondition line at all"
+  caption: "ASSERT (QA-ACC-18, B6): the unit runs on AC power only; metered and free space are update-download's checks"
 - ssh: "c=$(nmcli -g NAME,DEVICE connection show --active | awk -F: '$2!=\"\" && $2!=\"lo\" {print $1; exit}'); echo \"conn=$c\"; nmcli connection modify \"$c\" connection.metered yes && nmcli connection up \"$c\" >/dev/null 2>&1; nmcli -g GENERAL.METERED device show $(nmcli -g DEVICE connection show --active | grep -v '^lo$' | head -1)"
   rc: any
   save: metered-set.txt
   caption: "the connection is now metered (expect 'yes')"
-- ssh: "du -sm /var/cache/pacman/pkg 2>/dev/null | cut -f1 > /tmp/cache-before; cat /tmp/cache-before; timeout 240 systemctl start wolos-update-download.service; echo \"rc=$?\"; journalctl -u wolos-update-download.service --no-pager -n 20"
+- ssh: "du -sm /var/cache/pacman/pkg 2>/dev/null | cut -f1 > /tmp/cache-before; cat /tmp/cache-before; busctl --system get-property org.freedesktop.NetworkManager /org/freedesktop/NetworkManager org.freedesktop.NetworkManager Metered; timeout 240 systemctl start wolos-update-download.service; echo \"rc=$?\"; journalctl -u wolos-update-download.service --no-pager -n 20"
   rc: any
+  expect: "metered connection, not downloading today"
   save: download-run.txt
-  caption: "BUG (C-01) if the unit ran pacman -Sw on a metered connection (rc=0 and a download in the journal) instead of skipping with a reason"
+  caption: "ASSERT (QA-ACC-18): Metered 'u 1', rc=0 and the journal line saying it skipped; BUG if pacman -Sw downloaded"
 - ssh: "b=$(cat /tmp/cache-before); a=$(du -sm /var/cache/pacman/pkg 2>/dev/null | cut -f1); echo \"cache before=${b}MB after=${a}MB\""
   rc: any
   save: download-delta.txt
-  caption: "RECORD: how much the metered connection paid for"
+  caption: "ASSERT (QA-ACC-18): before = after (nothing downloaded on the metered connection)"
 - ssh: "c=$(nmcli -g NAME,DEVICE connection show --active | awk -F: '$2!=\"\" && $2!=\"lo\" {print $1; exit}'); nmcli connection modify \"$c\" connection.metered unknown; echo unmetered"
   rc: any
   expect: "unmetered"

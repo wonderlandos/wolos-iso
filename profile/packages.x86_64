@@ -36,6 +36,9 @@ pacman-contrib
 # Hardware and networking.
 networkmanager
 iwd
+# DHCP and DNS for NetworkManager's shared mode (Wi-Fi hotspot, `nmcli dev wifi hotspot`):
+# NetworkManager starts its own instance; dnsmasq.service stays off (Arch default preset).
+dnsmasq
 # sshd: never on by default; the live medium starts it only with the credential
 # ssh.authorized_keys.root (airootfs sshd.service.d/wolos-live.conf; VM tests, wolvm --ssh).
 openssh

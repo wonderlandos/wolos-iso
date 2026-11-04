@@ -5,6 +5,9 @@
 # GFX-10/GFX-4: Battery page shows "50% · On battery", no time left, no Energy Mode.
 # GFX-11: on battery the displays turn off at 120 s idle while the lock comes at 300 s.
 # GFX2-5: the sleep hook logs "lock uid 1000: no answer"; GFX2-6: heads stay dark after resume.
+# B6 (fix/wave-a) turns the GFX rows into assertions: scx_wolos loaded on the booted WolKernel
+# (GFX-17), power-profiles-daemon steering (GFX-4), time left (GFX-10), no display off before the
+# lock on battery (GFX-11), a USB charger runs `wol power apply` (GFX-9).
 name: Fake battery, idle on battery, suspend and resume
 steps:
 - start
@@ -16,18 +19,30 @@ steps:
 - key: ret
 - wait-stable:
   timeout: 120
+# GFX-17 / QA-SYS-13: the QoS scheduler is attached (sched_ext ops "wolos"), not restarting.
+- ssh: "systemctl is-active scx_wolos; cat /sys/kernel/sched_ext/state; cat /sys/kernel/sched_ext/root/ops; systemctl show scx_wolos -p NRestarts; ls -l /sys/fs/bpf/wolos/boosted"
+  expect: "wolos"
+  save: scx-loaded.txt
+  caption: "ASSERT (GFX-17): active, state enabled, ops wolos, NRestarts=0, the boosted pin exists (hardened unit can still pin in bpffs)"
 - ssh: "modprobe test_power && echo off > /sys/module/test_power/parameters/ac_online && echo off > /sys/module/test_power/parameters/usb_online; sleep 2; ls /sys/class/power_supply; wol power status"
-  save: power-status.json
-  caption: EXPECT source battery, battery 50
+  expect: "cpu: power profiles"
+  save: power-status.txt
+  caption: "ASSERT: source battery, 50 %; cpu: power profiles (GFX-4: power-profiles-daemon on the image)"
+# GFX-9: a USB charger (test_usb, type USB) plugged in runs the rule's `wol power apply`.
+- ssh: "udevadm control --log-level=debug; echo on > /sys/module/test_power/parameters/usb_online; sleep 3; udevadm control --log-level=info; journalctl -u systemd-udevd -b --no-pager --since -1min | grep -m1 'wol power apply'; wol power status | head -1; echo off > /sys/module/test_power/parameters/usb_online; sleep 2"
+  expect: "wol power apply"
+  save: usb-charger.txt
+  caption: "ASSERT (GFX-9): udev ran /usr/bin/wol power apply for the USB supply; source: power adapter while it was on"
 - ssh: "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 systemd-run --user --collect wol-settings Battery"
 - wait-stable:
   timeout: 30
 - shot: battery-page
-  caption: EXPECT "Battery level 50% · On battery"; BUG class GFX-10 (no time left), GFX-4 (no Energy Mode)
+  caption: "ASSERT: 'Battery level 50% · N h N min left' (GFX-10, test_power charge_now / current_now) and the Energy Mode menu (GFX-4)"
 - sleep: 135
-- ssh: "H=\"runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl\"; $H -j monitors | grep dpmsStatus; pgrep -a wol-lock || echo no-wol-lock"
+- ssh: "H=\"runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl\"; $H -j monitors | grep dpmsStatus; echo dark=$($H -j monitors | grep -c '\"dpmsStatus\": false'); pgrep -a wol-lock || echo no-wol-lock"
+  expect: "dark=0"
   save: idle-135.txt
-  caption: GFX-11 — dpmsStatus false on every head and no-wol-lock = screens off before the lock
+  caption: "ASSERT (GFX-11): at 135 s idle on battery every head is still on (lock at 300 s, display off at 360 s); BUG if dark>0 with no-wol-lock"
 - key: shift
 - suspend:
   timeout: 60

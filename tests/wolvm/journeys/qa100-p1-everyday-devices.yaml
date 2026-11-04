@@ -51,5 +51,18 @@ steps:
   rc: any
   save: power.txt
   caption: sleep support as the Energy pane and Super+Esc see it (a VM wake needs QMP; sleep itself is not driven here)
+# QA-GFX-4 (B6): power-profiles-daemon ships and is on, so the CPU is steered and Settings shows Energy Mode.
+- ssh: "systemctl is-active power-profiles-daemon; powerprofilesctl get; su -l aliceliddell -c 'wol power status' | grep '^cpu:'"
+  expect: "cpu: power profiles"
+  save: energy-mode-row.txt
+  caption: "ASSERT (GFX-4) energy-mode-row: active, a profile name (balanced), cpu: power profiles; BUG if 'fixed (nothing to steer)'"
+- ssh: "u=aliceliddell; h=$(getent passwd $u | cut -d: -f6); uid=$(id -u $u); WD=$(ls /run/user/$uid | grep -m1 '^wayland-[0-9]*$'); runuser -u $u -- env HOME=$h XDG_RUNTIME_DIR=/run/user/$uid WAYLAND_DISPLAY=$WD setsid -f wol-settings Battery >/dev/null 2>&1; sleep 3; pgrep -u $uid -x wol-settings >/dev/null && echo settings-running"
+  expect: "settings-running"
+- wait-stable:
+  timeout: 60
+- shot: energy-mode-row
+  caption: "ASSERT (GFX-4): the Energy pane has the Energy Mode menu (Automatic / Low Power / High Power)"
+- ssh: "pkill -u $(id -u aliceliddell) -x wol-settings; echo closed"
+  rc: any
 - logs:
   n: 200

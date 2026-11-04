@@ -14,8 +14,15 @@ fn read(p: &str) -> String {
 
 /// Catalogue packages deliberately not in the offline image.
 const NOT_SHIPPED: &[(&str, &str)] = &[
-    ("nvidia-open", "large; wolos-firstboot installs it online"),
-    ("nvidia-utils", "comes with nvidia-open online"),
+    (
+        "nvidia-open-dkms",
+        "large, and DKMS builds it for the running kernel at install: wolos-firstboot installs it online",
+    ),
+    ("nvidia-utils", "comes with nvidia-open-dkms online"),
+    (
+        "lib32-nvidia-utils",
+        "Steam's 32-bit NVIDIA userland, with nvidia-open-dkms online",
+    ),
 ];
 
 /// `linux-firmware` is a meta package over these split firmware packages.
@@ -63,7 +70,7 @@ fn catalogue_packages() -> Vec<String> {
         "intel-ucode",
         "linux-firmware-intel",
         "vulkan-radeon",
-        "nvidia-open",
+        "nvidia-open-dkms",
     ] {
         assert!(
             v.iter().any(|x| x == want),
