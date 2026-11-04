@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# B5 (QA-LIVE4-2, live-4 F2; QA-SYS-4): an encrypted install asks for the disk passphrase on the
+# splash (not a raw text console), and three wrong passphrases do not end in Emergency Mode: the
+# prompt comes back (rd.luks.options ...,tries=0) and the fourth, correct one unlocks the disk.
+# Needs: test-install.sh WOLOS_ENCRYPT=passphrase WOLOS_KEEP_VM=1; then on the host:
+#   WOLOS_PASSPHRASE=<the passphrase> envsubst < this file > /tmp/j.yaml; wolvm journey install /tmp/j.yaml
+# Unrun on the worker box.
+name: wrong disk passphrases ask again; the right one still unlocks
+steps:
+- start
+- wait-text: "passphrase"
+  timeout: 180
+- shot plymouth-prompt
+- type: "wrong-one\n"
+- sleep 4
+- type: "wrong-two\n"
+- sleep 4
+- type: "wrong-three\n"
+- sleep 6
+- shot after-three-wrong
+- type: "${WOLOS_PASSPHRASE}\n"
+- wait-agent:
+  timeout: 300
+  caption: "F2: the fourth, correct passphrase unlocks (0.12.1: Emergency Mode after the third)"
+- ssh: "tr ' ' '\\n' < /proc/cmdline | grep rd.luks.options; systemctl --failed --no-legend --plain"
+  rc: any
+  expect: "tries=0"
+  save: cmdline.txt
+- stop

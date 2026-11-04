@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# B5 (QA-SET-R2-01, QA-LIVE3-4): a service turned on after the install starts at the next boot.
+# The sealed slot's /etc is an overlay mounted after systemd read its units; wolos-etc-units.service
+# reads them again once the overlay is up and the boot takes in what that adds.
+# Needs: an installed VM (install-auto.yaml, checkpoint installed-up). Unrun on the worker box.
+name: a service enabled after the install starts at the next boot
+steps:
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+- ssh: "systemctl enable sshd.service; systemctl is-enabled sshd.service; ls /var/lib/wolos/etc/upper/systemd/system/multi-user.target.wants/"
+  rc: any
+  save: enabled.txt
+- ssh: "systemctl reboot"
+  rc: any
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+- ssh: "systemctl show -p ActiveState -p Result wolos-etc-units.service; systemctl is-enabled sshd.service; systemctl is-active sshd.service"
+  rc: any
+  expect: "active"
+  save: after-reboot.txt
+  caption: "R2-01: enabled after the install, running after the reboot"
+- ssh: "systemctl is-active sshd.service | grep -qx active && echo sshd-running"
+  expect: "sshd-running"
+- ssh: "systemctl disable --now sshd.service"
+  rc: any
+- logs:
+  n: 300
+- stop
