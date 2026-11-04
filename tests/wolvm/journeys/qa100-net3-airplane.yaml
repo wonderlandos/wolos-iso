@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 NET-3 / QA-NET-21 (airplane mode): `wol airplane on` blocks every radio and remembers which
+# were on, the menu bar shows the plane, Control Center's Airplane Mode tile is lit; `off` brings
+# back only those (Bluetooth switched off before stays off). mac80211_hwsim gives a Wi-Fi radio;
+# the VM's Bluetooth is whatever QEMU offers (none: only wlan counts). As the live user (rfkill
+# through the session's uaccess on /dev/rfkill), from the live desktop.
+#   wolvm new net3 --iso wolos.iso --ssh
+#   wolvm journey net3 tests/wolvm/journeys/qa100-net3-airplane.yaml
+name: "NET-3 airplane mode: on, menu bar plane, Control Center tile, off restores"
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 120
+  caption: welcome screen
+- click: 710 599
+  caption: Try WolOS (1280x800)
+- sleep: 3
+- wait-stable:
+  timeout: 120
+  caption: live desktop
+- ssh: "modprobe mac80211_hwsim radios=1 && sleep 3; rfkill -J -o TYPE,SOFT | tr -d ' \\n'; echo"
+  rc: any
+  expect: "wlan"
+  save: radios-before.txt
+  caption: "a Wi-Fi radio, unblocked"
+- ssh: "runuser -u live -- env HOME=/home/live XDG_RUNTIME_DIR=/run/user/1000 wol airplane on --json | tr -d ' \\n'; echo; cat /home/live/.local/state/wolos/airplane; rfkill -J -o TYPE,SOFT | tr -d ' \\n'; echo; nmcli radio wifi"
+  rc: any
+  expect: "\"on\":true"
+  save: airplane-on.txt
+  caption: "FIXED (NET-21): on true, the saved list holds wlan, every radio soft-blocked, NetworkManager reads Wi-Fi disabled"
+- sleep: 6
+- shot: net3-menubar-airplane
+  caption: "the menu bar network glyph is the plane"
+- ssh: "runuser -u live -- env HOME=/home/live XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 wol shell toggle control-center >/dev/null 2>&1; sleep 2; echo cc"
+  rc: any
+  expect: "cc"
+- wait-stable:
+  timeout: 20
+- shot: net3-cc-airplane-tile
+  caption: "Control Center: Airplane Mode is the first tile, lit; Wi-Fi Off"
+- key: Escape
+- ssh: "runuser -u live -- env HOME=/home/live XDG_RUNTIME_DIR=/run/user/1000 wol airplane off --json | tr -d ' \\n'; echo; test -e /home/live/.local/state/wolos/airplane || echo list-gone; rfkill -J -o TYPE,SOFT | tr -d ' \\n'; echo"
+  rc: any
+  expect: "list-gone"
+  save: airplane-off.txt
+  caption: "FIXED (NET-21): off, the list is gone, wlan unblocked again (only what was on before)"
+- checkpoint: qa100-net3-airplane
+- stop

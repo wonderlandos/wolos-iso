@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 NET-3 / QA-NET-21 (VPN): `wol vpn import` of a WireGuard file whose name is not an
+# interface name ("My Office.conf" -> profile My-Office), the list, connect (the tunnel is a VPN in
+# `wol network`, QA-NET-28), disconnect, forget; an OpenVPN file says the plugin is missing (the
+# image has no networkmanager-openvpn yet). Keys are random 32 bytes (no wireguard-tools on the
+# image): the peer never answers, the tunnel still comes up. As root (no login keyring there: the
+# key stays in the root-only profile); the keyring path is the Settings shot as the live user.
+#   wolvm new net3 --iso wolos.iso --ssh
+#   wolvm journey net3 tests/wolvm/journeys/qa100-net3-vpn.yaml
+name: "NET-3 VPN: WireGuard import, connect, disconnect, forget; OpenVPN without its plugin"
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 120
+  caption: welcome screen
+- click: 710 599
+  caption: Try WolOS (1280x800)
+- sleep: 3
+- wait-stable:
+  timeout: 120
+  caption: live desktop
+- ssh: "K1=$(head -c32 /dev/urandom | base64); K2=$(head -c32 /dev/urandom | base64); printf '[Interface]\\nPrivateKey = %s\\nAddress = 10.77.0.2/32\\nDNS = 10.77.0.1\\n\\n[Peer]\\nPublicKey = %s\\nAllowedIPs = 10.77.0.0/24\\nEndpoint = 10.0.2.2:51820\\n' \"$K1\" \"$K2\" > '/tmp/My Office.conf'; wol vpn import '/tmp/My Office.conf' --json | tr -d ' \\n'; echo; wol vpn --json | tr -d ' \\n'; echo"
+  rc: any
+  expect: "\"name\":\"My-Office\""
+  save: vpn-imported.txt
+  caption: "FIXED (NET-21): imported as My-Office (WireGuard), listed, not active"
+- ssh: "timeout 60 wol vpn connect My-Office --json | tr -d ' \\n'; echo; sleep 2; ip -j addr show My-Office | grep -o '\"link_type\":\"none\"'; wol network --json | tr -d ' \\n' | grep -o '\"vpn\":\\[[^]]*\\]'"
+  rc: any
+  expect: "My-Office"
+  save: vpn-connected.txt
+  caption: "connected: active true, the tunnel My-Office is link_type none and `wol network` lists it under vpn"
+- ssh: "runuser -u live -- env HOME=/home/live XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 setsid -f wol-settings Network >/dev/null 2>&1; sleep 4; pgrep -u 1000 -x wol-settings >/dev/null && echo settings-running"
+  expect: "settings-running"
+- wait-stable:
+  timeout: 40
+- key: Page_Down
+- wait-stable:
+  timeout: 20
+- shot: net3-network-vpn-connected
+  caption: "Network > VPN: My-Office, WireGuard, connected, a Disconnect button and the More menu; Add VPN with Import…"
+- ssh: "pkill -u 1000 -x wol-settings; timeout 60 wol vpn disconnect My-Office --json | tr -d ' \\n'; echo; ip link show My-Office >/dev/null 2>&1 || echo tunnel-gone"
+  rc: any
+  expect: "tunnel-gone"
+  save: vpn-disconnected.txt
+  caption: "disconnected: the profile stays (active false), the tunnel is gone"
+- ssh: "wol vpn forget My-Office --json | tr -d ' \\n'; echo; nmcli -t -f NAME con show | grep -c My-Office"
+  rc: any
+  expect: "0"
+  save: vpn-forgotten.txt
+  caption: "forgotten: no profile left"
+- ssh: "printf 'client\\ndev tun\\nproto udp\\nremote 10.0.2.2 1194\\n' > /tmp/office.ovpn; wol vpn import /tmp/office.ovpn 2>&1; echo rc=$?"
+  rc: any
+  expect: "networkmanager-openvpn"
+  save: vpn-openvpn-no-plugin.txt
+  caption: "RECORD (image gap): the OpenVPN plugin is not installed, said in one sentence, rc not 0"
+- checkpoint: qa100-net3-vpn
+- stop

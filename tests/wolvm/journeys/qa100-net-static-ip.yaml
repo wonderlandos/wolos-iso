@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 NET-3 / QA-LIVE3-14: a static IPv4 address. `wol network ip` (what Settings > Network >
+# IP settings > Configure… runs) reads the link's method, refuses a router outside the subnet with
+# a sentence, keeps a Manual address that stays online, and undoes one that cuts the computer off
+# after its 15 s trial (back to Automatic, exit not 0). QEMU's user network: 10.0.2.0/24, router
+# 10.0.2.2, DNS 10.0.2.3. The CLI steps run as root (wol-admind and polkit allow root); the
+# Settings pages are shot as the live user.
+#   wolvm new net3 --iso wolos.iso --ssh
+#   wolvm journey net3 tests/wolvm/journeys/qa100-net-static-ip.yaml
+name: "NET-3 static IP: read, refuse, keep, roll back after 15 s, Settings pages"
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 120
+  caption: welcome screen
+- click: 710 599
+  caption: Try WolOS (1280x800)
+- sleep: 3
+- wait-stable:
+  timeout: 120
+  caption: live desktop
+- ssh: "IF=$(nmcli -t -f DEVICE,TYPE dev | awk -F: '$2==\"ethernet\"{print $1; exit}'); echo \"$IF\" > /tmp/qa100-if; wol network ip $IF --json | tr -d ' \\n'; echo"
+  expect: "\"automatic\":true"
+  save: ip-before.txt
+  caption: "the Ethernet link gets its address from DHCP"
+- ssh: "wol network ip $(cat /tmp/qa100-if) manual 10.0.2.50/24 10.0.3.1 2>&1; echo rc=$?"
+  rc: any
+  expect: "same network"
+  save: ip-router-outside.txt
+  caption: "FIXED (QA-LIVE3-14): a router outside 10.0.2.0/24 is refused with a sentence, rc not 0, nothing changed"
+- ssh: "timeout 60 wol network ip $(cat /tmp/qa100-if) manual 10.0.2.50/24 10.0.2.2 10.0.2.3 --json | tr -d ' \\n'; echo; ip -4 -o addr show dev $(cat /tmp/qa100-if) | grep -o 'inet [0-9./]*'; getent hosts archlinux.org >/dev/null && echo names-ok"
+  rc: any
+  expect: "names-ok"
+  save: ip-manual-kept.txt
+  caption: "FIXED (QA-LIVE3-14): automatic false, address 10.0.2.50/24, router 10.0.2.2; names still resolve"
+- ssh: "runuser -u live -- env HOME=/home/live XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 setsid -f wol-settings 'IP Settings' >/dev/null 2>&1; sleep 4; pgrep -u 1000 -x wol-settings >/dev/null && echo settings-running"
+  expect: "settings-running"
+- wait-stable:
+  timeout: 40
+- shot: net3-ip-settings-manual
+  caption: "IP Settings: Ethernet (enpX) with Configure IPv4 on Manual, Address 10.0.2.50/24, Router 10.0.2.2, DNS servers 10.0.2.3, Apply"
+- ssh: "pkill -u 1000 -x wol-settings; START=$(date +%s); timeout 90 wol network ip $(cat /tmp/qa100-if) manual 10.9.9.9/24 10.9.9.1 2>&1; echo rc=$? secs=$(( $(date +%s) - START )); wol network ip $(cat /tmp/qa100-if) --json | tr -d ' \\n'; echo"
+  rc: any
+  expect: "went back to Automatic"
+  save: ip-rolled-back.txt
+  caption: "FIXED (QA-LIVE3-14): an address on another network loses the router; after about 15 s the link is Automatic again (automatic true), rc not 0"
+- ssh: "wol network ip $(cat /tmp/qa100-if) auto --json | tr -d ' \\n'; echo; wol network | tr -d ' \\n' | grep -oE '\"online\":[a-z]+'"
+  rc: any
+  expect: "\"online\":true"
+  save: ip-auto-again.txt
+  caption: "back to DHCP and online"
+- ssh: "runuser -u live -- env HOME=/home/live XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 setsid -f wol-settings Network >/dev/null 2>&1; sleep 4; echo opened"
+  rc: any
+  expect: "opened"
+- wait-stable:
+  timeout: 40
+- shot: net3-network-pane-ip-settings-row
+  caption: "Network: the Ethernet section ends with IP settings and a Configure… button"
+- ssh: "pkill -u 1000 -x wol-settings; echo closed"
+  rc: any
+- checkpoint: qa100-net-static-ip
+- stop

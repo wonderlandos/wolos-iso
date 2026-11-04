@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 NET-3 / QA-NET-21 (proxy, DNS over TLS): `wol proxy manual` writes /etc/wolos/proxy.conf
+# and the login environment, a new login shell has http_proxy, the desktop's key follows; `wol dns
+# tls` writes resolved's drop-in, resolvectl shows DNSOverTLS and the server, Always without a server
+# is refused (every lookup would fail, network-r2), and Off puts plain DNS back. As root (wol-admind
+# allows root without a password).
+#   wolvm new net3 --iso wolos.iso --ssh
+#   wolvm journey net3 tests/wolvm/journeys/qa100-net3-proxy-dns.yaml
+name: "NET-3 proxy and DNS over TLS: files, environment, resolved, refusals, Settings pages"
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 120
+  caption: welcome screen
+- click: 710 599
+  caption: Try WolOS (1280x800)
+- sleep: 3
+- wait-stable:
+  timeout: 120
+  caption: live desktop
+- ssh: "wol proxy manual http=10.0.2.2:3128 https=10.0.2.2:3128 no-proxy=.lan,10.0.0.0/8 --json </dev/null | tr -d ' \\n'; echo; cat /etc/wolos/proxy.conf; bash -lc 'echo http_proxy=$http_proxy no_proxy=$no_proxy'"
+  rc: any
+  expect: "http_proxy=http://10.0.2.2:3128/"
+  save: proxy-manual.txt
+  caption: "FIXED (NET-21): proxy.conf mode=manual; a new login shell has http_proxy and no_proxy with localhost first"
+- ssh: "wol proxy manual http=bad';id;' </dev/null 2>&1; echo rc=$?; grep -c id /etc/profile.d/wolos-proxy.sh"
+  rc: any
+  expect: "and a port"
+  save: proxy-refused.txt
+  caption: "a value with a quote is refused before wol-admind, the file is unchanged (count 0)"
+- ssh: "runuser -u live -- env HOME=/home/live XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 setsid -f wol-settings Proxy >/dev/null 2>&1; sleep 4; pgrep -u 1000 -x wol-settings >/dev/null && echo settings-running"
+  expect: "settings-running"
+- wait-stable:
+  timeout: 40
+- shot: net3-proxy-page-manual
+  caption: "Proxy: Manual chosen, Web proxy (HTTP) and Secure web proxy (HTTPS) 10.0.2.2:3128, Don't use the proxy for .lan, 10.0.0.0/8"
+- ssh: "pkill -u 1000 -x wol-settings; wol proxy off </dev/null --json | tr -d ' \\n'; echo; bash -lc 'echo http_proxy=[$http_proxy]'"
+  rc: any
+  expect: "http_proxy=\\[\\]"
+  save: proxy-off.txt
+  caption: "Off: the login environment has no proxy again"
+- ssh: "wol dns tls strict </dev/null 2>&1; echo rc=$?"
+  rc: any
+  expect: "at least one server"
+  save: dot-strict-refused.txt
+  caption: "FIXED (NET-21): Always without a server of its own is refused"
+- ssh: "wol dns tls opportunistic 9.9.9.9#dns.quad9.net </dev/null --json | tr -d ' \\n'; echo; cat /etc/systemd/resolved.conf.d/50-wolos-dns-over-tls.conf; sleep 2; resolvectl status | grep -E 'DNSOverTLS|DNS Servers' | head -3; getent hosts archlinux.org >/dev/null && echo names-ok"
+  rc: any
+  expect: "names-ok"
+  save: dot-opportunistic.txt
+  caption: "FIXED (NET-21): the drop-in says DNSOverTLS=opportunistic and DNS=9.9.9.9#dns.quad9.net, resolvectl shows +DNSOverTLS/opportunistic, names resolve"
+- ssh: "runuser -u live -- env HOME=/home/live XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 setsid -f wol-settings 'DNS over TLS' >/dev/null 2>&1; sleep 4; echo opened"
+  rc: any
+  expect: "opened"
+- wait-stable:
+  timeout: 40
+- shot: net3-dns-over-tls-page
+  caption: "DNS over TLS: When available chosen, DNS servers 9.9.9.9#dns.quad9.net"
+- ssh: "pkill -u 1000 -x wol-settings; wol dns tls off </dev/null --json | tr -d ' \\n'; echo; resolvectl status | grep -m1 DNSOverTLS"
+  rc: any
+  expect: "-DNSOverTLS"
+  save: dot-off.txt
+  caption: "Off: plain DNS again (resolvectl's protocol line says -DNSOverTLS)"
+- checkpoint: qa100-net3-proxy-dns
+- stop
