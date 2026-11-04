@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H12 R2 (devices, live): a computer with no Bluetooth adapter. bluetooth.service never
+# starts (ConditionPathIsDirectory=/sys/class/bluetooth) so org.bluez is never on the bus and
+# every `bluetoothctl` call blocks forever waiting for it. Settings says "No Bluetooth Hardware"
+# correctly, yet the Settings process keeps spawning bluetoothctl (one killed every 2 s by the
+# Host timeout, up to 3 at once) and wold keeps bluetoothctl children for over 16 minutes;
+# `wol bluetooth on` waits minutes before "the change did not work" (DEV2-3, DEV2-4).
+# Runs on a plain wolvm VM (no Bluetooth device) booted to a logged-in desktop (uid 1000).
+#   wolvm journey dev2 tests/wolvm/journeys/qa100-dev2-bt-no-adapter.yaml
+name: devices, Bluetooth with no adapter: hangs behind a correct screen
+steps:
+- wait-agent:
+  timeout: 120
+- ssh: "ls /sys/class/bluetooth 2>/dev/null | wc -l; systemctl is-active bluetooth; systemctl show bluetooth -p ConditionResult --value"
+  save: no-adapter.txt
+  caption: 0 adapters, bluetooth inactive, ConditionResult=no
+- ssh: "P=$(pgrep -u 1000 -x wol-shell | head -1); tr '\\0' '\\n' < /proc/$P/environ | grep -E '^(WAYLAND_DISPLAY|HYPRLAND_INSTANCE_SIGNATURE|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR|HOME|USER)=' > /tmp/sess.env; wc -l < /tmp/sess.env"
+  expect: "6"
+- ssh: "s=$(date +%s); timeout 15 runuser -u $(id -nu 1000) -- env XDG_RUNTIME_DIR=/run/user/1000 bluetoothctl show >/dev/null 2>&1; echo rc=$? after $(( $(date +%s)-s ))s"
+  save: bluetoothctl-show.txt
+  caption: bluetoothctl never answers without bluetoothd: rc=124 after 15 s (killed by timeout)
+- ssh: "runuser -u $(id -nu 1000) -- env $(tr '\\n' ' ' < /tmp/sess.env) systemd-run --user --collect wol-settings Bluetooth; sleep 4; echo opened"
+  expect: "opened"
+- shot: settings-no-hardware
+  caption: the page is right ("No Bluetooth Hardware"); what runs behind it is not
+- ssh: "n=0; m=0; for i in $(seq 100); do c=$(pgrep -c bluetoothctl); n=$((n+c)); [ $c -gt $m ] && m=$c; sleep 0.2; done; echo samples_with_bluetoothctl=$n max_concurrent=$m; for p in $(pgrep bluetoothctl); do ps -o args= -p $(ps -o ppid= -p $p); done | sort | uniq -c"
+  save: spawn-storm.txt
+  caption: DEV2-3, expected 0 bluetoothctl processes on a machine with no adapter; actual a bluetoothctl alive in most 0.2 s samples, parents wol-settings and wold
+- ssh: "s=$(date +%s); timeout 400 runuser -u $(id -nu 1000) -- env XDG_RUNTIME_DIR=/run/user/1000 wol bluetooth on 2>&1 | tail -1; echo rc=${PIPESTATUS[0]} after $(( $(date +%s)-s ))s"
+  save: wol-bt-on.txt
+  caption: DEV2-4, expected an immediate "This computer has no Bluetooth adapter"; actual minutes of silence then "wol: the change did not work"
+- ssh: "ps -o pid,ppid,etimes,args -C bluetoothctl"
+  save: leftovers.txt
+  caption: bluetoothctl children of wold older than the Settings page
+- logs:
+  n: 200

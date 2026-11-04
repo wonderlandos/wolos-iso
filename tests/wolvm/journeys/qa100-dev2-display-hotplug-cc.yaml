@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H12 R2 (devices, live): plugging a second display while the Control Center is open ends
+# wol-shell with a Wayland protocol error (hyprland_focus_grab remove_surface on a destroyed
+# surface, focus_grab.rs:270): wallpaper, menu bar and Dock vanish (DEV2-1). On 0.12.1 nothing
+# restarts the shell; webapp-int's supervisor (supervise.rs) would, with every panel state lost.
+# The display is hot-plugged from inside the guest through the DRM debugfs connector force, which
+# the compositor sees as a real hotplug (udev change on the drm subsystem). Needs a VM made with
+# `-device virtio-vga,max_outputs=2` (wolvm new ... then edit the start command, see
+# /scratch/qa100-dev2/setup.sh) and a logged-in desktop (uid 1000).
+#   wolvm journey dev2 tests/wolvm/journeys/qa100-dev2-display-hotplug-cc.yaml
+name: devices, second display plugged with the Control Center open kills the shell
+steps:
+- wait-agent:
+  timeout: 120
+- ssh: "mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug; ls /sys/kernel/debug/dri/*/Virtual-2/force | head -1"
+  save: force-path.txt
+- ssh: "P=$(pgrep -u 1000 -x wol-shell | head -1); tr '\\0' '\\n' < /proc/$P/environ | grep -E '^(WAYLAND_DISPLAY|HYPRLAND_INSTANCE_SIGNATURE|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR|HOME|USER)=' > /tmp/sess.env; wc -l < /tmp/sess.env"
+  expect: "6"
+- ssh: "F=$(ls /sys/kernel/debug/dri/*/Virtual-2/force | head -1); echo on > $F; udevadm trigger --action=change --subsystem-match=drm; sleep 4; pgrep -u 1000 -x wol-shell | wc -l"
+  expect: "1"
+  caption: plugging with no panel open: the shell stays (wallpaper and bar on both displays)
+- shot: plugged-no-panel
+- ssh: "F=$(ls /sys/kernel/debug/dri/*/Virtual-2/force | head -1); echo off > $F; udevadm trigger --action=change --subsystem-match=drm; sleep 4; pgrep -u 1000 -x wol-shell | wc -l"
+  expect: "1"
+- ssh: "runuser -u $(id -nu 1000) -- env $(tr '\\n' ' ' < /tmp/sess.env) wol shell toggle control-center; sleep 2; echo opened"
+  expect: "opened"
+- shot: cc-open
+- ssh: "F=$(ls /sys/kernel/debug/dri/*/Virtual-2/force | head -1); echo on > $F; udevadm trigger --action=change --subsystem-match=drm; sleep 4; pgrep -u 1000 -x wol-shell | wc -l; tail -1 /run/user/1000/wol-shell.log; journalctl -b --no-pager --since -20s | grep -E 'remove_surface|client communication' | tail -2"
+  save: after-plug-cc.txt
+  caption: DEV2-1, expected 1 shell and the Control Center still open; actual 0 shells, "Error 22 (Invalid argument) dispatching to Wayland display", compositor "unknown object ... remove_surface(o)"
+- shot: shell-gone
+- ssh: "F=$(ls /sys/kernel/debug/dri/*/Virtual-2/force | head -1); echo off > $F; udevadm trigger --action=change --subsystem-match=drm; echo reset"
+  expect: "reset"
+- logs:
+  n: 200

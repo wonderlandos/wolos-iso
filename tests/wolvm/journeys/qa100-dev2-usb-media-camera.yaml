@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H12 R2 (devices, live): removable disks and the camera. A USB disk with no readable
+# filesystem is shown nowhere (no sidebar row in Files, no notice: DEV2-5); the kernel's `vivid`
+# test camera stands in for a webcam: the browser (helium) opens /dev/video0 directly (not through
+# PipeWire), shows its own permission prompt with a live preview before the person answers, and the
+# WolOS menu bar and Control Center show no camera or microphone indicator while it streams (H12
+# DEV-9/DEV-15 confirmed live; the PipeWire stream list is empty, so an indicator fed from it alone
+# would miss browsers). USB plug steps need QMP: run them by hand (see /scratch/qa100-dev2 h.sh)
+# or extend wolvm with a `qmp:` verb; the steps below cover the in-guest half.
+#   wolvm journey dev2 tests/wolvm/journeys/qa100-dev2-usb-media-camera.yaml
+name: devices, unreadable USB disk shown nowhere; camera in use with no indicator
+steps:
+- wait-agent:
+  timeout: 120
+- ssh: "P=$(pgrep -u 1000 -x wol-shell | head -1); tr '\\0' '\\n' < /proc/$P/environ | grep -E '^(WAYLAND_DISPLAY|HYPRLAND_INSTANCE_SIGNATURE|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR|HOME|USER)=' > /tmp/sess.env; wc -l < /tmp/sess.env"
+  expect: "6"
+- note: "by hand: QMP blockdev-add a 256 MiB image whose first 256 KiB are zero, device_add usb-storage,removable=true on bus xhci.0"
+- ssh: "sleep 5; lsblk -o NAME,FSTYPE /dev/sda | tail -1; blkid /dev/sda || echo no-fs-signature"
+  rc: any
+  save: bad-disk.txt
+- ssh: "runuser -u $(id -nu 1000) -- env $(tr '\\n' ' ' < /tmp/sess.env) setsid -f nautilus </dev/null >/dev/null 2>&1; sleep 6; echo opened"
+  expect: "opened"
+- shot: files-unreadable-disk
+  caption: DEV2-5, expected a row or a notice "This disk cannot be read. Erase it in Disk Utility?"; actual nothing anywhere
+- ssh: "modprobe vivid n_devs=1 node_types=0x1; sleep 2; cat /sys/class/video4linux/video0/name; su $(id -nu 1000) -c 'test -r /dev/video0 && echo seat-user-can-open'; for u in $(awk -F: '$3>=1000 && $3<60000 {print $1}' /etc/passwd); do su $u -c \"test -r /dev/video0 && echo $u-can-open\"; done"
+  save: camera-access.txt
+  caption: every account opens the camera (group video), not only the person at the seat (DEV-15 live)
+- ssh: "printf '%s' '<html><body style=\"background:#222;color:#eee;font:20px sans-serif\"><h1 id=s>asking for the camera</h1><video id=v autoplay width=320></video><script>navigator.mediaDevices.getUserMedia({video:true,audio:true}).then(st=>{document.getElementById(\"v\").srcObject=st;document.getElementById(\"s\").textContent=\"camera+mic streaming: \"+st.getTracks().map(t=>t.label).join(\", \")}).catch(e=>document.getElementById(\"s\").textContent=\"refused: \"+e.name)</script></body></html>' > /tmp/cam.html; chmod 644 /tmp/cam.html; echo written"
+  expect: "written"
+- note: "by hand: Dock > Browser (first run asks for a new keyring password: QA-FILES-11 live), Ctrl+L file:///tmp/cam.html, Allow this time"
+- shot: browser-camera-prompt
+- ssh: "sleep 20; fuser /dev/video0 2>&1 | tail -1; runuser -u $(id -nu 1000) -- env $(tr '\\n' ' ' < /tmp/sess.env) wpctl status | sed -n '/^Video/,/^Settings/p' | sed -n '/Streams/,/Settings/p'"
+  rc: any
+  save: camera-users.txt
+  caption: the browser holds /dev/video0; PipeWire lists no video stream
+- shot: menubar-camera-live
+  caption: DEV-9/DEV-15 live, no camera or microphone indicator in the menu bar while a page streams both
+- ssh: "runuser -u $(id -nu 1000) -- env $(tr '\\n' ' ' < /tmp/sess.env) wol shell toggle control-center; sleep 2; echo cc"
+  expect: "cc"
+- shot: cc-camera-live
+- logs:
+  n: 200
