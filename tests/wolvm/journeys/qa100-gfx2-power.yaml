@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-R2-gfx: battery and charger faked with the kernel's test_power module; suspend needs qemu
+# `-global ICH9-LPC.disable_s3=0` and a QMP system_wakeup after the suspend step (wolvm has no verb
+# for it: run `{"execute":"system_wakeup"}` on the QMP socket by hand or from the driver script).
+# GFX-10/GFX-4: Battery page shows "50% · On battery", no time left, no Energy Mode.
+# GFX-11: on battery the displays turn off at 120 s idle while the lock comes at 300 s.
+# GFX2-5: the sleep hook logs "lock uid 1000: no answer"; GFX2-6: heads stay dark after resume.
+name: Fake battery, idle on battery, suspend and resume
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+- ssh: "modprobe test_power && echo off > /sys/module/test_power/parameters/ac_online && echo off > /sys/module/test_power/parameters/usb_online; sleep 2; ls /sys/class/power_supply; wol power status"
+  save: power-status.json
+  caption: EXPECT source battery, battery 50
+- ssh: "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 systemd-run --user --collect wol-settings Battery"
+- wait-stable:
+  timeout: 30
+- shot: battery-page
+  caption: EXPECT "Battery level 50% · On battery"; BUG class GFX-10 (no time left), GFX-4 (no Energy Mode)
+- sleep: 135
+- ssh: "H=\"runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl\"; $H -j monitors | grep dpmsStatus; pgrep -a wol-lock || echo no-wol-lock"
+  save: idle-135.txt
+  caption: GFX-11 — dpmsStatus false on every head and no-wol-lock = screens off before the lock
+- key: shift
+- ssh: "systemctl suspend; sleep 1; echo suspending"
+  caption: now send QMP system_wakeup after ~8 s
+- sleep: 30
+- wait-agent:
+  timeout: 90
+- shot: after-resume
+  caption: EXPECT the lock screen. BUG GFX2-6 if "Display output is not active"
+- ssh: "journalctl -b --no-pager -o cat --since -3min | grep -E 'wolos_power|wol-lock' ; pgrep -a wol-lock"
+  save: resume-journal.txt
+  caption: EXPECT "lock uid 1000: locked" (or similar). BUG GFX2-5 if "no answer"
+- stop

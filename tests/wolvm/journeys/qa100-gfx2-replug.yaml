@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-R2-gfx: three heads (qemu virtio-vga,max_outputs=3, kernel video=Virtual-2:1280x800e
+# video=Virtual-3:1280x800e), installed disk with alice/curiouser.
+# GFX2-2: 150 % on 1280x800 becomes 1.6 and the Dock no longer fits.
+# GFX-8 (pass): a rotated display is dressed 1080x1920.
+# GFX2-1: a display unplugged and plugged back gets no wallpaper/bar/Dock (BUG: `Virtual-1 []`).
+name: Three displays, scale 150, rotate, unplug and re-plug
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+- ssh: "H=\"runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl\"; $H keyword monitor 'Virtual-2,1280x800@74.99,auto,2'; $H keyword monitor 'Virtual-3,1920x1080@60,auto,1'; $H keyword monitor 'Virtual-1,1280x800@74.99,0x0,1.5'; sleep 3; $H -j monitors"
+  save: scale150.json
+  caption: EXPECT Virtual-1 scale 1.5. BUG if 1.6 (and the Dock layer wider than the screen)
+- ssh: "H=\"runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl\"; $H -j layers"
+  save: layers-150.json
+  caption: EXPECT wol-dock x >= 0 and w <= 800
+- shot: scale150
+- ssh: "H=\"runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl\"; $H keyword monitor 'Virtual-1,1280x800@74.99,0x0,1'; $H keyword monitor 'Virtual-3,1920x1080@60,auto,1,transform,1'; sleep 3; $H -j layers"
+  save: layers-rotate.json
+  caption: EXPECT Virtual-3 wol-menubar w 1080 (rotated)
+- ssh: "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 systemd-run --user --collect wol-settings Displays"
+- wait-stable:
+  timeout: 30
+- ssh: "H=\"runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl\"; $H keyword monitor 'Virtual-1,disable'; sleep 5; $H -j layers; $H -j clients"
+  save: unplug-main.json
+  caption: EXPECT Dock on the new main display and the Settings window moved there
+- ssh: "H=\"runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl\"; $H keyword monitor 'Virtual-1,1280x800@74.99,0x0,1'; sleep 20; $H -j layers"
+  save: replug-main.json
+  caption: EXPECT Virtual-1 with wol-wallpaper, wol-menubar and wol-dock. BUG if "Virtual-1" has no layers
+- shot: replug-main
+- ssh: "H=\"runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl\"; $H keyword monitor 'Virtual-3,disable'; sleep 4; $H keyword monitor 'Virtual-3,1920x1080@60,auto,1'; sleep 20; $H -j layers"
+  save: replug-secondary.json
+  caption: EXPECT Virtual-3 with wol-wallpaper and wol-menubar. BUG if empty
+- stop
