@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-H20 data-safety: Settings > Restore promises "Starting from one keeps your files and brings
+# back the system as it was" (ui/settings/restore.rs:231) and the manual says "with your files and
+# apps as they were" (manual/recovery.md). Today an update folds the live layers into the new slot
+# and the first good boot of that slot deletes them (`wol layers clear`, boot-ok:23); rolling back
+# to the old slot then has neither the folded copy nor the layer: every app installed from the
+# Store before the update is gone (core/update.rs:241-245 fold; core/update/layers.rs:86-105).
+# Needs: an installed VM (install-auto.yaml, checkpoint installed-up), network, ~25 min.
+# Findings: H20-2 (rollback loses layered apps), H20-1 rides along (marks after reboots).
+name: rolling back to the restore point keeps the apps installed before the update
+steps:
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+- ssh: "timeout 900 wol pkg -- -S --noconfirm sl >/tmp/pkg.log 2>&1; echo rc=$?; pacman -Q sl; ls /var/lib/extensions"
+  timeout: 960
+  rc: any
+  save: before-update.txt
+  caption: an app installed live (a layer) while slot A runs
+- ssh: "timeout 1700 wol update apply --yes >/tmp/apply.log 2>&1; echo rc=$?; tail -3 /tmp/apply.log"
+  timeout: 1800
+  rc: any
+  save: apply.txt
+- ssh: "grep -q 'updated into wolos-b' /tmp/apply.log && echo built-b"
+  expect: "built-b"
+- ssh: "systemctl reboot"
+  rc: any
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 240
+  caption: the new slot (B) runs; its good boot clears the layers it folded
+- ssh: "sleep 20; tr ' ' '\\n' < /proc/cmdline | grep subvol; pacman -Q sl; ls /var/lib/extensions; cat /etc/wolos/folded-layers; wol restore list"
+  rc: any
+  save: on-b.txt
+- ssh: "wol update rollback --yes; wol restore list --json | grep -c '\"next_boot\": true'"
+  rc: any
+  save: rollback.txt
+  caption: Settings > Restore > Start From This (the same admind action)
+- ssh: "systemctl reboot"
+  rc: any
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 240
+- ssh: "tr ' ' '\\n' < /proc/cmdline | grep subvol"
+  expect: "subvol=@wolos-a"
+  caption: back on the restore point
+- ssh: "pacman -Q sl 2>&1; which sl 2>&1; ls /var/lib/extensions"
+  rc: any
+  save: on-a-after-rollback.txt
+- ssh: "which sl >/dev/null 2>&1 && echo app-kept-after-rollback"
+  expect: "app-kept-after-rollback"
+  caption: "H20-2: an app installed before the update is still there after going back to the restore point (today: gone)"
+- logs:
+  n: 400
+- stop

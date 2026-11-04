@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-H20 data-safety: installing one package live (a layer, as the Store does) must not make the
+# sealed slot fail its own safety check at the next start. Today `wol seal check` runs `fsverity
+# measure` on /usr while systemd-sysext has merged the layer over it; overlayfs has no
+# FS_IOC_MEASURE_VERITY, so every one of the 6187 protected files reads as "changed", the slot is
+# marked verity-failed, and with a second slot present the computer silently restarts into the
+# OTHER slot (controller/seal.rs:116-178, core/seal.rs:131-156). Nothing tells the person.
+# Needs: an installed VM (install-auto.yaml, checkpoint installed-up), network up.
+# Findings: H20-1 (seal check vs layers), H20-5 (verity-notice never shown).
+name: a live package install must not fail the slot's safety check at the next start
+steps:
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+- ssh: "ls /var/lib/wolos/verity-failed-* 2>/dev/null; echo marks-before"
+  save: marks-before.txt
+- ssh: "timeout 900 wol pkg -- -S --noconfirm sl >/tmp/pkg.log 2>&1; echo rc=$?; ls /var/lib/extensions; systemd-sysext status | tail -2; sl -h 2>&1 | head -1"
+  timeout: 960
+  rc: any
+  save: layer.txt
+  caption: one layer merged over /usr (what every Store / Modules install does)
+- ssh: "wol seal check >/tmp/check.txt 2>&1; cat /tmp/check.txt; test ! -e /var/lib/wolos/verity-failed-$(sed -n 's/.*subvol=@\\(wolos-[ab]\\).*/\\1/p' /proc/cmdline) && echo check-passes-with-layer"
+  expect: "check-passes-with-layer"
+  rc: any
+  caption: "H20-1: the seal check must see the sealed files, not the overlay (today: 6187 'changed')"
+- ssh: "systemctl reboot"
+  rc: any
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+- ssh: "tr ' ' '\\n' < /proc/cmdline | grep subvol; ls /var/lib/wolos/verity-failed-* 2>&1; cat /var/lib/wolos/verity-notice 2>&1; journalctl -b --no-pager -o short-iso -u wolos-verity-check.service -u systemd-sysext.service"
+  rc: any
+  save: after-reboot.txt
+- ssh: "test -z \"$(ls /var/lib/wolos/verity-failed-* 2>/dev/null)\" && echo no-slot-marked-failed"
+  expect: "no-slot-marked-failed"
+  caption: "H20-1: after the restart the running slot must not be marked failed because of its own layer"
+- ssh: "sl -h 2>&1 | head -1 | grep -q . && echo app-still-there"
+  expect: "app-still-there"
+- logs:
+  n: 400
+- stop

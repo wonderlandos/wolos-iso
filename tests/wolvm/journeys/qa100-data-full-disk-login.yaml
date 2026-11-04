@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-H20 data-safety: /home, /var and the root slots share one btrfs with no quota. One account
+# can fill the disk; then another account's login ends 1.7 s after it starts and the login window
+# comes back with no word (wol-login: "session spawn" ... "session exit"), and journald corrupts
+# and stops writing the system journal ("Failed to create new system journal: No space left").
+# Needs a VM from install-auto.yaml with two accounts as the Setup Assistant makes them: tester
+# (admin, pw tester123) and bob (QA100-VERIFY's `accounts` checkpoint), at the login window.
+# Findings: H20-3 (login dies silently on a full disk), H20-4 (no quota, journal corrupted).
+name: a full disk must not turn the login window into a silent loop
+steps:
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+  caption: login window with two accounts
+- ssh: "su bob -c 'fallocate -l 30G /home/bob/big1; fallocate -l 10G /home/bob/big2; dd if=/dev/zero of=/home/bob/big3 bs=1M status=none; dd if=/dev/zero of=/home/bob/big4 bs=4k status=none'; df -h /home | tail -1"
+  timeout: 600
+  rc: any
+  save: fill.txt
+  caption: one account fills the shared disk
+- ssh: "df --output=pcent /home | tail -1 | tr -d ' %' | grep -qx 100 && echo disk-full"
+  expect: "disk-full"
+- click: [720, 590]
+- wait-stable:
+  timeout: 60
+  caption: Tester T chosen
+- type: tester123
+- key: ret
+- wait-stable:
+  timeout: 90
+  caption: "H20-3: either the desktop, or a sentence saying the disk is full; today the login window comes back silently"
+- ssh: "journalctl -b --no-pager -o short-iso -t wol-login 2>&1 | tail -6; loginctl list-sessions --no-legend; journalctl --verify 2>&1 | grep -v PASS | tail -3"
+  rc: any
+  save: after-login.txt
+- ssh: "loginctl list-sessions --no-legend | grep -q tester && echo session-up"
+  expect: "session-up"
+  caption: "H20-3: the session must come up (or the greeter must say why not)"
+- ssh: "journalctl --verify 2>&1 | grep -q FAIL && echo journal-corrupted || echo journal-ok"
+  expect: "journal-ok"
+  caption: "H20-4: the system journal must survive a full disk (reserve or quota)"
+- ssh: "rm -f /home/bob/big*; df -h /home | tail -1"
+  rc: any
+- logs:
+  n: 300
+- stop
