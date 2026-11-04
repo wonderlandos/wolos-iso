@@ -47,7 +47,7 @@ steps:
   timeout: 20
 - shot: sharing-two-pending
   caption: "ASSERT (d, bug 6): both switches wait (insensitive, spinner); the sheet says the two changes are waiting"
-# Cancel: Esc is not wired on the sheet; Tab to Cancel. The sheet order is field, Cancel, Allow.
+# Cancel with the button: Tab to Cancel (Esc is checked further down). The sheet order is field, Cancel, Allow.
 - key: tab tab
 - shot: sharing-focus-cancel
   caption: "ring on Cancel (adjust)"
@@ -60,6 +60,23 @@ steps:
   rc: any
   save: sshd-after-cancel.txt
   caption: nothing changed on the host
+# Esc path (QA-LIVE-8, QA-SET-R2-07, brief A2): the sheet is modal and Esc is Cancel wherever the
+# focus is. Flip Remote Login again, press Esc without touching the sheet.
+- key: shift-tab shift-tab shift-tab
+- key: spc
+- wait-stable:
+  timeout: 20
+- shot: sharing-sheet-modal
+  caption: "ASSERT (LIVE-8): the sidebar, the page and the toolbar look dimmed (insensitive) behind the sheet"
+- key: esc
+- wait-stable:
+  timeout: 20
+- shot: sharing-after-esc
+  caption: "ASSERT (R2-07): Esc closed the sheet, Remote Login flipped back, status line EMPTY (no 'Incorrect password')"
+- ssh: "systemctl is-active sshd 2>/dev/null; echo after-esc"
+  rc: any
+  save: sshd-after-esc.txt
+  caption: nothing changed on the host after Esc
 # Allow path: flip Remote Login again, type the password in the sheet, Return.
 - key: shift-tab shift-tab shift-tab
 - key: spc
