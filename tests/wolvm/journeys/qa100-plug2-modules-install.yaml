@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-R2-plugins: Settings > Modules > Install Local AI on a computer with no GPU. Expected: the row
+# says the models will run on the processor, the password sheet names the module and its size, and a
+# failure names its cause. 0.12.1: sheet "System Settings is trying to make changes", then "The change
+# did not work. Try again." (sealed root, QA-STORE-42; PLUG2-7/8). Needs bob logged in at the desktop.
+name: install Local AI from Settings without a GPU
+steps:
+- start
+- wait-agent:
+  timeout: 600
+- ssh: "wol hw compute --json"
+  save: compute.json
+- ssh: "su -l bob -c 'export XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=wayland-1; nohup wol-settings >/dev/null 2>&1 &'; sleep 5; echo started"
+  expect: started
+- wait-stable:
+  timeout: 30
+- click: 304 139
+  caption: Settings search
+- type: Modules
+- sleep: 2
+- click: 754 322
+  caption: the Modules result
+- wait-stable:
+  timeout: 30
+- checkpoint: modules-page
+  caption: PLUG2-7 Local AI row says nothing about the processor-only backend
+- click: 1022 274
+  caption: Install on Local AI
+- sleep: 3
+- checkpoint: authenticate
+  caption: PLUG2-8 the sheet names neither the module nor the 3.5 GB
+- type: qa100plug
+- key: ret
+- sleep: 30
+- checkpoint: install-result
+  caption: expected a sentence with the cause; 0.12.1 "The change did not work. Try again."
+- ssh: "journalctl -b --no-pager -o cat -u wol-admind | tail -5"
+  save: admind.txt
+  rc: any

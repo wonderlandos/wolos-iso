@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-R2-plugins: an MCP client that dies while its approval sheet is on screen. Expected: the sheet
+# closes (or at least its answer runs nothing). 0.12.1: the sheet stays and Allow Once runs the change
+# (PLUG2-1 in .claude/v012/qa100/plugins-maker-r2.md). Needs: an installed VM with account bob logged in
+# at the desktop (the first steps set the password and log in through the login window at 1280x800).
+name: an MCP client gone, its sheet approved
+steps:
+- start
+- wait-agent:
+  timeout: 600
+- ssh: "echo bob:qa100plug | chpasswd; echo pw-set"
+  expect: "pw-set"
+- wait-stable:
+  timeout: 120
+- click: 719 590
+  caption: the bob tile on the login window
+- type: qa100plug
+- key: ret
+- wait-stable:
+  timeout: 90
+- ssh: "mkdir -p /home/bob/qa; echo IyEvdXNyL2Jpbi9lbnYgcHl0aG9uMwojIFFBMTAwLVIyLXBsdWdpbnM6IGEgcmVhbCBNQ1AgY2xpZW50IG92ZXIgYHdvbCBtY3BgLiBtY3AucHkgbGlzdCBbY2xpZW50XQojICAgbWNwLnB5IGNhbGwgPGNsaWVudD4gPHRvb2w+IDxqc29uLWFyZ3M+IFthYmFuZG9uLXNlY3NdICAgKGFiYW5kb246IGNsaWVudCBkaWVzIGFmdGVyIE4gcykKaW1wb3J0IGpzb24sIHN1YnByb2Nlc3MsIHN5cywgdGltZSwgb3MKbW9kZSA9IHN5cy5hcmd2WzFdCmNsaWVudCA9IHN5cy5hcmd2WzJdIGlmIGxlbihzeXMuYXJndikgPiAyIGVsc2UgIlFBIGNsaWVudCIKcCA9IHN1YnByb2Nlc3MuUG9wZW4oWyJ3b2wiLCAibWNwIl0sIHN0ZGluPXN1YnByb2Nlc3MuUElQRSwgc3Rkb3V0PXN1YnByb2Nlc3MuUElQRSwgdGV4dD1UcnVlLCBidWZzaXplPTEpCmRlZiBzZW5kKG0pOgogICAgcC5zdGRpbi53cml0ZShqc29uLmR1bXBzKG0pICsgIlxuIik7IHAuc3RkaW4uZmx1c2goKQpkZWYgcmVjdigpOgogICAgcmV0dXJuIHAuc3Rkb3V0LnJlYWRsaW5lKCkuc3RyaXAoKQpzZW5kKHsianNvbnJwYyI6ICIyLjAiLCAiaWQiOiAxLCAibWV0aG9kIjogImluaXRpYWxpemUiLCAicGFyYW1zIjogeyJwcm90b2NvbFZlcnNpb24iOiAiMjAyNS0wMy0yNiIsCiAgICAgICJjbGllbnRJbmZvIjogeyJuYW1lIjogY2xpZW50LCAidmVyc2lvbiI6ICIxIn0sICJjYXBhYmlsaXRpZXMiOiB7fX19KQpwcmludCgiaW5pdDoiLCByZWN2KClbOjMwMF0pCnNlbmQoeyJqc29ucnBjIjogIjIuMCIsICJtZXRob2QiOiAibm90aWZpY2F0aW9ucy9pbml0aWFsaXplZCJ9KQppZiBtb2RlID09ICJsaXN0IjoKICAgIHNlbmQoeyJqc29ucnBjIjogIjIuMCIsICJpZCI6IDIsICJtZXRob2QiOiAidG9vbHMvbGlzdCJ9KQogICAgciA9IGpzb24ubG9hZHMocmVjdigpKQogICAgZm9yIHQgaW4gclsicmVzdWx0Il1bInRvb2xzIl06CiAgICAgICAgcHJvcHMgPSB0LmdldCgiaW5wdXRTY2hlbWEiLCB7fSkuZ2V0KCJwcm9wZXJ0aWVzIiwge30pCiAgICAgICAgcHJpbnQodFsibmFtZSJdLCAifCIsIHQuZ2V0KCJkZXNjcmlwdGlvbiIsICIiKVs6ODBdLnJlcGxhY2UoIlxuIiwgIiAiKSwgInwiLCAiLCIuam9pbihwcm9wcykpCiAgICBwcmludChsZW4oclsicmVzdWx0Il1bInRvb2xzIl0pLCAidG9vbHMiKQplbGlmIG1vZGUgPT0gImNhbGwiOgogICAgdG9vbCwgYXJncyA9IHN5cy5hcmd2WzNdLCBqc29uLmxvYWRzKHN5cy5hcmd2WzRdKQogICAgYWJhbmRvbiA9IGZsb2F0KHN5cy5hcmd2WzVdKSBpZiBsZW4oc3lzLmFyZ3YpID4gNSBlbHNlIDAKICAgIHQwID0gdGltZS50aW1lKCkKICAgIHNlbmQoeyJqc29ucnBjIjogIjIuMCIsICJpZCI6IDMsICJtZXRob2QiOiAidG9vbHMvY2FsbCIsICJwYXJhbXMiOiB7Im5hbWUiOiB0b29sLCAiYXJndW1lbnRzIjogYXJnc319KQogICAgaWYgYWJhbmRvbjoKICAgICAgICB0aW1lLnNsZWVwKGFiYW5kb24pCiAgICAgICAgcHJpbnQoIkFCQU5ET046IGNsaWVudCBleGl0cyBub3c7IHdvbCBtY3AgcGlkIiwgcC5waWQsIGZsdXNoPVRydWUpCiAgICAgICAgb3MuX2V4aXQoMCkKICAgIHByaW50KCJjYWxsOiIsIHJlY3YoKVs6NzAwXSkKICAgIHByaW50KCJ0b29rICUuMWZzIiAlICh0aW1lLnRpbWUoKSAtIHQwKSkKcC5zdGRpbi5jbG9zZSgpOyBwLndhaXQodGltZW91dD01KTsgcHJpbnQoInNlcnZlciBleGl0IiwgcC5yZXR1cm5jb2RlKQo= | base64 -d > /home/bob/qa/mcp.py; echo IyEvYmluL3NoCiMgUUExMDAtUjItcGx1Z2luczogc3RhcnQgYW4gTUNQIGNsaWVudCB0aGF0IGFza3MgZm9yIGEgY2hhbmdlIGFuZCBkaWVzIDMgcyBsYXRlciAoaXRzIHNoZWV0IHN0YXlzKS4KZXhwb3J0IFhER19SVU5USU1FX0RJUj0vcnVuL3VzZXIvJChpZCAtdSkgV0FZTEFORF9ESVNQTEFZPXdheWxhbmQtMQpjZCB+L3FhIHx8IGV4aXQgMQp3b2wgYXBwZWFyYW5jZSBzZXQgbGlnaHQgPi9kZXYvbnVsbCAyPiYxCm5vaHVwIHB5dGhvbjMgbWNwLnB5IGNhbGwgR29uZS1jbGllbnQgYXBwZWFyYW5jZV9zZXQgJ3sibW9kZSI6ImRhcmsifScgMyA+IGdvbmUub3V0IDI+JjEgJgpzbGVlcCA2OyBjYXQgZ29uZS5vdXQK | base64 -d > /home/bob/qa/orphan.sh; chown -R bob:bob /home/bob/qa; echo ok"
+  expect: "ok"
+- ssh: "su -l bob -c 'sh ~/qa/orphan.sh'"
+  expect: "ABANDON"
+- ssh: "pgrep -c -x wol || true"
+  save: wol-procs.txt
+- wait-stable:
+  timeout: 20
+- checkpoint: orphan-sheet
+  caption: PLUG2-1/PLUG-24 the sheet of a client that no longer exists is still on screen
+- click: 932 395
+  caption: Allow Once on the orphan sheet
+- sleep: 3
+- ssh: "cat /home/bob/.config/wolos/theme"
+  expect: "wol-light"
+  caption: expected unchanged; 0.12.1 gives wol-dark (the change ran for nobody)

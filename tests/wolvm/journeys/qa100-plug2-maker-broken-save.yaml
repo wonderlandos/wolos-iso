@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-R2-plugins: Plugin Maker on an enabled plugin. Save with a manifest that does not parse:
+# expected "Saved" to say the plugin is broken and the live bar item to survive (or a notice); 0.12.1
+# says "Saved. The preview shows the new version." and the bar item vanishes (PLUG2-3). Then an unsaved
+# edit and the window close button: expected a save/discard sheet; 0.12.1 drops the edit (PLUG-17).
+# Needs bob logged in at the desktop with bob.weather enabled (wol plugin new bob.weather menubar,widget;
+# wol plugin enable bob.weather), 1280x800.
+name: Maker saves a broken manifest
+steps:
+- start
+- wait-agent:
+  timeout: 600
+- ssh: "su -l bob -c 'export XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=wayland-1; wol plugin new bob.weather menubar,widget >/dev/null 2>&1; wol plugin enable bob.weather | grep enabled'"
+  expect: "true"
+- ssh: "su -l bob -c 'export XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=wayland-1; nohup wol-plugin-maker ~/.local/share/wolos/plugins/bob.weather >/dev/null 2>&1 &'; sleep 6; pgrep -f -c plugin-maker"
+  expect: "1"
+- wait-stable:
+  timeout: 30
+- checkpoint: maker-open
+  caption: the bar shows the plugin's item (check mark + time) right of the window title
+- click: 770 289
+  caption: end of the description line in the editor
+- key: end
+- type: " BROKEN"
+- click: 757 98
+  caption: Save
+- sleep: 4
+- checkpoint: saved-broken
+  caption: PLUG2-3 status says Saved while Problems lists line 7; the bar item is gone
+- ssh: "su -l bob -c 'wol plugin list --json' | grep -A12 bob.weather | grep -E 'problem'"
+  expect: "line 7"
+- click: 830 289
+- key: end
+- key: backspace
+- key: backspace
+- key: backspace
+- key: backspace
+- key: backspace
+- key: backspace
+- key: backspace
+- click: 757 98
+- sleep: 4
+- checkpoint: saved-fixed
+  caption: the bar item is back
+- click: 770 289
+- key: end
+- type: " UNSAVED"
+- click: 1067 66
+  caption: window close with an unsaved edit
+- sleep: 3
+- ssh: "pgrep -f -c plugin-maker || echo gone"
+  expect: "1"
+  caption: PLUG-17 expected a save/discard sheet keeping the window; 0.12.1 prints gone

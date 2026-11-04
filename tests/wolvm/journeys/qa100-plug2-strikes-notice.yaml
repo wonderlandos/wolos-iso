@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-R2-plugins: a bar plugin whose render fails every time. The shell turns it off after 3 failures;
+# expected: a notification "Crashy was turned off after 3 failures in a row: ..." and the reason in
+# `wol plugin list`. 0.12.1: off in silence (PLUG2-2). Also: enable accepts an invalid plugin (PLUG2-9).
+# Needs bob logged in at the desktop (see qa100-plug2-mcp-orphan.yaml for the login steps).
+name: three strikes tell nobody
+steps:
+- start
+- wait-agent:
+  timeout: 600
+- ssh: "su -l bob -c 'P=~/.local/share/wolos/plugins/bob.crash; rm -rf $P; mkdir -p $P; printf \"schema = 1\\nid = \\\"bob.crash\\\"\\nname = \\\"Crashy\\\"\\nversion = \\\"1\\\"\\nlicense = \\\"MIT\\\"\\npermissions = []\\n[[menubar]]\\nid = \\\"bar\\\"\\nscript = \\\"bar.lua\\\"\\n\" > $P/plugin.toml; echo \"return wol.menubar { render = function() error(\\\"boom\\\") end, popover = function() return wol.label { \\\"x\\\" } end }\" > $P/bar.lua; wol plugin check bob.crash --json | grep valid'"
+  expect: "false"
+  rc: any
+- ssh: "su -l bob -c 'export XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=wayland-1; wol plugin enable bob.crash'"
+  expect: "reloaded"
+  caption: PLUG2-9 enable should name the problem; 0.12.1 enables in silence
+- sleep: 5
+- checkpoint: crashy-on-bar
+  caption: PLUG-39 the failing item shows only its name on the bar
+- sleep: 240
+- ssh: "grep -c bob.crash /home/bob/.config/wolos/plugins.json || true"
+  expect: "0"
+  caption: turned off after three failures
+- ssh: "su -l bob -c 'wol plugin list --json' | grep -A10 bob.crash | grep problem"
+  expect: "turned off"
+  caption: PLUG2-2 expected a reason; 0.12.1 gives problem null
+- click: 1212 14
+- sleep: 2
+- checkpoint: notification-center
+  caption: PLUG2-2 expected "Crashy was turned off after 3 failures in a row"; 0.12.1 shows nothing
+- key: esc
