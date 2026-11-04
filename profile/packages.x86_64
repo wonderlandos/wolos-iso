@@ -43,6 +43,8 @@ dnsmasq
 # ssh.authorized_keys.root (airootfs sshd.service.d/wolos-live.conf; VM tests, wolvm --ssh).
 openssh
 wireless-regdb
+# iw: /usr/lib/wolos/set-regdom sets the configured regulatory domain with `iw reg set`.
+iw
 bluez
 bluez-utils
 nftables
