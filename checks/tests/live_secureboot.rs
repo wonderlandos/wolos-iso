@@ -316,6 +316,11 @@ fn sign_puts_signatures_and_the_der_certificate_on_the_medium_and_check_passes()
     ] {
         assert!(flat.contains(want), "README lacks {want:?}: {flat}");
     }
+    // QA-MANUAL-24: the key's path with its name filled in, backslashes as the firmware shows them.
+    assert!(
+        flat.contains(&format!("EFI\\wolos\\{}.cer", name.trim())) && !flat.contains('$'),
+        "README key path: {flat}"
+    );
     // I6-6: on a PC the internal (Windows) EFI partition is usually listed first.
     assert!(
         !flat.contains("first volume"),

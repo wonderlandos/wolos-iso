@@ -113,7 +113,7 @@ arrow keys and Enter.
   5. Choose "Reboot". WolOS starts, and the blue screen does not come back.
 
 Missed the 10 seconds? Start the computer from this medium again: the blue
-screen comes back. The same key is also in EFI\wolos\$name.cer.
+screen comes back. The same key is also in EFI\\wolos\\$name.cer.
 
 This key starts the WolOS medium only. An installed WolOS uses its own key;
 the installer says what to expect before its restart.

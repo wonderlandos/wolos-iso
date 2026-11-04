@@ -68,8 +68,9 @@ adw-gtk-theme            # GTK3 apps in the libadwaita look
 inter-font               # WolOS type system
 ttf-jetbrains-mono
 otf-font-awesome
-noto-fonts
+noto-fonts               # Latin, Greek, Cyrillic, Arabic, Hebrew, Devanagari, Thai...
 noto-fonts-emoji
+noto-fonts-cjk           # Chinese, Japanese, Korean: the language picker and the terminal (70-wolos-cjk-arabic.conf)
 # Apps
 helium-browser
 nautilus
@@ -96,10 +97,18 @@ gamescope # Steam's gamescope launch option, fixed-resolution games (Memory Save
 gamemode               # games can run through gamemoderun
 lib32-gamemode
 rtkit                  # realtime audio threads (PipeWire)
+# Energy Mode, Low/High Power Mode, `wol power apply`: wol_core::power::policy runs powerprofilesctl
+# (on through wolos-system's 51-wolos-image.preset).
+power-profiles-daemon
 # Terminal: zsh for every account (/etc/zsh/zshenv), sudo for wheel (sudoers.d/wolos)
 zsh-autosuggestions
 zsh-syntax-highlighting
 zsh-completions
+# Scripts: sh and zsh from the base; ruby for .rb scripts and rsh (Ruby with a shell layer, its own
+# interpreter built in) for .rsh scripts and as a terminal shell (wolos ADR 0041, wol script).
+ruby
+ruby-stdlib              # the whole standard library: default and bundled gems (irb, bundler, rake, minitest...), about 4 MB
+rsh
 # Session: xdg-user-dirs at login (wol-session), login keyring unlocked by wol-login
 xdg-user-dirs
 gnome-keyring
@@ -107,10 +116,13 @@ gnome-keyring
 cups
 cups-filters
 avahi
-nss-mdns
+nss-mdns                 # .local names: wolos-system puts mdns_minimal before resolve in /etc/nsswitch.conf
 # Removable media: udisks2 (mounts under /run/media/<user>), gvfs for Files, NTFS and exFAT.
 udisks2
 gvfs
+gvfs-mtp                 # Android phones (MTP)
+gvfs-gphoto2             # cameras (PTP)
+gvfs-smb                 # Windows and Samba shares
 # iPhone and iPad: photos (HEIC) and files in Files, USB internet sharing, pairing.
 usbmuxd
 libimobiledevice
