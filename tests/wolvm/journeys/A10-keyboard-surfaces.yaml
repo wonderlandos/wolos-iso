@@ -1,0 +1,85 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# A10 (wave A, QA-100): what the keyboard reaches and what an empty desktop costs. UNRUN (written on the
+# build host without a VM; run it on the forge: wolvm journey <vm> tests/wolvm/journeys/A10-keyboard-surfaces.yaml).
+#   H17-01  an open window with NO desktop widget must not make Hyprland redraw the output at 60 Hz
+#           (4.2 cores on 0.12.1): context switches < 1500/s and Hyprland < 100 ticks (1 core = 500) in 5 s.
+#   ACC-7   Control Center and Notification Center by keyboard (ctrl+super+c, ctrl+super+a), no pointer.
+#   PWR-11  a window moves to another space (ctrl+alt+shift+2) and, with two displays, to the other display.
+#   LIVE-12 the terminal's title is "Terminal" and its window is opaque.
+#   FILES-10 the greeter's compositor runs hypridle with the dpms listener.
+# Needs an installed disk with the test account (Alice Liddell / curiouser); `--displays 2` for the last move step.
+# Measurement script runs as root over ssh; the person's session is uid 1000.
+name: Keyboard reaches both panels; an empty desktop is idle; windows move between spaces and displays
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window
+- ssh: "pgrep -f '[h]ypridle -c /usr/share/wolos/hypr/login-idle.conf' >/dev/null; echo login-idle=$?"
+  expect: "login-idle=0"
+  save: login-idle.txt
+  caption: "ASSERT (FILES-10): hypridle runs in the greeter's compositor (the [h] keeps pgrep from matching its own command line)"
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop up
+# --- H17-01: one window open, no widget on the desktop ---
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); rm -f \"$h/.config/wolos/widgets.json\"; runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f foot >/dev/null 2>&1; sleep 4; echo foot-open"
+  expect: "foot-open"
+  caption: foot open, widgets.json absent (an empty desktop)
+- ssh: "p=$(pgrep -x Hyprland | head -1); a=$(awk '/^ctxt/{print $2}' /proc/stat); t0=$(awk '{print $14+$15}' /proc/$p/stat); sleep 5; b=$(awk '/^ctxt/{print $2}' /proc/stat); t1=$(awk '{print $14+$15}' /proc/$p/stat); c=$(( (b-a)/5 )); t=$(( t1-t0 )); echo ctxt_per_s=$c hypr_ticks_5s=$t; [ $c -lt 1500 ] && [ $t -lt 100 ] && echo PASS-H17-01 || echo FAIL-H17-01"
+  expect: "PASS-H17-01"
+  save: h17-01-empty-desktop.txt
+  caption: "ASSERT (H17-01): 0.12.1 measured 4195 ms/s of Hyprland (hypr_ticks_5s ~ 2000) and 5694 ctxt/s here"
+- ssh: "u=$(id -nu 1000); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" sh -c 'hyprctl layers | grep -A3 wol-desktop | head -8'; echo layers-read"
+  rc: any
+  save: desktop-layer.txt
+  caption: "the wol-desktop layer is still there (right-click menu and file drops keep working); it just stops committing"
+# --- ACC-7 cc-by-keyboard ---
+- key: ctrl-meta_l-c
+- sleep: 1
+- shot: cc-by-keyboard
+  caption: "ASSERT (ACC-7): Control Center is open from ctrl+super+c, with no pointer used"
+- key: esc
+- sleep: 1
+- key: ctrl-meta_l-a
+- sleep: 1
+- shot: nc-by-keyboard
+  caption: "ASSERT (ACC-7): Notification Center is open from ctrl+super+a"
+- key: esc
+- sleep: 1
+- key: meta_l-shift-slash
+- sleep: 1
+- shot: sheet-accessibility-group
+  caption: "ASSERT (ACC-7/PWR-11): the shortcut sheet lists 'Show Control Center' and 'Show Notification Center' under Accessibility, 'Move window to Desktop 1..4' and 'Move window to the display on the left/right'"
+- key: esc
+# --- PWR-11 window to another space ---
+- ssh: "u=$(id -nu 1000); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" sh -c 'hyprctl -j activewindow | grep -E \"\\\"class\\\"|workspace\" | head -4'"
+  rc: any
+  save: window-before.txt
+- key: ctrl-alt-shift-2
+- sleep: 1
+- ssh: "u=$(id -nu 1000); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" sh -c 'hyprctl -j clients | grep -E \"\\\"class\\\": \\\"foot\\\"|\\\"id\\\": 2\" | head; hyprctl -j activeworkspace | grep -m1 \"\\\"id\\\"\"'"
+  rc: any
+  save: window-after-move.txt
+  caption: "ASSERT (PWR-11): foot is on workspace 2 and workspace 2 is the active one"
+- shot: moved-to-space-2
+- key: ctrl-alt-shift-1
+- sleep: 1
+# Two displays only: the window goes to the other one.
+- key: ctrl-alt-meta_l-right
+- sleep: 1
+- shot: moved-to-display-right
+  caption: "ASSERT (PWR-11, needs --displays 2): the terminal is on the right-hand display; one display: nothing happens, no error"
+# --- LIVE-12 terminal title and opacity ---
+- ssh: "u=$(id -nu 1000); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" sh -c 'hyprctl -j clients | grep -E \"\\\"title\\\"|\\\"class\\\"\" | head -6'; echo titles"
+  rc: any
+  save: foot-title.txt
+  caption: "ASSERT (LIVE-12): the foot window's title is Terminal"
+- shot: terminal-opacity
+  caption: "ASSERT (LIVE-12): drag Settings behind the terminal: no text of the window behind shows through the terminal"
+- checkpoint: a10-keyboard-surfaces
+- stop
