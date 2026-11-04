@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# L10N-2: first boot of an installed disk with no account, the Setup Assistant switched to
+# Japanese on its Language & Region page, and the session that follows. Proves: the language list is
+# the lead's order (English, Português, 日本語, Français, Русский, Italiano, Deutsch; QA-L10N-8),
+# Setup speaks the picked language at once (QA-L10N-2: every card after the pick was English),
+# the account card and Done are translated, LANG=ja_JP.UTF-8 reaches /etc/locale.conf and the
+# session, and the shell binaries carry the ja table (wol-i18n, crates/shell/locale/shell).
+# Coordinates are those of the 1280x800 goldens setup-language-1280 / setup-account-ja-1280.
+#   wolvm new fb --iso wolos.iso --tpm --ssh --direct --disk 32G --res 1280x800 --append "wolos.autoinstall=/dev/vda"
+#   wolvm journey fb tests/wolvm/journeys/qa100-l10n2-first-boot-ja.yaml
+name: "L10N-2: first boot, Setup in Japanese"
+steps:
+- start
+- wait-text: "wolos-install: done"
+  timeout: 1800
+- wait-text: "reboot: Power down"
+  timeout: 300
+  shot: false
+- stop
+- boot disk
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+  caption: Welcome to WolOS (the Setup Assistant; no account exists)
+- ssh: "pgrep -x wol-setup >/dev/null && echo setup-running"
+  expect: "setup-running"
+- ssh: "grep -q 'アカウントを作成' /usr/bin/wol-setup && echo has-table"
+  expect: "has-table"
+  caption: 'the ja table is built into wol-setup ("アカウントを作成")'
+- key: ret
+- wait-stable:
+  timeout: 30
+  caption: Language & Region, seven rows in the lead's order, English ticked
+- shot: language-list
+- click: 640 349
+  caption: 日本語; the Keyboard menu follows to Japanese
+- sleep: 2
+- shot: language-ja
+  caption: 'the card itself now reads "言語と地域", Back and Continue are "戻る" and "続ける"'
+- click: 802 624
+  caption: '"続ける" (Wi-Fi is skipped on wolvm''s wired network)'
+- sleep: 3
+- shot: account-empty
+  caption: '"アカウントを作成" with the fields "氏名", "パスワード" (QA-L10N-2 fixed)'
+- type: "Alice Liddell"
+- key: tab
+- key: tab
+- type: curiouser
+- key: tab
+- type: curiouser
+- key: tab
+- type: "white rabbit"
+- sleep: 1
+- shot: account-filled
+- key: ret
+- sleep: 3
+- shot: appearance
+  caption: '"外観"'
+- key: ret
+- sleep: 8
+- shot: done
+  caption: '"準備ができました"'
+- ssh: "id aliceliddell && echo account-made"
+  expect: "account-made"
+- key: ret
+  caption: '"始める"'
+- sleep: 8
+- wait-stable:
+  timeout: 120
+  caption: the first desktop
+- ssh: "cat /etc/locale.conf"
+  expect: "LANG=ja_JP.UTF-8"
+  save: locale.txt
+- ssh: "P=$(pgrep -u 1000 -n wol-shell); tr '\\0' '\\n' < /proc/$P/environ | grep '^LANG='"
+  expect: "LANG=ja_JP.UTF-8"
+  caption: the session is Japanese
+- ssh: "locale -a | grep -c -e '^ja_JP.utf8$'"
+  expect: "1"
+  caption: the locale exists on the machine (every official one is generated at install)
+- click: 891 756
+  caption: System Settings from the Dock
+- sleep: 5
+- click: 254 339
+  caption: General
+- sleep: 2
+- shot: settings-general
+  caption: '"Language & Region shows 日本語 as the preferred language (the pane''s own words are in the catalog: 使用する言語)"'
+- logs:
+  n: 300

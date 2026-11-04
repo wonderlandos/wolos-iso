@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# WE-LIVE, VM-only rows (no code change possible without the compositor): QA-LIVE1-12 (Dock Trash
+# opens in an existing Files window without raising it), QA-LIVE1-20 (Control Center > Focus >
+# Do Not Disturb row does not turn Do Not Disturb off), QA-LIVE-18 (the disk-full warning drawn
+# behind the app window). JOURNEY WRITTEN, NOT RUN (no ISO at the time).
+# Needs an installed disk with the test account (Alice Liddell / curiouser, uid 1000).
+# wolvm journey <vm> tests/wolvm/journeys/qa100-we-live-dock-trash-and-focus-dnd.yaml
+name: Dock Trash raises Files, the DND row turns DND off, the disk-full banner is above windows
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: "login window"
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: "desktop up"
+# LIVE1-12: a Files window is open and behind another window; the Trash tile must bring Files up.
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell setsid -f nautilus >/dev/null 2>&1; sleep 3; runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell setsid -f foot >/dev/null 2>&1; sleep 2; echo windows-up"
+  expect: "windows-up"
+- shot: files-behind-terminal
+  caption: "Files open, the terminal in front"
+- click: 960 1040
+  caption: "ASSERT-SETUP: the Trash tile at the right end of the Dock (adjust from the shot)"
+- sleep: 2
+- shot: after-trash-click
+  caption: "EXPECT (LIVE1-12): the Files window comes to the front showing Trash; 0.12.1: it navigated behind the terminal, nothing seemed to happen"
+# LIVE1-20: Do Not Disturb on from the Focus page, then the same row turns it off.
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell wol shell toggle control-center; echo cc-open"
+  expect: "cc-open"
+- shot: control-center
+  caption: "Control Center; open the Focus tile's submenu (adjust the click)"
+- click: 1500 330
+  caption: "the Focus tile's arrow"
+- click: 1500 400
+  caption: "Do Not Disturb row (on)"
+- shot: dnd-on
+  caption: "the menu bar shows the moon"
+- click: 1500 400
+  caption: "Do Not Disturb row again (off)"
+- shot: dnd-off
+  caption: "EXPECT (LIVE1-20): the moon is gone and the row says Off; 0.12.1: the moon stayed, only the tile icon turned it off"
+- ssh: "cat /home/aliceliddell/.config/wolos/focus 2>/dev/null; echo; echo focus-file"
+  expect: "focus-file"
+  save: focus-file.txt
+  caption: "the saved Focus state is off"
+# LIVE-18: fill the disk of a scratch loop mount? No: the banner is shown by the shell at 5% free.
+- note: "LIVE-18 needs the disk almost full (fallocate on the home volume until under 5% free, wait for the shell's 5-minute check or restart it); EXPECT the 'Your Disk Is Almost Full' banner on top of the open Settings window. Remove the big file after."
+- checkpoint: we-live-dock-trash-dnd
+- stop

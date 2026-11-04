@@ -1,0 +1,91 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# L10N-2: first boot of an installed disk with no account, the Setup Assistant switched to
+# Portuguese (Brazil) on its Language & Region page, and the session that follows. Proves: the language list is
+# the lead's order (English, Português, 日本語, Français, Русский, Italiano, Deutsch; QA-L10N-8),
+# Setup speaks the picked language at once (QA-L10N-2: every card after the pick was English),
+# the account card and Done are translated, LANG=pt_BR.UTF-8 reaches /etc/locale.conf and the
+# session, and the shell binaries carry the ptbr table (wol-i18n, crates/shell/locale/shell).
+# Coordinates are those of the 1280x800 goldens setup-language-1280 / setup-account-pt-br-1280.
+#   wolvm new fb --iso wolos.iso --tpm --ssh --direct --disk 32G --res 1280x800 --append "wolos.autoinstall=/dev/vda"
+#   wolvm journey fb tests/wolvm/journeys/qa100-l10n2-first-boot-ptbr.yaml
+name: "L10N-2: first boot, Setup in Portuguese (Brazil)"
+steps:
+- start
+- wait-text: "wolos-install: done"
+  timeout: 1800
+- wait-text: "reboot: Power down"
+  timeout: 300
+  shot: false
+- stop
+- boot disk
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+  caption: Welcome to WolOS (the Setup Assistant; no account exists)
+- ssh: "pgrep -x wol-setup >/dev/null && echo setup-running"
+  expect: "setup-running"
+- ssh: "grep -q 'Crie sua conta' /usr/bin/wol-setup && echo has-table"
+  expect: "has-table"
+  caption: 'the ptbr table is built into wol-setup ("Crie sua conta")'
+- key: ret
+- wait-stable:
+  timeout: 30
+  caption: Language & Region, seven rows in the lead's order, English ticked
+- shot: language-list
+- click: 640 309
+  caption: Português (Brasil); the Keyboard menu follows to Brazilian (ABNT2)
+- sleep: 2
+- shot: language-ptbr
+  caption: 'the card itself now reads "Idioma e região", Back and Continue are "Voltar" and "Continuar"'
+- click: 802 624
+  caption: '"Continuar" (Wi-Fi is skipped on wolvm''s wired network)'
+- sleep: 3
+- shot: account-empty
+  caption: '"Crie sua conta" with the fields "Nome completo", "Senha" (QA-L10N-2 fixed)'
+- type: "Alice Liddell"
+- key: tab
+- key: tab
+- type: curiouser
+- key: tab
+- type: curiouser
+- key: tab
+- type: "white rabbit"
+- sleep: 1
+- shot: account-filled
+- key: ret
+- sleep: 3
+- shot: appearance
+  caption: '"Aparência"'
+- key: ret
+- sleep: 8
+- shot: done
+  caption: '"Tudo pronto"'
+- ssh: "id aliceliddell && echo account-made"
+  expect: "account-made"
+- key: ret
+  caption: '"Começar"'
+- sleep: 8
+- wait-stable:
+  timeout: 120
+  caption: the first desktop
+- ssh: "cat /etc/locale.conf"
+  expect: "LANG=pt_BR.UTF-8"
+  save: locale.txt
+- ssh: "P=$(pgrep -u 1000 -n wol-shell); tr '\\0' '\\n' < /proc/$P/environ | grep '^LANG='"
+  expect: "LANG=pt_BR.UTF-8"
+  caption: the session is Portuguese (Brazil)
+- ssh: "locale -a | grep -c -e '^pt_BR.utf8$'"
+  expect: "1"
+  caption: the locale exists on the machine (every official one is generated at install)
+- click: 891 756
+  caption: System Settings from the Dock
+- sleep: 5
+- click: 254 339
+  caption: General
+- sleep: 2
+- shot: settings-general
+  caption: '"Language & Region shows Português (Brasil) as the preferred language (the pane''s own words are in the catalog: Idioma preferido)"'
+- logs:
+  n: 300

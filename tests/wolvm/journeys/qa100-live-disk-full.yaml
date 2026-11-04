@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# WE-LIVE, QA-LIVE-17 (live half): one account fills its files; the system keeps its 15 %. The
+# homes' subvolume (@home) is capped at 85 % of the pool (/usr/lib/wolos/home-quota, set by
+# install-run and after every useradd), the journal at 512 MB. JOURNEY WRITTEN, NOT RUN.
+# Needs an installed disk (btrfs, two slots) with the test account (Alice Liddell / curiouser) made
+# by the installer, so the cap is the installer's. A second account made in Settings re-asserts it.
+# wolvm journey <vm> tests/wolvm/journeys/qa100-live-disk-full.yaml
+name: A plain account cannot fill the pool; the system and journal keep their share
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: "login window"
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: "desktop up"
+- ssh: "btrfs qgroup show -re /home 2>&1 | head -20"
+  rc: any
+  save: qgroup-before.txt
+  caption: "EXPECT the @home qgroup with a max_rfer / max_excl limit (85 % of the pool)"
+- ssh: "id=$(btrfs subvolume show /home | awk '/Subvolume ID/ {print $3}'); btrfs qgroup show -re /home | awk -v i=\"0/$id\" '$1==i {print ($4 ~ /none/ ? \"no-limit\" : \"limited\")}'"
+  expect: "limited"
+  caption: "the homes' subvolume has a limit"
+- ssh: "su -l aliceliddell -c 'fallocate -l 400G ~/big1 2>&1; fallocate -l 400G ~/big2 2>&1; fallocate -l 400G ~/big3 2>&1; df -B1 --output=avail /var | tail -1'"
+  rc: any
+  save: fill.txt
+  caption: "the account fills what it may (ENOSPC or EDQUOT on its own files)"
+- ssh: "df -B1 --output=avail,size / | tail -1 | awk '{print ($1 * 100 / $2 >= 10) ? \"system-has-room\" : \"system-full\"}'"
+  expect: "system-has-room"
+  save: system-room.txt
+  caption: "EXPECT system-has-room (0.12.1: / /var /home all at 224 KB)"
+- ssh: "touch /var/lib/wolos-quota-test && echo var-writable; rm -f /var/lib/wolos-quota-test"
+  expect: "var-writable"
+  caption: "the system can still write (journal, package database)"
+- ssh: "journalctl --verify 2>&1 | tail -3; journalctl --disk-usage"
+  rc: any
+  save: journal.txt
+  caption: "the journal is intact and capped (SystemMaxUse=512M)"
+- ssh: "su -l aliceliddell -c 'rm -f ~/big1 ~/big2 ~/big3'"
+  rc: any
+- shot: desktop-after
+  caption: "the desktop is still up (0.12.1: the disk-full banner behind a window, theme not applied)"
+- checkpoint: qa100-live-disk-full
+- stop

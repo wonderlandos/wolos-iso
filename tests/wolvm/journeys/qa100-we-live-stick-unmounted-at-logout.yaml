@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# WE-LIVE, QA-FILES-22 (live half): a stick the account mounted is let go when its session ends
+# (user unit wolos-media-unmount.service, /usr/lib/wolos/media-unmount), so the next account does
+# not meet a mount it cannot see, use or eject. JOURNEY WRITTEN, NOT RUN (no ISO at the time).
+# Make the VM with an extra raw disk (truncate -s 64M stick.img; mkfs.vfat -n STICK stick.img):
+#   wolvm new <vm> --from-image installed.qcow2 --drive /scratch/we-live/stick.img
+# Needs an installed disk with the test account (Alice Liddell / curiouser, uid 1000).
+# wolvm journey <vm> tests/wolvm/journeys/qa100-we-live-stick-unmounted-at-logout.yaml
+name: A stick mounted by the account is unmounted at logout, not left for the next account
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: "login window"
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: "desktop up"
+- ssh: "su -l aliceliddell -c 'systemctl --user is-active wolos-media-unmount.service' 2>&1"
+  expect: "active"
+  caption: "the unit is up for the session (the session target wants it)"
+- ssh: "su -l aliceliddell -c 'XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus udisksctl mount -b /dev/vdb' 2>&1"
+  expect: "Mounted /dev/vdb at /run/media/aliceliddell/"
+  caption: "the account mounts the stick"
+- ssh: "findmnt -n -o TARGET /dev/vdb"
+  expect: "/run/media/aliceliddell/"
+  save: mounted-before.txt
+- click: 22 14
+- sleep: 1
+- click: 60 238
+  caption: "Log Out... (coordinates as in qa100-live-logout)"
+- sleep: 2
+- key: ret
+  caption: "Log Out"
+- sleep: 25
+- ssh: "loginctl list-sessions --no-legend | grep -c aliceliddell || true"
+  rc: any
+  expect: "0"
+  caption: "the session is gone"
+- ssh: "findmnt -n /dev/vdb || echo not-mounted"
+  rc: any
+  expect: "not-mounted"
+  save: mounted-after.txt
+  caption: "EXPECT not-mounted (0.12.1: still mounted under /run/media/aliceliddell, unreachable for the next account)"
+- shot: login-after
+  caption: "the login window; a second account would now see a clean stick"
+- stop
