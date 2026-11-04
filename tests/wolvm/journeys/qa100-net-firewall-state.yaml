@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H11 (network) NET-1, NET-2, NET-3, NET-4, NET-5, NET-7, NET-8: the firewall unit is a
+# oneshot that is "inactive" one second after boot, so Firewall Off unloads nothing, "not running
+# now" shows on every boot and try-reload-or-restart is a no-op; .local names never resolve on
+# WolOS; AirPlay advertises a port the firewall drops; no Wi-Fi hardware reads as Wi-Fi On and
+# `wol wifi join` exits 0 on failure. Runs from the welcome screen (no desktop needed).
+#   wolvm new net --iso wolos.iso --ssh
+#   wolvm journey net tests/wolvm/journeys/qa100-net-firewall-state.yaml
+name: "network, part 1: firewall unit state, .local, AirPlay ports, Wi-Fi without hardware"
+steps:
+- start
+- wait-agent:
+  timeout: 300
+# NET-2: the unit is inactive while its rules are loaded; Privacy says "not running now".
+- ssh: "systemctl show nftables -p ActiveState -p Type -p RemainAfterExit | paste -sd' '; echo rules=$(nft list ruleset | grep -c accept); wol security | grep -E 'firewall'"
+  rc: any
+  save: firewall-unit.txt
+  caption: "BUG (NET-2) if ActiveState=inactive with rules>0 and firewall_running=false"
+# NET-1: Firewall Off (disable --now) leaves every rule loaded.
+- ssh: "before=$(nft list ruleset | grep -c accept); systemctl disable --now nftables.service >/dev/null 2>&1; after=$(nft list ruleset | grep -c accept); echo \"before=$before after=$after\""
+  rc: any
+  save: firewall-off.txt
+  caption: "BUG (NET-1) if after == before (expected after=0)"
+# NET-3: the reload the Remote Login fix relies on does nothing on an inactive oneshot unit.
+- ssh: "systemctl try-reload-or-restart nftables.service; echo try-rc=$?; systemctl reload nftables.service 2>&1; echo reload-rc=$?; journalctl -b -u nftables --no-pager | tail -1"
+  rc: any
+  save: firewall-reload.txt
+  caption: "BUG (NET-3) if try-rc=0 with no new journal line and reload-rc=1 'not active, cannot reload'"
+# Back on; keep the live ssh path open (NET-13: enable --now flushed the sshd rule).
+- ssh: "systemctl enable --now nftables.service >/dev/null 2>&1; nft add rule inet wolos input tcp dport 22 accept; echo rules=$(nft list ruleset | grep -c accept)"
+  rc: any
+  expect: "rules="
+# NET-4: avahi answers, glibc never asks it (resolved MulticastDNS=no, no mdns_minimal).
+- ssh: "grep '^hosts' /etc/nsswitch.conf; systemctl is-active systemd-resolved; (avahi-publish -a -R qa100test.local 10.0.2.15 >/dev/null 2>&1 &); sleep 2; timeout 5 getent hosts qa100test.local; echo getent-rc=$?; timeout 5 avahi-resolve -n qa100test.local 2>&1; pkill avahi-publish"
+  rc: any
+  save: mdns-resolve.txt
+  caption: "BUG (NET-4) if getent-rc != 0 while avahi-resolve prints the address"
+# NET-5: the AirPlay receiver advertises port 7000; the ruleset never opens it.
+- ssh: "systemctl enable --now shairport-sync >/dev/null 2>&1; sleep 3; avahi-browse -rt _raop._tcp 2>/dev/null | grep -E 'port =' | head -1; ss -lntp | grep -c shairport; nft list ruleset | grep -cE 'dport (7000|5000)'; systemctl disable --now shairport-sync >/dev/null 2>&1; echo airplay-done"
+  rc: any
+  expect: "airplay-done"
+  save: airplay-ports.txt
+  caption: "BUG (NET-5) if a port is advertised and the ruleset count for it is 0"
+# NET-7 and NET-8: no Wi-Fi device, yet the radio is On and a join failure is 'refused the password', rc 0.
+- ssh: "nmcli -t -f TYPE dev | grep -c wifi; wol wifi | tr -d '\\n '; echo; echo foo12345 | wol wifi join Foo 2>&1; echo join-rc=$?"
+  rc: any
+  save: wifi-no-hardware.txt
+  caption: "BUG (NET-7) if 'on':true with 0 wifi devices; BUG (NET-8) if the message says password and join-rc=0"
+- checkpoint: qa100-net-firewall-state
+- stop

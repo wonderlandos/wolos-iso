@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H11 (network) NET-6, NET-2, NET-3: on the live medium Remote Login (and AirPlay, Firewall,
+# Computer name) opens an Authenticate sheet for the `live` account, whose password is locked:
+# Allow with an empty field does nothing, a typed password fails and nothing is said. Privacy &
+# Security says the firewall is "not running now" on every boot. After the int fix lands, the last
+# step checks that Remote Login opens port 22 at once (a root-side run of the same plan).
+#   wolvm new net --iso wolos.iso --ssh
+#   wolvm journey net tests/wolvm/journeys/qa100-net-sharing-live.yaml
+name: "network, part 3: Sharing on the live medium, Remote Login and the firewall"
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 120
+- click: 710 599
+  caption: Try WolOS (1280x800)
+- sleep: 3
+- wait-stable:
+  timeout: 120
+  caption: live desktop
+- ssh: "passwd -S live | cut -d' ' -f2; runuser -u live -- env HOME=/home/live XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 setsid -f wol-settings Sharing >/dev/null 2>&1; sleep 4; pgrep -u 1000 -x wol-settings >/dev/null && echo settings-running"
+  expect: "settings-running"
+  save: live-password-state.txt
+  caption: "L = locked: no password exists for the live account"
+- wait-stable:
+  timeout: 40
+- shot: sharing-live
+  caption: "Computer name, Remote Login (ssh live@wolos.local), AirPlay Receiver"
+- click: 1035 306
+  caption: Remote Login switch
+- sleep: 3
+- shot: sharing-remote-login-sheet
+  caption: "BUG (NET-6): an Authenticate sheet for an account with no password"
+- click: 834 250
+  caption: Allow with the field empty
+- sleep: 3
+- shot: sharing-allow-empty
+  caption: "BUG (NET-6) if the sheet is unchanged and nothing is said"
+- type: wrongpass
+- key: ret
+- sleep: 5
+- shot: sharing-after-typed-password
+  caption: "BUG (NET-6) if the switch is back off with no sentence under the section"
+- ssh: "journalctl -b --no-pager | grep -iE 'remote-login' | tail -2; systemctl is-enabled sshd"
+  rc: any
+  save: remote-login-journal.txt
+  caption: "'authentication failed' in the journal, sshd still disabled"
+- ssh: "pkill -u 1000 -x wol-settings; sleep 1; runuser -u live -- env HOME=/home/live XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 setsid -f wol-settings 'Privacy & Security' >/dev/null 2>&1; sleep 4; echo opened"
+  rc: any
+  expect: "opened"
+- wait-stable:
+  timeout: 60
+- shot: privacy-firewall-sentence
+  caption: "BUG (NET-2) if Firewall reads 'On at startup, but not running now.' while nft list ruleset has the table"
+- ssh: "pkill -u 1000 -x wol-settings; echo closed"
+  rc: any
+  expect: "closed"
+# NET-3 (for the int fix): the Remote Login plan as root, then is port 22 open right away?
+- ssh: "install -d /etc/wolos/nftables.d; printf '%s\\n' 'tcp dport 22 ct state new limit rate 10/minute accept' > /etc/wolos/nftables.d/ssh.conf; systemctl try-reload-or-restart nftables.service; echo try-rc=$?; echo rule22=$(nft list ruleset | grep -c 'limit rate 10/minute'); rm -f /etc/wolos/nftables.d/ssh.conf"
+  rc: any
+  save: remote-login-reload.txt
+  caption: "BUG (NET-3) if try-rc=0 and rule22=0: the rule file is written but the ruleset never changes before a reboot"
+- checkpoint: qa100-net-sharing-live
+- stop

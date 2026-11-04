@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H11 (network) NET-11, NET-12: the Network pane is read once (unplug/replug never changes
+# it while open); "online" means three things (tray = link up, `wol network` = IPv4 default route,
+# NetworkManager = connectivity), so an IPv6-only link reads offline and a dead uplink reads online.
+# The unplug is guest-side (nmcli dev disconnect) so the journey needs no QMP; the ssh step falls
+# back to the guest agent while the link is down.
+#   wolvm new net --iso wolos.iso --ssh
+#   wolvm journey net tests/wolvm/journeys/qa100-net-ethernet-states.yaml
+name: "network, part 2: Ethernet unplug and replug, limited and IPv6-only connectivity"
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 120
+  caption: welcome screen
+- click: 710 599
+  caption: Try WolOS (1280x800)
+- sleep: 3
+- wait-stable:
+  timeout: 120
+  caption: live desktop
+- ssh: "IF=$(nmcli -t -f DEVICE,TYPE dev | awk -F: '$2==\"ethernet\"{print $1; exit}'); echo \"$IF\" > /tmp/qa100-if; runuser -u live -- env HOME=/home/live XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 setsid -f wol-settings Network >/dev/null 2>&1; sleep 4; pgrep -u 1000 -x wol-settings >/dev/null && echo settings-running"
+  expect: "settings-running"
+- wait-stable:
+  timeout: 40
+- shot: net-pane-connected
+  caption: "Ethernet (enpX) Connected with IP, mask, router, DNS"
+# NET-11: unplug with the pane open.
+- ssh: "nmcli dev disconnect $(cat /tmp/qa100-if) >/dev/null 2>&1; sleep 6; echo unplugged"
+  rc: any
+  expect: "unplugged"
+- shot: net-pane-after-unplug-still-open
+  caption: "BUG (NET-11) if the pane still says Connected with addresses"
+- ssh: "pkill -u 1000 -x wol-settings; sleep 1; runuser -u live -- env HOME=/home/live XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 setsid -f wol-settings Network >/dev/null 2>&1; sleep 4; echo reopened"
+  rc: any
+  expect: "reopened"
+- wait-stable:
+  timeout: 40
+- shot: net-pane-reopened-unplugged
+  caption: "ASSERT: Not connected; RECORD the tray glyph (wired vs offline)"
+# Replug: the pane stays on Not connected.
+- ssh: "nmcli dev connect $(cat /tmp/qa100-if) >/dev/null 2>&1; sleep 8; nmcli -t -f DEVICE,STATE dev | head -1; wol network | tr -d '\\n ' | grep -oE '\"online\":[a-z]+'"
+  rc: any
+  save: replug.txt
+  caption: "connected again, online true"
+- shot: net-pane-after-replug-stale
+  caption: "BUG (NET-11) if the open pane still says Not connected"
+- ssh: "pkill -u 1000 -x wol-settings; echo closed"
+  rc: any
+  expect: "closed"
+# NET-12 (b): 100 % loss: NM says limited, wol network says online.
+- ssh: "IF=$(cat /tmp/qa100-if); tc qdisc add dev $IF root netem loss 100%; sleep 1; echo nm=$(timeout 20 nmcli networking connectivity check); echo wol=$(wol network | tr -d '\\n ' | grep -oE '\"online\":[a-z]+'); tc qdisc del dev $IF root; sleep 2; echo nm-after=$(timeout 20 nmcli networking connectivity check)"
+  rc: any
+  save: limited.txt
+  caption: "BUG (NET-12b) if nm=limited and wol=online:true"
+# NET-12 (a): IPv6-only: NM connected, ping6 works, wol network offline.
+- ssh: "C=$(nmcli -g NAME,DEVICE connection show --active | awk -F: -v d=$(cat /tmp/qa100-if) '$2==d{print $1; exit}'); echo \"$C\" > /tmp/qa100-con; nmcli connection modify \"$C\" ipv4.method disabled && nmcli connection up \"$C\" >/dev/null 2>&1; sleep 4; nmcli -t -f GENERAL.STATE dev show $(cat /tmp/qa100-if); ip -6 route show default | head -1; ping -6 -c1 -W2 fec0::2 >/dev/null 2>&1 && echo ping6-ok || echo ping6-failed; wol network | tr -d '\\n ' | grep -oE '\"online\":[a-z]+|\"gateway\":[^,]+'"
+  rc: any
+  save: ipv6-only.txt
+  caption: "BUG (NET-12a) if the device is connected and ping6-ok while online:false, gateway null"
+- ssh: "nmcli connection modify \"$(cat /tmp/qa100-con)\" ipv4.method auto && nmcli connection up \"$(cat /tmp/qa100-con)\" >/dev/null 2>&1; sleep 3; ip -br -4 addr show $(cat /tmp/qa100-if); echo restored"
+  rc: any
+  expect: "restored"
+- checkpoint: qa100-net-ethernet-states
+- stop
