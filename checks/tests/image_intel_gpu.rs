@@ -40,12 +40,11 @@ fn image_has_intel_firmware_and_userspace() {
         "vulkan-intel",
         "lib32-vulkan-intel",
         "intel-media-driver",
-        // Proof tools for files/usr/lib/wolos/verify-gpu.sh.
+        // Proof tools for files/usr/lib/wolos/verify-gpu.sh (glmark2 and vkmark are not on the image: 10.9 MiB
+        // compressed, run only when present).
         "mesa-utils",
         "vulkan-tools",
         "libva-utils",
-        "glmark2",
-        "vkmark",
     ] {
         assert!(pkgs.iter().any(|p| p == want), "missing package {want}");
     }
