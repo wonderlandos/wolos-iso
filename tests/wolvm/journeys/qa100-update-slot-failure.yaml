@@ -63,6 +63,13 @@ steps:
   rc: any
   save: slot-a-state.txt
   caption: "U3: either the restore point survived, or nothing offers it any more"
+# QA-100 B4 (STORE-3 fix): the failed build ran in @wolos-tx; the restore point is kept whole.
+- ssh: "btrfs subvolume list /run/wolos/top | grep -q '@wolos-a$' && test -f /efi/loader/entries/wolos-a.conf && test -f /efi/EFI/wolos/wolos-a.efi && ! test -e /var/lib/wolos/update-building && echo restore-point-kept"
+  expect: "restore-point-kept"
+  caption: "STORE-3: after a failed update the earlier restore point, its entry and its image are all still there"
+- ssh: "grep -c 'wolos-a\|btrfs\|/run/wolos' /tmp/apply2.log | grep -q '^0$' && echo plain-sentence"
+  expect: "plain-sentence"
+  caption: "STORE-6/55: the failure says it in words (no slot name, no commands)"
 - ssh: "wol restore list 2>&1; wol restore list --json 2>&1"
   rc: any
   save: restore-list.txt

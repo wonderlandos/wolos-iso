@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-LIVE3-1 (critical, data loss; brief B4): programs installed live (layers) are folded into a
+# new slot by an update; the new slot's good boot takes them out of the merge. A rollback to the
+# restore point, which never had them, must still have them: they are kept in
+# /var/lib/wolos/layers-kept and put back into the merge by the restore point's first good boot.
+# Needs a VM from install-auto.yaml (checkpoint installed-up), network up. Not run yet (unrun).
+name: a rollback keeps the programs installed since the install
+steps:
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+- ssh: "wol pkg -- -S --noconfirm htop fish && which htop fish"
+  timeout: 900
+  expect: "/usr/bin/htop"
+  caption: two programs installed live, as layers
+- ssh: "timeout 1700 wol update apply --yes >/tmp/apply.log 2>&1; echo rc=$?; tail -3 /tmp/apply.log"
+  timeout: 1800
+  expect: "rc=0"
+- stop
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+- ssh: "cat /proc/cmdline; timeout 120 systemctl is-system-running --wait; sleep 10; ls /var/lib/wolos/layers-kept; which htop fish"
+  rc: any
+  save: on-b.txt
+- ssh: "grep -q 'subvol=@wolos-b' /proc/cmdline && ls /var/lib/wolos/layers-kept | grep -q wolos-layer && which htop && echo folded-and-kept"
+  expect: "folded-and-kept"
+  caption: "on the new slot: htop comes from the slot itself, its layer kept out of the merge"
+- ssh: "wol update rollback --yes 2>&1"
+  rc: any
+  save: rollback.txt
+- stop
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+- ssh: "timeout 120 systemctl is-system-running --wait; sleep 10; cat /proc/cmdline; which htop fish"
+  rc: any
+  save: on-a.txt
+- ssh: "grep -q 'subvol=@wolos-a' /proc/cmdline && which htop fish >/dev/null && echo programs-kept"
+  expect: "programs-kept"
+  caption: "LIVE3-1: after the rollback htop and fish are still there"
+- logs:
+  n: 400
+- stop
