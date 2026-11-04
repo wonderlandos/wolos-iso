@@ -17,7 +17,8 @@
 # Env: WOLOS_E2E (work dir), WOLOS_E2E_INSTALL_S, WOLOS_E2E_BOOT_S (longer without /dev/kvm),
 #      WOLOS_E2E_MODULES_S; WOLOS_E2E_REPO (+ WOLOS_E2E_REPO_KEY): offline-modules installs from
 #      this local repo, signed with that key (a build not yet published).
-# Needs: wolvm's tools (qemu, qemu-img, edk2-ovmf, bsdtar, swtpm), sudo, squashfs-tools, xorriso.
+# Needs: wolvm's tools (qemu, qemu-img, edk2-ovmf, bsdtar, swtpm), sudo, squashfs-tools, xorriso,
+#        ntfs-3g (ntfsfix, ntfs-3g: reinstall-windows).
 set -u
 REPO=$(cd "$(dirname "$0")/.." && pwd); H=$REPO/tests/test
 # The WolOS source the installer comes from: $WOLOS_SRC, else a wolos checkout next to this repo.
@@ -485,8 +486,15 @@ reinstall() { # WolOS again beside Windows, over the old WolOS (audit3 R2B-5, au
   say "first install booted (entry blessed)" "blessed '$d'"
   boot_files "$d"; mv "$d/boot-files" "$d/boot-files.1"
   mv "$d/install.log" "$d/install-1.log"; mv "$d/boot.log" "$d/boot-1.log"
+  # The first install shrank Windows (ntfsresize), which marks the volume for a check at Windows'
+  # next start; until that check ran nothing can read its shutdown state, and 0.12.1 refuses Replace
+  # next to such a Windows (wolos crates/core/src/install/layout.rs, WindowsUnchecked). A PC starts
+  # Windows in between; here ntfsfix -d does what that start's check does (clears the mark).
+  windows_started() { sudo ntfsfix -d "${LOOP}p3" >/dev/null; }
+  with_loop "$d/disk.raw" windows_started || { echo "E2E FAIL $S: ntfsfix -d on the Windows volume failed"; return; }
   # install_scenario's replace-wolos picks the old WolOS in Replace's list the way the installer
-  # knows it (its GPT name or file system label WolOS); the disk goes in as the first install left it.
+  # knows it (its GPT name or file system label WolOS); the disk goes in as the first install left it
+  # (and Windows started once).
   before=$(windows_hashes "$d/disk.raw")
   install_in_vm "$d" "$S" replace-wolos || { echo "E2E FAIL $S: wolvm could not start the VM again"; return; }
   grep -a 'summary:' "$d/install.log" | sed 's/.*summary: /  /' | sort -u
