@@ -7,7 +7,7 @@
 # station on wlan0 managed by NetworkManager + iwd. Runs from the welcome screen.
 #   wolvm new net2 --iso wolos.iso --ssh
 #   wolvm journey net2 tests/wolvm/journeys/qa100-net2-wifi-join-argv.yaml
-name: "network r2, part 1: Wi-Fi join argv vs nmcli, hwsim AP, roaming"
+name: "network r2, part 1: Wi-Fi join argv vs nmcli, hwsim AP"
 steps:
 - start
 - wait-agent:
@@ -18,16 +18,23 @@ steps:
   expect: "type AP"
   save: hwsim-ap.txt
   caption: "an AP named QA-Roam is up and NetworkManager lists it"
-# NET2-1: the exact argv the shell and admind use (controls.rs wifi_join, admin.rs nm_join).
-- ssh: "printf '802-11-wireless-security.psk:roam12345\\n' | nmcli dev wifi connect QA-Roam passwd-file /dev/stdin 2>&1; echo argv-rc=$?; echo roam12345 | wol wifi join QA-Roam 2>&1; echo wol-rc=$?"
+# NET2-1: the join the shell, `wol wifi join` and wol-admind run: a profile (nmcli connection add),
+# then `nmcli connection up ... passwd-file /dev/stdin` with the password on stdin. The old argv
+# (`dev wifi connect QA-Roam passwd-file /dev/stdin`) is a usage error, rc 2, in 50 ms.
+- ssh: "printf '802-11-wireless-security.psk:roam12345\\n' | nmcli dev wifi connect QA-Roam passwd-file /dev/stdin >/tmp/old-argv.txt 2>&1; echo old-argv-rc=$?; head -1 /tmp/old-argv.txt"
   rc: any
+  expect: "invalid extra argument"
+  save: join-old-argv.txt
+  caption: "the old argv is still rejected by this nmcli (proves the journey would catch a regression)"
+- ssh: "echo roam12345 | timeout 120 wol wifi join QA-Roam 2>&1 | tail -2; echo wol-rc=$?; echo profiles=$(nmcli -t -f NAME,TYPE con show | grep -c '^QA-Roam:802-11-wireless'); echo psk=$(nmcli -s -g 802-11-wireless-security.psk con show QA-Roam 2>/dev/null)"
+  rc: any
+  expect: "profiles=1"
   save: join-argv.txt
-  caption: "BUG (NET2-1) if nmcli prints 'invalid extra argument' with argv-rc=2 and wol says the network refused the password"
-# The documented form works (no DHCP server here, so NM reports IP configuration failure; the point is the argv is accepted).
-- ssh: "timeout 90 nmcli dev wifi connect QA-Roam password roam12345 2>&1 | tail -1; echo password-form-rc=$?"
+  caption: "FIXED (NET2-1): the profile exists with the password NetworkManager was given (psk=roam12345); BUG if wol says the network refused the password with no profile (profiles=0) in 0.04 s"
+- ssh: "echo roam12345 | timeout 120 wol wifi join QA-Roam >/dev/null 2>&1; echo profiles-after-second-join=$(nmcli -t -f NAME,TYPE con show | grep -c '^QA-Roam:802-11-wireless')"
   rc: any
-  save: join-password-form.txt
-  caption: "the 'password' form is accepted by nmcli (association happens; IP may fail without DHCP)"
+  expect: "profiles-after-second-join=1"
+  caption: "a second join replaces the profile, never doubles it"
 - ssh: "pkill -F /tmp/ap1.pid 2>/dev/null; pkill wpa_supplicant; ip netns del ap1; nmcli con delete QA-Roam 2>/dev/null; echo cleaned"
   rc: any
   expect: cleaned

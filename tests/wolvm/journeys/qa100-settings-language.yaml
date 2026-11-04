@@ -44,7 +44,7 @@ steps:
   rc: any
   save: language-saved.txt
   caption: the pref and the exported LANG (SET-27 fixed: never LC_ALL)
-- ssh: "h=$(getent passwd 1000 | cut -d: -f6); grep -c LC_ALL \"$h/.config/hypr/\"*.lua 2>/dev/null | grep -v ':0' || echo no-lc-all"
+- ssh: "h=$(getent passwd 1000 | cut -d: -f6); if grep -qs LC_ALL \"$h/.config/hypr/\"*.lua; then grep -l LC_ALL \"$h/.config/hypr/\"*.lua; else echo no-lc-all; fi"
   expect: "no-lc-all"
   rc: any
 - ssh: "u=$(id -nu 1000); runuser -u \"$u\" -- env LC_ALL=de_DE.UTF-8 LANG=de_DE.UTF-8 sh -c 'locale 2>&1 | head -3; date +%A'"

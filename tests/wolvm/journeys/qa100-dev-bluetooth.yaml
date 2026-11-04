@@ -1,0 +1,147 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 wave A7 (UNRUN: written on a box without KVM): Settings > Bluetooth pairs and forgets with a
+# bluetoothctl agent, shows the three states, and bluetoothd comes back after a kill.
+#   QA-SET-15  Pair / Forget exist (manual: "pair headphones, mice, keyboards")
+#   QA-SET-10  an adapter with bluetoothd down is "Bluetooth isn't running", not "No Bluetooth Hardware"
+#   QA-SYS-8   systemctl kill -s SIGKILL bluetooth: the unit is active again within ~5 s (drop-in Restart=on-failure)
+#   QA-DEV-12  the paired headset gets the headphones icon (Icon: audio-headset)
+# The VM has no Bluetooth device, so the journey fakes the BlueZ side: a tmpfs bind-mounted over
+# /sys/class/bluetooth (one hci0), a `bluetoothctl` and a `systemctl is-active bluetooth.service`
+# shim in /usr/local/bin that talk to files under /tmp/fakebt. The fake interactive bluetoothctl
+# prints what the real one prints for a Secure Simple Pairing device:
+# the bluetoothctl 5.72 sequence: "Agent registered", "Default agent request successful", then on `pair`
+#   "Request confirmation" (own line) + "[agent] Confirm passkey 123456 (yes/no): " -> yes ->
+#   "[CHG] Device .. Paired: yes" + "Pairing successful" -> trust ("Changing .. trust succeeded") -> connect.
+# Needs an installed disk booted to a logged-in desktop (uid 1000).
+#   wolvm journey dev-bt tests/wolvm/journeys/qa100-dev-bluetooth.yaml
+name: Settings > Bluetooth, Pair and Forget with a fake BlueZ agent, three states, bluetoothd restart
+steps:
+- wait-agent:
+  timeout: 120
+- ssh: "mkdir -p /tmp/fakebt/sys/hci0 && printf 'Device AA:BB:CC:DD:EE:01 WH-1000XM4\\n' > /tmp/fakebt/paired && printf 'Device 11:22:33:44:55:66 Desk Speaker\\n' > /tmp/fakebt/nearby && : > /tmp/fakebt/log && mount --bind /tmp/fakebt/sys /sys/class/bluetooth && ls /sys/class/bluetooth"
+  expect: "hci0"
+  caption: one fake adapter under /sys/class/bluetooth
+- ssh: |
+    cat > /usr/local/bin/bluetoothctl <<'FAKE'
+    #!/bin/sh
+    D=/tmp/fakebt
+    echo "argv: $*" >> $D/log
+    case "$*" in
+      show) printf 'Controller 00:1A:7D:DA:71:13 (public)\n\tPowered: yes\n' ;;
+      "devices Paired") cat $D/paired ;;
+      "devices Connected") : ;;
+      "info "*) printf 'Device %s (public)\n\tIcon: audio-headset\n\tPaired: yes\n' "$2" ;;
+      "--timeout 8 scan on") sleep 1; echo "Discovery started" ;;
+      devices) cat $D/paired $D/nearby ;;
+      "remove "*) grep -vi "$2" $D/paired > $D/paired.n; mv $D/paired.n $D/paired; echo "Device has been removed" ;;
+      "power "*) echo "Changing power $2 succeeded" ;;
+      "")
+        while read -r cmd; do
+          echo "stdin: $cmd" >> $D/log
+          case "$cmd" in
+            agent*) echo "Agent registered" ;;
+            default-agent) echo "Default agent request successful" ;;
+            pair*) echo "Attempting to pair with ${cmd#pair }"
+                   echo "[CHG] Device ${cmd#pair } Connected: yes"
+                   echo "Request confirmation"
+                   printf '\033[0;94m[agent]\033[0m Confirm passkey 123456 (yes/no): ' ;;
+            yes) echo "[CHG] Device 11:22:33:44:55:66 Bonded: yes"
+                 echo "[CHG] Device 11:22:33:44:55:66 Paired: yes"
+                 echo "Pairing successful" ;;
+            no) echo "Failed to pair: org.bluez.Error.AuthenticationFailed" ;;
+            trust*) echo "[CHG] Device ${cmd#trust } Trusted: yes"; echo "Changing ${cmd#trust } trust succeeded" ;;
+            connect*) echo "Attempting to connect to ${cmd#connect }"; echo "Connection successful"; echo "Device 11:22:33:44:55:66 Desk Speaker" >> $D/paired ;;
+            info*) printf 'Device %s (public)\n\tPaired: yes\n' "${cmd#info }" ;;
+            quit) exit 0 ;;
+          esac
+        done ;;
+    esac
+    FAKE
+    chmod 755 /usr/local/bin/bluetoothctl
+    cat > /usr/local/bin/systemctl <<'FAKE'
+    #!/bin/sh
+    [ "$1 $2" = "is-active bluetooth.service" ] && [ -e /tmp/fakebt/up ] && { echo active; exit 0; }
+    exec /usr/bin/systemctl "$@"
+    FAKE
+    chmod 755 /usr/local/bin/systemctl; echo shims
+  expect: "shims"
+  caption: fake bluetoothctl (agent prompts) and systemctl is-active shim; bluetooth.service is "down" until /tmp/fakebt/up exists
+- ssh: "P=$(pgrep -u 1000 -x wol-shell | head -1); tr '\\0' '\\n' < /proc/$P/environ | grep -E '^(WAYLAND_DISPLAY|HYPRLAND_INSTANCE_SIGNATURE|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR|HOME|USER)=' > /tmp/sess.env; wc -l < /tmp/sess.env"
+  expect: "6"
+# --- State 2: adapter present, bluetoothd down (QA-SET-10) ---
+- ssh: "runuser -u $(id -nu 1000) -- env $(tr '\\n' ' ' < /tmp/sess.env) PATH=/usr/local/bin:/usr/bin systemd-run --user --collect wol-settings Bluetooth; sleep 4; echo opened"
+  expect: "opened"
+- shot: bt-down
+  caption: "ASSERT (SET-10): the page says 'Bluetooth isn't running. Turn it on to use wireless devices.' with the switch OFF and usable; NOT 'No Bluetooth Hardware'"
+- key: tab tab
+- key: spc
+- sleep: 4
+- shot: bt-turn-on
+  caption: "ASSERT (review): Turn On with bluetoothd down runs the admin action (systemctl reset-failed + start bluetooth.service) and then power on, with no password for the console user; the switch settles On (or flips back with a sentence), it does not hang"
+- ssh: "journalctl -b --no-pager -t wol-admind | grep -i bluetooth | tail -5; /usr/bin/systemctl is-active bluetooth.service"
+  rc: any
+  save: turn-on-admin.txt
+  caption: wol-admind logged the bluetooth action; the unit is active (the bind-mounted adapter dir satisfies its condition)
+# --- State 3: bluetoothd up: devices list with icons and Forget ---
+- ssh: "touch /tmp/fakebt/up; pkill -u 1000 -x wol-settings; sleep 1; runuser -u $(id -nu 1000) -- env $(tr '\\n' ' ' < /tmp/sess.env) PATH=/usr/local/bin:/usr/bin systemd-run --user --collect wol-settings Bluetooth; sleep 4; echo reopened"
+  expect: "reopened"
+- shot: bt-ready
+  caption: "ASSERT (SET-15, DEV-12): My Devices lists WH-1000XM4 with the HEADPHONES icon and a Forget button beside it; an 'Add Device…' button under the list; This computer appears as the hostname"
+- ssh: "grep -c 'argv: info' /tmp/fakebt/log"
+  save: info-calls.txt
+  caption: the kind came from bluetoothctl info (Icon:)
+# --- Pair: Add Device..., pick Desk Speaker, confirm the passkey ---
+# Tab order on the page (adjust from bt-ready): back, power switch, WH-1000XM4 row, its Forget, Add Device….
+- key: tab tab tab tab tab
+- shot: bt-focus-add
+  caption: "focus ring on Add Device… (adjust the Tab count if not)"
+- key: ret
+- sleep: 3
+- shot: bt-nearby
+  caption: "ASSERT: 'Nearby Devices' lists Desk Speaker (WH-1000XM4 is not offered again, it is paired); a Search Again button"
+- key: tab
+- key: ret
+- sleep: 2
+- shot: bt-confirm
+  caption: "ASSERT (SET-15): the sheet 'Pair with “Desk Speaker”?' shows the code 123456 large, 'Check that the device shows the same code.', buttons Cancel and Pair"
+- ssh: "grep -E '^stdin:' /tmp/fakebt/log"
+  save: agent-stdin-before-confirm.txt
+  caption: "the agent got: agent KeyboardDisplay, default-agent, pair 11:22:33:44:55:66 (no 'yes' yet)"
+- key: tab
+- key: ret
+- sleep: 3
+- shot: bt-paired
+  caption: "ASSERT: sheet gone; status line '“Desk Speaker” is paired and connected.'; Desk Speaker under My Devices"
+- ssh: "grep -E '^stdin:' /tmp/fakebt/log; cat /tmp/fakebt/paired"
+  save: agent-stdin-after-confirm.txt
+  caption: "stdin: yes, trust 11:22:33:44:55:66, connect 11:22:33:44:55:66, quit; Desk Speaker is in the paired file"
+# --- Forget (with confirmation) ---
+- key: shift-tab shift-tab
+- shot: bt-focus-forget
+  caption: "focus ring on a Forget button (adjust the Shift-Tab count)"
+- key: ret
+- sleep: 1
+- shot: bt-forget-sheet
+  caption: "ASSERT: sheet 'Forget “…”?' with 'You will need to pair it again to use it.', Cancel and Forget (destructive)"
+- key: tab tab
+- key: ret
+- sleep: 3
+- ssh: "grep 'argv: remove' /tmp/fakebt/log; cat /tmp/fakebt/paired"
+  save: forget.txt
+  caption: bluetoothctl remove ran for the chosen device and it left the paired file
+- shot: bt-forgotten
+  caption: "ASSERT: status line 'The device was forgotten.'; the row is gone"
+# --- QA-SYS-8: bluetooth.service comes back after a kill (real unit; the fake adapter keeps its Condition happy) ---
+- ssh: "systemctl cat bluetooth.service | grep -E 'Restart=|RestartSec='"
+  save: unit-restart.txt
+  caption: "ASSERT (SYS-8): Restart=on-failure and RestartSec=2 from bluetooth.service.d/wolos.conf"
+- ssh: "systemctl start bluetooth.service; sleep 1; systemctl is-active bluetooth.service; systemctl kill -s SIGKILL bluetooth.service; sleep 6; /usr/bin/systemctl is-active bluetooth.service"
+  rc: any
+  save: bluetooth-restart.txt
+  caption: "ASSERT (SYS-8): active, then (after SIGKILL, 6 s) active again. Unfixed tree: inactive/failed. (If the VM has no adapter the unit's ConditionPathIsDirectory may skip the start: the line then reads inactive twice and the unit-restart.txt assertion above is the proof.)"
+- ssh: "umount /sys/class/bluetooth; rm -f /usr/local/bin/bluetoothctl /usr/local/bin/systemctl; echo cleaned"
+  expect: "cleaned"
+- logs:
+  n: 100
+- checkpoint: dev-bluetooth
+- stop

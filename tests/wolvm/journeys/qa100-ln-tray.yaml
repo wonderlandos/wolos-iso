@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# A8 QA-LN-22: a status item of a toy app (StatusNotifierItem) shows in the menu bar. 0.12.1
+# shipped no StatusNotifierWatcher at all (busctl: only org.freedesktop.Notifications).
+# Needs an installed disk with the test account (Alice Liddell / curiouser, an administrator).
+name: A status item appears in the menu bar
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop up
+- ssh: "busctl --user list | grep -c StatusNotifierWatcher || true"
+  rc: any
+  expect: "1"
+  save: watcher.txt
+  caption: the shell owns org.kde.StatusNotifierWatcher
+- shot: before-item
+- ssh: |
+    WD=$(ls /run/user/1000 | grep -m1 "^wayland-[0-9]*$"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY="$WD" HOME=/home/aliceliddell setsid -f python3 /dev/stdin >/dev/null 2>&1 <<'PY'
+    import dbus, dbus.service, dbus.mainloop.glib
+    from gi.repository import GLib
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+    bus = dbus.SessionBus()
+    name = dbus.service.BusName('org.kde.StatusNotifierItem-4242-1', bus)
+    class Item(dbus.service.Object):
+        @dbus.service.method('org.freedesktop.DBus.Properties', in_signature='ss', out_signature='v')
+        def Get(self, i, p):
+            return {'Id': 'toy', 'Title': 'Toy', 'Category': 'ApplicationStatus', 'Status': 'Active', 'IconName': 'dialog-information'}.get(p, '')
+    Item(bus, '/StatusNotifierItem')
+    w = bus.get_object('org.kde.StatusNotifierWatcher', '/StatusNotifierWatcher')
+    w.RegisterStatusNotifierItem('org.kde.StatusNotifierItem-4242-1', dbus_interface='org.kde.StatusNotifierWatcher')
+    GLib.timeout_add_seconds(25, lambda: __import__('sys').exit(0))
+    GLib.MainLoop().run()
+    PY
+    sleep 3; echo toy-registered
+  rc: any
+  expect: "toy-registered"
+- shot: toy-item
+  caption: the toy item's icon at the right of the menu bar, before the status icons
+- ssh: "sleep 25; echo gone"
+  rc: any
+- shot: toy-gone
+  caption: the item left with its app
+- logs:
+  n: 200
+- stop

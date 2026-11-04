@@ -56,5 +56,27 @@ steps:
   rc: any
   caption: EXPECT the top hit's app; BUG if wol-settings opened 'Effects & Looks' or another subsequence hit
 - shot: ln-search-after-return
+# LN-04 (A8): a key 0.2 s after the press arrives in the field (0.12.1 lost the first letters: a new
+# GTK process per press, 0.4-0.9 s to show). Search is created without the keyboard and takes it once
+# mapped; wolos-search.service keeps one idle `wol-search --warm` so a press only activates it; a warm
+# start must show within 150 ms.
+- ssh: "runuser -u tester -- env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user is-active wolos-search.service; pid=$(runuser -u tester -- env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user show -p MainPID --value wolos-search.service); echo pid=$pid; awk '/VmRSS/ {print \"rss-kb=\" $2}' /proc/$pid/status"
+  rc: any
+  expect: "active"
+  save: warm-search.txt
+  caption: the warm Search runs under its unit and rss-kb stays under 40960 (docs/modules/performance.md, Warm Search)
+- ssh: "u='runuser -u tester -- env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user show -p MainPID --value wolos-search.service'; pid=$($u); kill -KILL $pid; sleep 4; new=$($u); [ \"$new\" != 0 ] && [ \"$new\" != \"$pid\" ] && echo restarted || echo not-restarted"
+  rc: any
+  expect: "restarted"
+  caption: a killed warm Search comes back by itself (Restart=on-failure)
+- key: esc
+- sleep: 1
+- key: meta_l-spc
+- sleep: 0.2
+- type: term
+- sleep: 1
+- shot: ln-search-fast-key
+  caption: 'EXPECT "term" in the field with Terminal first (BUG LN-04: empty field, the letters were lost)'
+- key: esc
 - checkpoint: qa100-ln-launcher
 - stop

@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H11 round 2 (network, live) NET2-3/4/5/8 and the NET-5/NET-12 live confirmations. Needs a
+# VM with a second NIC on a host tap (see .claude/v012/qa100/network-r2.md: wolvm has no flag for
+# it; splice `-nic tap,ifname=tapqa2,script=no,downscript=no,model=virtio-net-pci` into the
+# `wolvm --dry-run start` command). On the host: 10.99.0.1/24 on the tap, a DHCP server, a DNS
+# server answering every A with 10.99.0.1, `nft ... tcp dport 80 dnat to 10.99.0.1:8080` and a
+# page on 8080 (captive portal). Steps marked HOST are run on the host, not in the guest.
+#   wolvm journey net2 tests/wolvm/journeys/qa100-net2-two-nics-portal.yaml
+name: "network r2, part 2: captive portal, slow link, tray delay, AirPlay from the LAN, ssh live@"
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 120
+- click: 710 599
+  caption: Try WolOS (1280x800)
+- sleep: 3
+- wait-stable:
+  timeout: 120
+# The tap network becomes the only way out.
+- ssh: "nmcli con mod 'Wired connection 1' ipv4.never-default yes ipv4.ignore-auto-dns yes ipv4.dns ''; nmcli con up 'Wired connection 1' >/dev/null; nmcli con up 'Wired connection 2' 2>&1 | tail -1; sleep 5; nmcli networking connectivity check; nmcli -g CONNECTIVITY general; wol network --json | tr -d ' \\n' | grep -o '\"portal\":[a-z]*'; timeout 5 curl -s -o /dev/null -w 'http=%{http_code}\\n' http://example.com/"
+  rc: any
+  expect: "\"portal\":true"
+  save: portal-state.txt
+  caption: "FIXED (NET2-3, NET-12b; B7): NetworkManager says portal and wol network says portal:true (the same answer wold gives apps); BUG if portal:false"
+- sleep: 25
+- shot: portal-desktop
+  caption: "FIXED (NET2-3; B7 glyph, A8 notice): the tray shows the no-internet wired glyph and a 'Sign In to This Network' notice with Open; BUG if the plain wired glyph and no notice"
+# HOST: tc qdisc replace dev tapqa2 root netem delay 300ms 50ms loss 10% rate 64kbit
+- ssh: "time (timeout 90 wol update check 2>&1 | tail -1; echo rc=$?) 2>&1"
+  rc: any
+  save: update-check-slow.txt
+  caption: "BUG (NET2-4) if the check gives up at 30 s with 'are you online?' and rc=0 on a slow but working link"
+# HOST: tc qdisc del dev tapqa2 root
+# NET-5 from a second machine: HOST runs `avahi-browse -rpt _raop._tcp` and `bash -c 'echo > /dev/tcp/10.99.0.2/7000'`.
+- ssh: "wol admin airplay-receiver on >/dev/null 2>&1; sleep 3; ss -lntp | grep -c shairport; echo rules7000=$(nft list ruleset | grep -cE 'dport \\{ 5000, 7000 \\}')"
+  rc: any
+  expect: "rules7000=2"
+  save: airplay-ports.txt
+  caption: "FIXED (NET-5; B7): AirPlay Receiver on writes nftables.d/airplay.conf and reloads; the host's tcp/7000 probe connects; BUG if rules7000=0"
+# NET2-8: the Sharing sentence `ssh live@wolos.local` cannot work on the live medium (locked password).
+- ssh: "passwd -S live | cut -d' ' -f2; grep -E '^(PasswordAuthentication|PermitRootLogin)' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/* 2>/dev/null; echo checked"
+  rc: any
+  expect: checked
+  save: live-ssh-account.txt
+  caption: "L = locked: from the host `ssh live@10.99.0.2` ends in 'Permission denied (publickey,password)'"
+# NET2-5: tray glyph delay after unplug (HOST: QMP `set_link virtio-net-pci.0 off`, then screendumps every 0.5 s; measured 44 s).
+- ssh: "nmcli con mod 'Wired connection 1' ipv4.never-default no ipv4.ignore-auto-dns no; nmcli con up 'Wired connection 1' >/dev/null; wol admin airplay-receiver off >/dev/null 2>&1; echo restored"
+  rc: any
+  expect: restored
+- checkpoint: qa100-net2-two-nics-portal
+- stop

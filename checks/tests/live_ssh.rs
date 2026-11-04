@@ -50,9 +50,16 @@ fn live_sshd_runs_only_with_the_root_key_credential() {
         after.contains("systemd-tmpfiles-setup.service") && after.contains("nftables.service"),
         "{after}"
     );
-    assert_eq!(
-        values(&d, "Service", "ExecStartPre"),
-        ["-/usr/bin/nft add rule inet wolos input tcp dport 22 accept"]
+    // QA-NET-13: port 22 is a file the firewall itself includes (nftables.d), not an
+    // `nft add rule` that a firewall reload or Firewall off/on throws away.
+    assert!(
+        values(&d, "Service", "ExecStartPre").is_empty(),
+        "sshd adds its own rule at start: {d}"
+    );
+    let rule = read("profile/airootfs/etc/wolos/nftables.d/live-ssh.conf");
+    assert!(
+        rule.lines().any(|l| l.trim() == "tcp dport 22 accept"),
+        "live-ssh.conf lacks the port 22 rule: {rule}"
     );
     let t = read(&format!("{UNITS}/multi-user.target.d/wolos-live-ssh.conf"));
     assert_eq!(values(&t, "Unit", "Wants"), ["sshd.service"], "{t}");
@@ -66,11 +73,12 @@ fn live_sshd_runs_only_with_the_root_key_credential() {
         !preset.lines().any(|l| l.starts_with("enable sshd")),
         "sshd enabled by the preset"
     );
-    // Live only: install-run removes both files from the installed system.
+    // Live only: install-run removes these files from the installed system.
     let run = read("files/usr/lib/wolos/install-run");
     for f in [
         "\"$T/etc/systemd/system/sshd.service.d/wolos-live.conf\"",
         "\"$T/etc/systemd/system/multi-user.target.d/wolos-live-ssh.conf\"",
+        "\"$T/etc/wolos/nftables.d/live-ssh.conf\"",
     ] {
         assert!(run.contains(f), "install-run keeps {f}");
     }

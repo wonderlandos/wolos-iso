@@ -5,6 +5,11 @@
 # GFX-1: Below rule must put Virtual-2 directly under Virtual-1 (BUG: main moves to 1280,0).
 # GFX-5: Displays page must drop a display unplugged while it is open.
 # GFX-7: at 200 % the Dock must fit the main display (BUG: x=-138 w=915 on 640 logical).
+# A6 (UNRUN, written without a VM): steps display-list-shown, below (through Settings, not hyprctl),
+# displays-revert (15 s automatic revert). Click coordinates are EDIT-ME: read them off the shots.
+# Settings writes hypr/wolos/displays.lua in Lua (hl.monitor({ output = "...", position = "0x0" })), only
+# once the new mode is kept (Keep, or a change that needs no confirmation such as an arrangement).
+# Each run starts from "Virtual-2,1280x800@74.99,auto,1" (reset at the end of the file).
 name: Two displays arrangement, unplug, 200 percent
 steps:
 - start
@@ -22,6 +27,38 @@ steps:
 - ssh: "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 systemd-run --user --collect wol-settings Displays"
 - wait-stable:
   timeout: 30
+# QA-DESIGN-28: the page lists both displays (never the empty state in a running desktop).
+- shot: display-list-shown
+  caption: EXPECT two sections (Resolution / Refresh Rate / Scale each) and no "couldn't be read"
+# QA-GFX-1 through the page: Arrangement of the second display > Below Main Display.
+- note: "EDIT the click below to the second display's Arrangement menu from display-list-shown.png, then the 'Below Main Display' entry; rerun with --from this step."
+- click: 640 520
+- click: 640 640
+- sleep: 2
+- ssh: "grep Virtual-1 /home/alice/.config/hypr/wolos/displays.lua | grep -c 'position = .0x0.'"
+  expect: "1"
+  caption: "below - the main display is saved with an explicit 0x0 (BUG: stays auto)"
+- ssh: "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl -j monitors | grep -c '\"x\": 0,'"
+  expect: "2"
+  save: below-live.txt
+  caption: below - both displays at x=0 (Virtual-1 y=0, Virtual-2 y=800), not diagonal
+- shot: below
+# QA-LIVE-13: a new resolution asks to keep it; nobody answers; 15 s later it is back.
+- note: "EDIT the click below to the first display's Resolution menu and a smaller entry (1024 x 768) from below.png; rerun with --from this step."
+- click: 640 300
+- click: 640 380
+- sleep: 2
+- shot: displays-keep-sheet
+  caption: EXPECT the sheet "Keep these display settings?" with Revert and Keep, counting down from 15
+- sleep: 16
+- ssh: "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl -j monitors | grep -c '\"width\": 1280'"
+  expect: "2"
+  caption: displays-revert - both displays run 1280 wide again without anybody pressing a key
+- ssh: "grep -c 'mode = .1024' /home/alice/.config/hypr/wolos/displays.lua || true"
+  expect: "0"
+  caption: "displays-revert - the unkept mode was never written to displays.lua"
+- shot: displays-revert
+  caption: EXPECT the page back on 1280 x 800 and the line "The display went back to its previous settings."
 - ssh: "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl keyword monitor 'Virtual-2,disable'"
 - sleep: 4
 - shot: displays-after-unplug

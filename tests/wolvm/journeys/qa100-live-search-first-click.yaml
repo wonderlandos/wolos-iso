@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# A8 QA-LIVE1-11: the menu bar's Search icon, first click with an app window focused. 0.12.1: the
+# click showed a tooltip only (or opened Search without the keyboard): the keystrokes went to the
+# window underneath, the second click closed Search, the third opened it with focus. Hyprland 0.56
+# hands the keyboard to a layer surface only on a none -> exclusive change; Search is created with
+# no keyboard and takes it once mapped (searchbar.rs FIRST_KEYBOARD).
+# Needs an installed disk with the test account (Alice Liddell / curiouser, an administrator).
+# The Search icon sits left of the Control Center icon at the right of the menu bar (about 1150,14
+# at 1280x800): adjust from the first shot.
+name: Search icon, one click, typing reaches the field
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop up
+# A terminal that writes every key it receives to a file: nothing may land there.
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell setsid -f foot -e sh -c 'stty raw -echo; cat > /home/aliceliddell/foot-typed.txt' >/dev/null 2>&1; sleep 3; echo foot-up"
+  expect: "foot-up"
+- shot: before-click
+  caption: the terminal is the focused window
+- click: 1150 14
+  caption: the Search icon, ONE click
+- sleep: 1
+- type: zzqx
+- sleep: 1
+- shot: search-open-typed
+  caption: EXPECT the Search panel open with "zzqx" in its field (BUG: tooltip only, or an empty panel)
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell hyprctl layers | grep -c wol-panel-searchbar || true"
+  rc: any
+  expect: "1"
+  save: layers.txt
+  caption: Search is on screen after one click
+- ssh: "cat /home/aliceliddell/foot-typed.txt | od -c | head -3; test ! -s /home/aliceliddell/foot-typed.txt && echo nothing-in-the-terminal"
+  rc: any
+  expect: "nothing-in-the-terminal"
+  save: foot-typed.txt
+  caption: not one key reached the window underneath
+- key: esc
+- sleep: 1
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell hyprctl layers | grep -c wol-panel-searchbar || true"
+  rc: any
+  expect: "0"
+  caption: Esc closed it
+- logs:
+  n: 200
+- stop

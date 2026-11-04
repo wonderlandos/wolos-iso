@@ -26,40 +26,32 @@ steps:
 - wait-stable:
   timeout: 40
 - shot: sharing-live
-  caption: "Computer name, Remote Login (ssh live@wolos.local), AirPlay Receiver"
+  caption: "FIXED (NET-6, NET2-8; B7): no Remote Login row on the live medium, Computer name and AirPlay Receiver greyed, footnote 'Install WolOS to change these. The live system's account has no password to allow them.', Internet Sharing row; BUG if Remote Login shows or a row takes a click"
 - click: 1035 306
-  caption: Remote Login switch
+  caption: where the Remote Login switch was (now greyed or empty)
 - sleep: 3
-- shot: sharing-remote-login-sheet
-  caption: "BUG (NET-6): an Authenticate sheet for an account with no password"
-- click: 834 250
-  caption: Allow with the field empty
-- sleep: 3
-- shot: sharing-allow-empty
-  caption: "BUG (NET-6) if the sheet is unchanged and nothing is said"
-- type: wrongpass
-- key: ret
-- sleep: 5
-- shot: sharing-after-typed-password
-  caption: "BUG (NET-6) if the switch is back off with no sentence under the section"
+- shot: sharing-no-sheet
+  caption: "FIXED (NET-6): no Authenticate sheet opened; BUG if a sheet asks for the live account's password"
 - ssh: "journalctl -b --no-pager | grep -iE 'remote-login' | tail -2; systemctl is-enabled sshd"
   rc: any
   save: remote-login-journal.txt
-  caption: "'authentication failed' in the journal, sshd still disabled"
-- ssh: "pkill -u 1000 -x wol-settings; sleep 1; runuser -u live -- env HOME=/home/live XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 setsid -f wol-settings 'Privacy & Security' >/dev/null 2>&1; sleep 4; echo opened"
+  caption: "FIXED (NET-6): no 'authentication failed' line from this run, sshd still disabled"
+- ssh: "pkill -u 1000 -x wol-settings; sleep 1; runuser -u live -- env HOME=/home/live XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 setsid -f wol-settings Network >/dev/null 2>&1; sleep 4; echo opened"
   rc: any
   expect: "opened"
 - wait-stable:
   timeout: 60
-- shot: privacy-firewall-sentence
-  caption: "BUG (NET-2) if Firewall reads 'On at startup, but not running now.' while nft list ruleset has the table"
+- shot: network-firewall-row
+  caption: "FIXED (NET-2, NET-22): the Firewall row is in Network and reads the Blocks-connections sentence; BUG if it reads 'On at startup, but not running now.' while nft list ruleset has the table"
 - ssh: "pkill -u 1000 -x wol-settings; echo closed"
   rc: any
   expect: "closed"
-# NET-3 (for the int fix): the Remote Login plan as root, then is port 22 open right away?
-- ssh: "install -d /etc/wolos/nftables.d; printf '%s\\n' 'tcp dport 22 ct state new limit rate 10/minute accept' > /etc/wolos/nftables.d/ssh.conf; systemctl try-reload-or-restart nftables.service; echo try-rc=$?; echo rule22=$(nft list ruleset | grep -c 'limit rate 10/minute'); rm -f /etc/wolos/nftables.d/ssh.conf"
+# NET-3 / PRIV-5: the Remote Login plan as root (what wol-admind runs): rule file, ruleset loaded
+# again, sshd. Is port 22 open right away, without a reboot?
+- ssh: "install -d /etc/wolos/nftables.d; printf '%s\\n' 'tcp dport 22 ct state new limit rate 10/minute accept' > /etc/wolos/nftables.d/ssh.conf; nft -f /etc/wolos/nftables.conf; echo load-rc=$?; echo dport22=$(nft list ruleset | grep -c 'limit rate 10/minute'); printf '%s\\n' '# Remote Login is off: port 22 stays closed.' > /etc/wolos/nftables.d/ssh.conf; nft -f /etc/wolos/nftables.conf; echo closed=$(nft list ruleset | grep -c 'limit rate 10/minute')"
   rc: any
+  expect: "dport22=1"
   save: remote-login-reload.txt
-  caption: "BUG (NET-3) if try-rc=0 and rule22=0: the rule file is written but the ruleset never changes before a reboot"
+  caption: "step dport 22 (NET-3): the loaded ruleset has the rule at once; BUG if dport22=0. After Remote Login off: closed=0"
 - checkpoint: qa100-net-sharing-live
 - stop

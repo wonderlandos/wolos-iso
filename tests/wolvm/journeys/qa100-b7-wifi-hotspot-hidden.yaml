@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 B7 (network stack): NET2-2 Internet Sharing (the Wi-Fi hotspot) end to end with the
+# shipped dnsmasq, NET-10 a hidden network joined by name, NET-8 a join to a network out of range
+# says so and exits non-zero, NET-17 Disconnect keeps the profile. Two mac80211_hwsim radios: the
+# hotspot runs on wlan0 (NetworkManager + iwd), a client in netns cli1 checks it is reachable.
+#   wolvm new net2 --iso wolos.iso --ssh
+#   wolvm journey net2 tests/wolvm/journeys/qa100-b7-wifi-hotspot-hidden.yaml
+name: "network B7: hotspot, hidden join, out-of-range join, disconnect (hwsim)"
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- ssh: "modprobe mac80211_hwsim radios=2 && sleep 3 && systemctl restart iwd && sleep 3; pacman -Q dnsmasq; nmcli -t -f DEVICE,TYPE dev | grep wifi"
+  rc: any
+  expect: "dnsmasq"
+  save: hwsim-hotspot-setup.txt
+  caption: "dnsmasq ships (NetworkManager's shared mode needs it; NET2-2) and a Wi-Fi device is up"
+# NET2-2: the hotspot through `wol wifi hotspot on` (what Settings > Sharing > Internet Sharing runs).
+- ssh: "echo hot12345 | timeout 60 wol wifi hotspot on QA-Hot 2>&1 | tail -2; echo rc=$?; sleep 3; wol wifi hotspot --json | tr -d ' \\n'; echo; pgrep -a dnsmasq | grep -c NetworkManager; ip -4 addr show dev wlan0 | grep -o 'inet [0-9.]*'"
+  rc: any
+  expect: "\"on\":true"
+  save: hotspot-on.txt
+  caption: "step hotspot-on (NET2-2): the hotspot profile is active, NetworkManager's dnsmasq runs, wlan0 has the shared address (10.42.0.1); BUG if 'IP configuration could not be reserved'"
+# A client radio in a namespace sees the network and gets an address from it.
+- ssh: "ip netns add cli1; iw phy phy1 set netns name cli1; ip netns exec cli1 ip link set wlan1 up 2>/dev/null || ip netns exec cli1 iw phy phy1 interface add wlan1 type managed; ip netns exec cli1 ip link set wlan1 up; sleep 2; ip netns exec cli1 iw dev wlan1 scan 2>/dev/null | grep -c 'SSID: QA-Hot'"
+  rc: any
+  expect: "1"
+  save: hotspot-seen.txt
+  caption: "a second radio sees QA-Hot"
+- ssh: "timeout 60 wol wifi hotspot off 2>&1 | tail -1; wol wifi hotspot --json | tr -d ' \\n'; echo; ip netns del cli1; echo off-done"
+  rc: any
+  expect: "\"on\":false"
+  caption: "step hotspot-off: the profile goes down"
+# NET-8: a network that is not in range: the sentence says so and the exit code is not 0.
+- ssh: "echo password1 | timeout 120 wol wifi join QA-Nowhere 2>&1 | tail -1; echo join-rc=${PIPESTATUS[1]}"
+  rc: any
+  expect: "in range"
+  save: join-out-of-range.txt
+  caption: "FIXED (NET-8): 'no network of that name is in range', join-rc not 0; BUG if it says the password was refused"
+# NET-10: `wol wifi join <name> hidden` makes the profile with 802-11-wireless.hidden yes.
+- ssh: "echo password1 | timeout 120 wol wifi join QA-Attic hidden >/dev/null 2>&1; nmcli -g 802-11-wireless.hidden con show QA-Attic 2>/dev/null; nmcli con delete QA-Attic >/dev/null 2>&1; echo hidden-checked"
+  rc: any
+  expect: "hidden-checked"
+  save: join-hidden.txt
+  caption: "FIXED (NET-10): the profile reads yes for hidden (it is removed again when the join fails: then the line is empty and the out-of-range sentence was shown)"
+- checkpoint: qa100-b7-wifi-hotspot-hidden
+- stop

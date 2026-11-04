@@ -1,0 +1,97 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# B3 groups-pam-session (wave B) on an installed disk with the test account (Alice Liddell /
+# curiouser, an administrator, uid 1000). Proves on the image what the unit tests prove on the code:
+#   QA-FILES-2   no account in input/audio (doctor names old ones), sound still works for the session
+#                at the screen (logind uaccess), nothing survives logout (KillUserProcesses=yes)
+#   QA-SHADOW-35 one wrong password costs ~2 s at the lock screen (was 3.83 s): nodelay stacks
+#   QA-SHADOW-36 wol-authcheck answers an error at once
+#   QA-FILES-11  runtime-dir-mountpoint-before-keyring: the keyring daemon starts in the tmpfs
+#   QA-SHADOW-43 a pwsh login shell still signs in
+#   QA-PRIV-13   sudo counts failures with pam_faillock; QA-LIVE3-24 no sudo insults
+# wolvm journey <vm> tests/wolvm/journeys/qa100-b3-groups-pam-session.yaml   (unrun: written by B3)
+name: B3 account groups, wrong-password time, keyring runtime dir, any login shell, sudo limits
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: startup lock screen of the only account
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop up
+# QA-FILES-2
+- ssh: "id -nG $(getent passwd 1000 | cut -d: -f1)"
+  save: groups.txt
+  caption: id -nG of the Setup account (wheel seat video)
+- ssh: "id -nG $(getent passwd 1000 | cut -d: -f1) | tr ' ' '\\n' | grep -qx -e input -e audio && echo retired-group || echo minimal-groups"
+  expect: "minimal-groups"
+- ssh: "u=$(getent passwd 1000 | cut -d: -f1); runuser -u $u -- sh -c 'cat /dev/input/event0 >/dev/null' 2>&1 | grep -q 'Permission denied' && echo keyboard-closed"
+  expect: "keyboard-closed"
+  caption: a program of the account cannot read the keyboard device
+- ssh: "getfacl -p /dev/snd/controlC0 2>/dev/null | grep -q \"^user:$(getent passwd 1000 | cut -d: -f1):rw\" && echo uaccess-sound"
+  expect: "uaccess-sound"
+  caption: the session at the screen still opens the sound card (logind uaccess, not group audio)
+- ssh: "su -l $(getent passwd 1000 | cut -d: -f1) -c 'XDG_RUNTIME_DIR=/run/user/1000 wol doctor security --json' | grep -o '\"id\":\"security.keyboard-access\",[^}]*\"status\":\"[a-z]*\"'"
+  expect: "\"status\":\"ok\""
+  rc: any
+  caption: doctor security.keyboard-access is ok on a fresh install
+- ssh: "grep -h '^KillUserProcesses=yes' /usr/lib/systemd/logind.conf.d/wolos.conf && echo kill-on-logout"
+  expect: "kill-on-logout"
+# QA-SHADOW-35 / 36: time one refusal through the lock screen's helper (as the account).
+- ssh: "u=$(getent passwd 1000 | cut -d: -f1); t0=$(date +%s%N); echo wrong-one | runuser -u $u -- /usr/lib/wol-authcheck; rc=$?; t1=$(date +%s%N); echo rc=$rc ms=$(( (t1-t0)/1000000 ))"
+  save: refusal-time.txt
+  caption: rc=1 and ms between 1900 and 2500 (was ~3800)
+- ssh: "u=$(getent passwd 1000 | cut -d: -f1); t0=$(date +%s%N); echo wrong-two | runuser -u $u -- /usr/lib/wol-authcheck; t1=$(date +%s%N); test $(( (t1-t0)/1000000 )) -lt 2500 && echo under-2.5s"
+  expect: "under-2.5s"
+- ssh: "faillock --user $(getent passwd 1000 | cut -d: -f1) --reset && echo reset"
+  rc: any
+# QA-FILES-11 runtime-dir-mountpoint-before-keyring
+- ssh: "journalctl -b -t wol-login --no-pager -o cat | grep -c 'is not mounted: keyring not started' || true"
+  expect: "0"
+  caption: runtime-dir-mountpoint-before-keyring (the guard never had to refuse)
+- ssh: "mountpoint -q /run/user/1000 && ls /run/user/1000/keyring/control && echo keyring-in-tmpfs"
+  expect: "keyring-in-tmpfs"
+- ssh: "ls /home/$(getent passwd 1000 | cut -d: -f1)/.local/share/keyrings/ | grep -c keyring"
+  rc: any
+  save: keyrings.txt
+  caption: login.keyring exists (no 'Choose password for new keyring' later)
+# QA-PRIV-13 and QA-LIVE3-24: a non-administrator's sudo.
+- ssh: "useradd -m -c 'Bob B' -s /usr/bin/zsh -G seat,video bob && echo 'bob:rabbit-hole' | chpasswd && echo bob-made"
+  expect: "bob-made"
+- ssh: "su -l bob -c 'echo wrong | sudo -S -k true' 2>&1; true"
+  save: sudo-refusal.txt
+  caption: no "I'm afraid I can't do that" insult
+- ssh: "su -l bob -c 'echo wrong | sudo -S -k true' 2>&1 | grep -ci -e afraid -e 'take a stress pill' -e 'what are you doing' || true"
+  expect: "0"
+- ssh: "faillock --user bob | grep -c 'V$\\|  V ' || faillock --user bob"
+  rc: any
+  save: faillock-bob.txt
+  caption: sudo failures are counted by pam_faillock
+# QA-SHADOW-43: a pwsh login shell (the dev module ships pwsh; skip when absent).
+- ssh: "test -x /usr/bin/pwsh || { echo no-pwsh; exit 0; }; grep -qx /usr/bin/pwsh /etc/shells || echo /usr/bin/pwsh >> /etc/shells; chsh -s /usr/bin/pwsh $(getent passwd 1000 | cut -d: -f1) && echo pwsh-shell"
+  rc: any
+  save: pwsh.txt
+- ssh: "su -l $(getent passwd 1000 | cut -d: -f1) -s /bin/sh -c 'XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr | head -1) hyprctl dispatch exit'; sleep 8; echo exit-sent"
+  expect: "exit-sent"
+  rc: any
+  caption: Log Out
+- wait-stable:
+  timeout: 120
+  caption: login window (two accounts)
+- ssh: "n=$(pgrep -u 1000 | wc -l); test $n = 0 && echo no-leftovers || echo left=$n"
+  expect: "no-leftovers"
+- note: click Alice on the login window (coordinates from the shot above), then the password
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop up again with pwsh as the login shell (was: back at the login window)
+- ssh: "pgrep -u 1000 -x Hyprland >/dev/null && echo session-alive"
+  expect: "session-alive"
+- ssh: "chsh -s /usr/bin/zsh $(getent passwd 1000 | cut -d: -f1); echo restored"
+  rc: any
+- logs:
+  n: 400

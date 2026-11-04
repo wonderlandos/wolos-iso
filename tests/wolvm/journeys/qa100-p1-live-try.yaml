@@ -19,9 +19,11 @@ steps:
 - checkpoint: welcome
 - click: 710 599
   caption: Try WolOS (the button left of Install WolOS at 1280x800)
-- sleep: 3
-- shot: black-between-installer-and-desktop
-  caption: P1-01, a black screen with no word while the compositor restarts into the live desktop
+- wait-text: "Starting the desktop"
+  timeout: 10
+  caption: P1-01 (A8), the console says "Starting the desktop..." between the installer's compositor and the live desktop
+- shot: no-black-3s
+  caption: P1-01, not a black screen with no word while the compositor restarts into the live desktop
 - wait-stable:
   timeout: 120
   caption: the live desktop, Install WolOS first in the Dock
@@ -35,10 +37,11 @@ steps:
   expect: "L"
   save: live-password.txt
   caption: P1-07, the live account has a locked password, so nothing can unlock a lock screen
-- ssh: "su -l live -c 'flatpak remotes 2>&1' | grep -q flathub && echo flathub-present || echo flathub-missing"
+- ssh: "su -l live -c 'flatpak remotes --columns=name,options 2>&1'; su -l live -c 'flatpak remotes 2>&1' | grep -q flathub && echo flathub-present || echo flathub-missing"
   rc: any
-  expect: "flathub-missing"
-  caption: P1-11, no Flatpak remote on the live stick (/var/lib/flatpak does not exist; remotes.d is not read for the account)
+  expect: "flathub-present"
+  save: flatpak-remotes.txt
+  caption: P1-11 (A8), the live account has Flathub (hyprland.lua adds it --user from /etc/flatpak/remotes.d, no download)
 - ssh: "for b in gvfsd-mtp gvfsd-gphoto2 gvfsd-smb; do test -x /usr/lib/gvfs/$b && echo has-$b || echo no-$b; done"
   rc: any
   save: gvfs-backends.txt
@@ -55,21 +58,35 @@ steps:
   rc: any
   save: codecs-missing.txt
   caption: P1-14, what the Media Codecs Kit adds; mpv and ffmpeg (Videos) already decode H.264/HEVC/AAC/AC3
-# The live Lock Screen dead end (P1-07): WolOS menu > Lock Screen, then any password.
+# The live Lock Screen dead end (P1-07, A8): the live WolOS menu has no Lock Screen, and nothing that
+# would lock (Ctrl+Super+Q, loginctl lock-session) locks a session nobody can unlock.
 - click: 22 14
   caption: the WolOS menu
 - sleep: 1
-- click: 59 133
-  caption: Lock Screen
-- sleep: 4
-- shot: live-locked
-- type: anything
-- key: ret
-- sleep: 4
-- shot: live-lock-incorrect
-  caption: '"Incorrect password" with no Restart or Shut Down on the screen: the only way out is the power button'
-- ssh: "pgrep -x wol-lock >/dev/null && echo still-locked"
-  expect: "still-locked"
+- shot: live-wolos-menu
+  caption: 'About This Computer, System Settings…, App Store…, Sleep, Restart…, Shut Down…, Log Out…: no Lock Screen'
+- key: esc
+- sleep: 1
+- key: ctrl-meta_l-q
+  caption: the lock key
+- sleep: 3
+- ssh: "pgrep -x wol-lock >/dev/null && echo locked || echo not-locked"
+  expect: "not-locked"
+  caption: Ctrl+Super+Q on the live stick does not lock (wol-lock refuses on /etc/wolos-live)
+- ssh: "loginctl lock-session $(loginctl list-sessions --no-legend | awk '$3==\"live\"{print $1; exit}'); sleep 2; pgrep -x wol-lock >/dev/null && echo locked || echo not-locked"
+  expect: "not-locked"
+- shot: live-not-locked
+  caption: the desktop, unlocked
+# Restart… asks first (the session panel's question), Cancel keeps the session.
+- click: 22 14
+- sleep: 1
+- click: 60 157
+  caption: Restart…
+- sleep: 2
+- shot: live-restart-sheet
+  caption: '"Are you sure you want to restart your computer now?", the countdown, Cancel and Restart'
+- key: esc
+- sleep: 1
 - logs:
   n: 300
 - stop

@@ -111,22 +111,22 @@ steps:
   rc: any
   save: shell-update-log.txt
 - note: "P1-03: within a minute of the daily check a banner says 'Updates Available: WolOS has 1 update ready' while this page says up to date (screenshot after the lock below)."
-# The WolOS menu: Lock Screen, Log Out…, Shut Down…; no Sleep, no Restart (P1-05).
+# The WolOS menu (P1-05, fixed by A8): Sleep, Restart…, Shut Down…, Lock Screen, Log Out…. Rows at 1280x800: Sleep 133, Restart… 157, Shut Down… 181, Lock Screen ~214.
 - click: 22 14
 - sleep: 2
 - shot: wolos-menu
-  caption: P1-05, the menu has no Sleep and no Restart; power.md says Sleep is in "the Shut Down… panel"
+  caption: P1-05 (A8), the menu has Sleep and Restart… before Shut Down…, then Lock Screen and Log Out…
 - click: 60 181
-  caption: Shut Down…
+  caption: Shut Down… (the row after Sleep and Restart…)
 - sleep: 3
 - shot: shutdown-sheet
-  caption: '"Are you sure you want to shut down your computer now?", a 60 s countdown, Cancel and Shut Down; no Sleep here either'
+  caption: '"Are you sure you want to shut down your computer now?", a 60 s countdown, Cancel and Shut Down'
 - key: esc
 - sleep: 2
 - click: 22 14
 - sleep: 1
-- click: 59 133
-  caption: Lock Screen
+- click: 59 214
+  caption: Lock Screen (below the separator that follows Shut Down…)
 - sleep: 4
 - shot: lock
 - type: curiouser

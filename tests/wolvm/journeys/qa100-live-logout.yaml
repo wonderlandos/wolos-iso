@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# A8 QA-LIVE-32 and QA-FILES-5: the Log Out question survives a click outside (0.12.1 dropped it, so
+# it worked on the third try), Log Out saves the window set first, and hypridle does not abort.
+# Needs an installed disk with the test account (Alice Liddell / curiouser, an administrator).
+name: Log Out keeps its question, saves sessions, no hypridle abort
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop up
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell setsid -f foot >/dev/null 2>&1; sleep 3; echo foot-up"
+  expect: "foot-up"
+- click: 22 14
+- sleep: 1
+- click: 60 238
+  caption: Log Out…
+- sleep: 2
+- shot: sheet
+  caption: the Log Out question with the countdown
+- click: 900 500
+  caption: a click outside the sheet
+- sleep: 2
+- shot: sheet-after-outside-click
+  caption: EXPECT the sheet still up with the countdown running (0.12.1: gone)
+- key: ret
+  caption: Log Out
+- sleep: 20
+- ssh: "loginctl list-sessions --no-legend | grep -c aliceliddell || true"
+  rc: any
+  expect: "0"
+  save: sessions-after.txt
+  caption: the session is gone
+- ssh: "grep -c terminal /home/aliceliddell/.local/state/wolos/sessions.json || true"
+  rc: any
+  save: sessions-json.txt
+  caption: the window set was saved at logout
+- ssh: "journalctl -b --no-pager | grep -ciE 'hypridle.*(abort|SIGABRT|core-dump)' || true"
+  rc: any
+  expect: "0"
+  save: hypridle-abort.txt
+  caption: no hypridle abort in the journal
+- shot: login-window
+- stop

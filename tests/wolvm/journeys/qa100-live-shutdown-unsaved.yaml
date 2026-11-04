@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# A8 QA-LIVE1-22: Shut Down with apps open and an unsaved note asked nothing; the machine was off
+# in under 12 s. Now Restart, Shut Down and Log Out save the window set, then send every window a
+# close request (closewindow), and the session ends only when the windows are gone; a window that
+# stays (a "Save changes?" sheet) holds it, with a banner, until a second try (ui/panels.rs
+# end_session). Gnote is the unsaved note.
+# Needs an installed disk with the test account (Alice Liddell / curiouser, an administrator).
+name: Shut Down waits for an unsaved note
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop up
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell setsid -f gnote >/dev/null 2>&1; WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell setsid -f foot >/dev/null 2>&1; sleep 5; WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell hyprctl clients -j | grep -c '\"class\"'"
+  rc: any
+  save: clients-before.txt
+  caption: Gnote and a terminal are open
+- click: 640 400
+- type: an unsaved thought
+- sleep: 1
+- shot: unsaved-note
+  caption: the note has text; Gnote keeps notes by itself, so the sheet to look for is the terminal/Gnote closing on its own request
+- click: 22 14
+- sleep: 1
+- click: 60 181
+  caption: Shut Down…
+- sleep: 2
+- key: ret
+  caption: Shut Down in the sheet
+- sleep: 3
+- ssh: "journalctl -b --no-pager | grep -c 'closewindow' || true; WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell hyprctl clients -j | grep -c '\"class\"' || true"
+  rc: any
+  save: clients-after-request.txt
+  caption: every window got a close request; the count shows who answered
+- shot: after-close-request
+  caption: either the machine is going down with every window closed, or a window stayed (a save sheet) and the banner "Shut Down is waiting for your apps" says who
+- sleep: 20
+- ssh: "echo still-up"
+  rc: any
+  save: still-up.txt
+  caption: if a window stayed, the machine is still up (a hung app never powers off by itself) and choosing Shut Down again goes ahead
+- stop

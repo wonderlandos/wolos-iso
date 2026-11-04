@@ -32,6 +32,10 @@ steps:
   caption: tty1 active, Hyprland -c installer.conf, no `try` word yet
 - shot: welcome
   caption: Welcome card; Try WolOS at about (1040,760) at 1080p (adjust from the shot)
+- ssh: "grep -c 'tty1' /usr/lib/wolos/installer-session; grep -c 'Starting the desktop' /usr/lib/wolos/installer-session; grep -c 'dpms' /usr/share/wolos/hypr/installer.lua"
+  rc: any
+  save: handoff-script.txt
+  caption: A8 QA-SHEET-2, installer-session blanks tty1 before the compositor and names the wait; installer.lua turns the output off before the exit
 - click: 1040 760
 - frames: try
   every: 150

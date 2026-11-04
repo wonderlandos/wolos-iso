@@ -43,6 +43,7 @@ steps:
   caption: EXPECT the nightlight toggle reported on. BUG if it still says off (the tile talked to hyprsunset only)
 - ssh: "u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 sh -c 'wol toggle nightlight; sleep 1; hyprctl hyprsunset temperature'"
   rc: any
+  expect: "6500"
   save: hotkey-after-tile.txt
   caption: the hotkey's verb flips once. EXPECT identity/6500 (off). BUG if the screen stays warm (the CLI thought it was off and turned it on again)
 - shot: cc-after-hotkey
