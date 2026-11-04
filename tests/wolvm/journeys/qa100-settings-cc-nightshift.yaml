@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-H1: Control Center tiles against the toggles they stand for. The Night Shift tile runs
+# `hyprctl hyprsunset` directly (core controls.rs set_night_shift) while Ctrl+Super+N runs
+# `wol toggle nightlight`, which keeps its own flag file: the two disagree after one tile click
+# (bug). Also: Esc closes the panel, Tab reaches the tiles right after opening, Stay Awake tile
+# double click, and the Settings link of the Display page opens Displays.
+# Run on an installed disk, desktop session up (Alice Liddell / curiouser):
+# wolvm journey <vm> tests/wolvm/journeys/qa100-settings-cc-nightshift.yaml
+name: Control Center Night Shift tile and wol toggle nightlight agree
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop session up
+- ssh: "u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 sh -c 'wol toggle nightlight off; wol toggle; pgrep -a hyprsunset'"
+  rc: any
+  save: toggles-before.txt
+  caption: night light off on both sides; hyprsunset running (without it the tile is hidden and this journey does not apply)
+- ssh: "u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 wol shell toggle control-center; echo opened"
+  expect: "opened"
+- wait-stable:
+  timeout: 20
+- shot: cc-open
+  caption: Control Center with the tile grid (Night Shift off)
+- key: tab
+- key: tab
+- key: tab
+  caption: keyboard reaches the panel right after opening (adjust; if focus never enters, the OnDemand keyboard did not take: note it)
+- click: Night Shift
+  caption: click the Night Shift tile (wolvm click by on-screen text; fall back to coordinates from the screenshot)
+- sleep: 2
+- shot: cc-nightshift-on
+  caption: the tile is lit and the screen warm
+- ssh: "u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 sh -c 'wol toggle --json 2>/dev/null || wol toggle; ls \"${XDG_STATE_HOME:-$HOME/.local/state}/wolos/toggles\" 2>/dev/null'"
+  rc: any
+  save: toggles-after-tile.txt
+  caption: EXPECT the nightlight toggle reported on. BUG if it still says off (the tile talked to hyprsunset only)
+- ssh: "u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 sh -c 'wol toggle nightlight; sleep 1; hyprctl hyprsunset temperature'"
+  rc: any
+  save: hotkey-after-tile.txt
+  caption: the hotkey's verb flips once. EXPECT identity/6500 (off). BUG if the screen stays warm (the CLI thought it was off and turned it on again)
+- shot: cc-after-hotkey
+  caption: the tile must now match what the screen shows
+- key: esc
+- sleep: 1
+- shot: cc-closed
+  caption: Esc closes the panel
+- ssh: "u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 sh -c 'wol toggle nightlight off; wol toggle stay-awake off'; echo reset"
+  expect: "reset"
+- ssh: "journalctl -b --no-pager -n 80 -t wol-shell -t wol"
+  rc: any
+  save: journal.txt
+- checkpoint: qa100-cc-nightshift
+- stop

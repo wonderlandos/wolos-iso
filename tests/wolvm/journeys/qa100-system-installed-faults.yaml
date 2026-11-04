@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H6 (system-stability): an installed disk (no account yet: the setup assistant is on
+# screen) under fault injection. wold and the daemons the login window relies on are killed from the
+# guest agent; the screen must come back each time, and a crash storm must not leave a black
+# screen with nothing to do. Also collects the installed system's journal, locale and boot facts.
+# Use after test-install.sh with WOLOS_KEEP_VM=1 (the VM "install" in $WOLOS_VM/wolvm), booted to
+# the setup assistant (type the disk passphrase first on an encrypted install):
+#   wolvm --home $T/wolvm set install --boot disk && wolvm --home $T/wolvm journey install .../qa100-system-installed-faults.yaml
+name: installed system survives supervisor and daemon crashes
+steps:
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: the setup assistant (or login window) has settled
+- shot before-faults
+- ssh: "timeout 180 systemctl is-system-running --wait; systemctl --failed --no-legend --plain"
+  rc: any
+  save: 00-system-state.txt
+- ssh: "cat /proc/cmdline; echo; cat /etc/plymouth/plymouthd.conf; echo; bootctl list --no-pager 2>&1 | head -40; echo; ls /efi/loader/entries; cat /var/lib/wolos/floor 2>/dev/null"
+  rc: any
+  save: 01-boot-chain.txt
+  caption: boot entries, try counters and the rollback floor
+- ssh: "journalctl -b --disk-usage; ls -la /var/log/journal 2>&1 | head -3; cat /etc/systemd/journald.conf.d/*.conf 2>&1; journalctl -b --no-pager | wc -l; echo warnings:; journalctl -b -p warning --no-pager | wc -l"
+  rc: any
+  save: 02-journal.txt
+  caption: the journal is persistent and bounded
+- ssh: "journalctl -b -p warning --no-pager -o short-monotonic | sed -E 's/^\\[ *[0-9.]+\\] [^ ]+ //' | sed -E 's/[0-9]+/N/g' | sort | uniq -c | sort -rn | head -40"
+  rc: any
+  save: 03-journal-noise.txt
+- ssh: "localectl; cat /etc/locale.conf /etc/vconsole.conf; grep -v '^#' /etc/locale.gen; locale -a; timedatectl"
+  rc: any
+  save: 04-locale-time.txt
+- ssh: "systemctl show -p Restart -p NRestarts -p StartLimitBurst -p StartLimitIntervalUSec wold.service bluetooth.service seatd.service; pgrep -a wold; pgrep -a wol-login; pgrep -a Hyprland; pgrep -a wol-loginwindow; journalctl -b -u wold --no-pager | tail -30"
+  rc: any
+  save: 05-wold.txt
+- checkpoint: installed-before-faults
+- ssh: "systemctl kill -s SIGKILL bluetooth.service; sleep 6; systemctl is-active bluetooth.service; systemctl show -p NRestarts --value bluetooth.service"
+  rc: any
+  save: 10-kill-bluetooth.txt
+  caption: bluetoothd killed with SIGKILL: Restart=no leaves Bluetooth off until reboot
+- ssh: "systemctl kill -s SIGKILL wold.service; sleep 12; systemctl is-active wold.service; systemctl show -p NRestarts --value wold.service; pgrep -a wol-login; pgrep -a Hyprland; journalctl -b -u wold --no-pager | tail -15"
+  rc: any
+  expect: active
+  save: 11-kill-wold.txt
+  caption: wold killed: restarts, stops the stale login tree (the screen goes away and comes back)
+- wait-stable:
+  timeout: 120
+- shot after-wold-kill
+- ssh: "pkill -9 -x Hyprland; sleep 10; pgrep -a Hyprland; pgrep -a wol-login; journalctl -b -u wold --no-pager | grep -i 'greeter\\|exited\\|retry' | tail -10"
+  rc: any
+  save: 12-kill-compositor.txt
+  caption: the login compositor killed: wol-login's backoff brings it back
+- wait-stable:
+  timeout: 120
+- shot after-compositor-kill
+- ssh: "for i in 1 2 3 4 5 6; do systemctl kill -s SIGKILL wold.service; sleep 1.5; done; sleep 10; systemctl is-active wold.service; systemctl show -p NRestarts -p Result -p ActiveState wold.service; pgrep -a Hyprland"
+  rc: any
+  save: 13-wold-crash-storm.txt
+  caption: six wold crashes in ten seconds: the default start limit (5 in 10 s) leaves wold dead and the screen black
+- sleep 15
+- shot after-wold-storm
+- ssh: "systemctl is-active wold.service; systemctl --failed --no-legend --plain"
+  rc: any
+  save: 14-after-storm.txt
+- ssh: "systemctl reset-failed wold.service; systemctl start wold.service; sleep 8; systemctl is-active wold.service; pgrep -a Hyprland"
+  rc: any
+  expect: active
+  save: 15-recover.txt
+  caption: an administrator can bring it back (nobody at the screen can)
+- wait-stable:
+  timeout: 120
+- shot recovered
+- logs:
+  n: 800

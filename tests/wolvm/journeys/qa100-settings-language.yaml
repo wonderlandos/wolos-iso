@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-H1: General > Language & Region. The pane offers 12 languages, but the installer generates
+# only en_US and the install locale (controller install.rs locale.gen), and desktop prefs export
+# LANG and LC_ALL. Picking Deutsch on an English install leaves every app with a locale that does
+# not exist (glibc falls back to C and terminals warn). Also checks the saved choice is in
+# desktop.json, is listed in Restore, and that `wol undo` takes it back.
+# Run on an installed disk, desktop session up (Alice Liddell / curiouser):
+# wolvm journey <vm> tests/wolvm/journeys/qa100-settings-language.yaml
+name: Language & Region choice is a locale that exists on the machine
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+- ssh: "locale -a; cat /etc/locale.gen | grep -v '^#' ; cat /etc/locale.conf"
+  rc: any
+  save: locales-before.txt
+  caption: which locales exist on the machine
+- ssh: "u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 sh -c 'nohup wol-settings \"Language & Region\" >/dev/null 2>&1 &'; sleep 3; echo launched"
+  expect: "launched"
+- wait-stable:
+  timeout: 30
+- shot: language-pane
+  caption: EXPECT the selected row to be the install locale (not always English (US))
+- click: Language
+  caption: open the language menu (search picker); type to filter
+- type: Deutsch
+- key: ret
+- sleep: 2
+- shot: language-picked
+  caption: Deutsch selected; the note "Apps use the new language the next time you log in" shows only if the save succeeded
+- ssh: "h=$(getent passwd 1000 | cut -d: -f6); grep -o '\"language\"[^,}]*' \"$h/.config/wolos/desktop.json\"; grep -n 'LANG\\|LC_ALL' \"$h/.config/hypr/\"*.lua \"$h/.config/hypr/\"*.conf 2>/dev/null"
+  rc: any
+  save: language-saved.txt
+  caption: the pref and the exported LANG/LC_ALL
+- ssh: "u=$(id -nu 1000); runuser -u \"$u\" -- env LC_ALL=de_DE.UTF-8 LANG=de_DE.UTF-8 sh -c 'locale 2>&1 | head -3; date +%A'"
+  rc: any
+  save: locale-check.txt
+  caption: EXPECT a German weekday. BUG if "setlocale: LC_ALL: cannot change locale" and an English weekday (locale not generated)
+- ssh: "u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 wol undo; h=$(getent passwd 1000 | cut -d: -f6); grep -c de_DE \"$h/.config/wolos/desktop.json\" || echo reverted"
+  rc: any
+  expect: "reverted"
+  save: undo.txt
+  caption: the Terminal undo takes the language back
+- shot: language-after-undo
+  caption: the open pane shows the restored choice
+- checkpoint: qa100-settings-language
+- stop

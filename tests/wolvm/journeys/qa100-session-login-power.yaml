@@ -1,0 +1,106 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-H4: login window / lock / session plumbing on an installed disk (one account, uid 1000,
+# Alice Liddell / curiouser; the startup lock screen shows at boot, ADR 0012).
+# Bugs it reproduces (.claude/v012/qa100/files-console-session.md):
+#   H4-1  login window Sleep / Shut Down run FreeBSD commands (acpiconf, shutdown -p): the steps
+#         "shutdown -p is a systemd option" and "no acpiconf" fail until power_argv uses systemctl.
+#   H4-2  every account is in group `input` (keyboards readable by any user process) and logind keeps
+#         user processes after logout (KillUserProcesses=no).
+#   H4-11 the login keyring must be unlocked after the password typed at the startup lock.
+# A second account is made so that the next boot shows the login window (several accounts).
+# wolvm journey <vm> tests/wolvm/journeys/qa100-session-login-power.yaml
+name: login window power verbs exist, account groups are minimal, keyring unlocked, logout returns to the greeter
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: startup lock screen of the only account
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop session up after the password
+- ssh: "journalctl -b -t wol-login --no-pager -o cat"
+  rc: any
+  save: wol-login-journal.txt
+- ssh: "loginctl list-sessions --no-legend; loginctl show-user 1000 -p State -p Linger -p Sessions"
+  rc: any
+  save: sessions.txt
+  caption: one seat0 session of uid 1000 through wol-session-pam (pam_systemd)
+- ssh: "loginctl show-user 1000 -p State --value"
+  expect: "active"
+# H4-11: the keyring unlocked by the startup lock (wol-lock UnlockWithMasterPassword).
+- ssh: "u=$(getent passwd 1000 | cut -d: -f1); pgrep -u 1000 -a gnome-keyring-daemon; su -l \"$u\" -c 'XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus busctl --user get-property org.freedesktop.secrets /org/freedesktop/secrets/collection/login org.freedesktop.Secret.Collection Locked'"
+  expect: "b false"
+  rc: any
+  save: keyring.txt
+  caption: the login keyring is unlocked (H4-11; fails if the daemon started outside the session's runtime dir)
+- ssh: "mountpoint -q /run/user/1000 && echo runtime-is-tmpfs"
+  expect: "runtime-is-tmpfs"
+# H4-2: groups of the account WolOS creates.
+- ssh: "id -Gn $(getent passwd 1000 | cut -d: -f1)"
+  save: groups.txt
+  caption: the account's groups (seat is required by seatd; input/audio are not)
+- ssh: "id -Gn $(getent passwd 1000 | cut -d: -f1) | tr ' ' '\\n' | grep -qx input && echo has-input-group || echo no-input-group"
+  expect: "no-input-group"
+  caption: H4-2 no account in `input` (any process could read every keyboard, incl. the lock screen's password)
+- ssh: "ls -l /dev/input/event0"
+  rc: any
+  save: input-dev.txt
+- ssh: "grep -h KillUserProcesses /etc/systemd/logind.conf /etc/systemd/logind.conf.d/*.conf /usr/lib/systemd/logind.conf.d/*.conf 2>/dev/null | grep -v '^#' | grep -q yes && echo kill-user-processes-yes || echo kill-user-processes-default-no"
+  expect: "kill-user-processes-yes"
+  caption: H4-2 processes left at logout must not survive into the next person's login
+# H4-1: what the login window's power row runs (wol-login power_argv) must exist on Linux.
+- ssh: "test -x /usr/sbin/acpiconf && echo have-acpiconf || echo no-acpiconf"
+  expect: "no-acpiconf"
+  caption: the image has no acpiconf (FreeBSD): wol-login must not call it for Sleep
+- ssh: "shutdown -p +60 >/tmp/shutdown-p.txt 2>&1; rc=$?; shutdown -c >/dev/null 2>&1; cat /tmp/shutdown-p.txt; echo rc=$rc"
+  expect: "rc=0"
+  rc: any
+  save: shutdown-p.txt
+  caption: H4-1 `shutdown -p now` is what wol-login runs for Shut Down; systemd's shutdown has no -p (passes only after the fix)
+- ssh: "systemctl --dry-run suspend && systemctl --dry-run poweroff && systemctl --dry-run reboot && echo systemctl-verbs-ok"
+  expect: "systemctl-verbs-ok"
+  caption: the verbs the session menu uses (admin::session_power_argv) exist; the login window should use the same
+# A second account so the login window (not the startup lock) shows at the next boot.
+- ssh: "useradd -m -c 'Bob B' -s /usr/bin/zsh -G seat,video bob && echo 'bob:rabbit-hole' | chpasswd && echo bob-made"
+  expect: "bob-made"
+- checkpoint: two-accounts
+# Log out: Super+Escape opens the session panel; the Log Out question has a 60 s countdown.
+- key: super-escape
+- wait-stable:
+  timeout: 60
+  caption: session panel (Lock, Sleep, Restart, Shut Down, Log Out)
+- ssh: "su -l $(getent passwd 1000 | cut -d: -f1) -c 'XDG_RUNTIME_DIR=/run/user/1000 wol shell show session-logout' && echo asked"
+  expect: "asked"
+  rc: any
+  caption: the Log Out question with its countdown
+- shot logout-question
+- ssh: "pgrep -u 1000 -x Hyprland >/dev/null && echo session-alive"
+  expect: "session-alive"
+- ssh: "su -l $(getent passwd 1000 | cut -d: -f1) -c 'XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr | head -1) hyprctl dispatch exit' ; sleep 8; echo exit-sent"
+  expect: "exit-sent"
+  rc: any
+  caption: Log Out (what clipboard::session_command runs)
+- wait-stable:
+  timeout: 120
+  caption: back at the login window: two accounts listed (Alice, Bob), power row at the foot
+- ssh: "pgrep -u 1000 -a | grep -v -e '^$' ; n=$(pgrep -u 1000 | wc -l); echo left=$n; test $n = 0 && echo no-leftovers"
+  expect: "no-leftovers"
+  rc: any
+  save: leftovers.txt
+  caption: H4-2 nothing of the ended session is still running when the next person signs in
+- ssh: "journalctl -b -t wol-login --no-pager -o cat | tail -n 20"
+  rc: any
+  save: wol-login-after-logout.txt
+- ssh: "pgrep -u _wollogin -x wol-loginwindow >/dev/null && echo greeter-up"
+  expect: "greeter-up"
+# GUI (template; adjust coordinates to the screenshot): click Shut Down at the foot of the login
+# window; with H4-1 unfixed the VM stays on and the journal shows "wol-login: shutdown" only.
+# - click: 640 760
+# - wait-text: "reboot: Power down"
+#   timeout: 120
+- logs:
+  n: 600

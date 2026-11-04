@@ -2,7 +2,7 @@
 # QA-100 H2: package paths behind the Store, on an installed sealed system: the pacman wrapper
 # (layer vs slot), an unsigned and a tampered .wol, a full disk, and what each one says.
 # Needs a VM from install-auto.yaml (checkpoint installed-up), network up.
-# Findings covered: S-paths (wording, ENOSPC), W (signature before anything), P (channel file).
+# Findings covered: C1 (admind runs the real pacman: a Store install must land in a layer), B5/U11 (ENOSPC wording), U9 (channel file read by nobody), stage_and_install refusals.
 name: package install paths on a sealed system
 steps:
 - start
@@ -61,7 +61,7 @@ steps:
 - ssh: "cat /etc/wolos/channel 2>/dev/null || echo no-channel-file; grep -rl 'wolos/channel' /usr/lib/wolos /usr/bin/wol /usr/lib/wol-admind 2>/dev/null | head"
   rc: any
   save: channel.txt
-  caption: "P1: who reads /etc/wolos/channel (if nothing but wol-admind writes it, the switch does nothing)"
+  caption: "U9: who reads /etc/wolos/channel (if nothing but wol-admind writes it, the switch does nothing)"
 - logs:
   n: 400
 - stop

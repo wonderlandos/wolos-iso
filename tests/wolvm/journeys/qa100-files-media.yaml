@@ -1,0 +1,103 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-H4: Files (GNOME Files + WolOS pieces) on an installed disk, uid 1000 (Alice Liddell /
+# curiouser). Make the VM with an extra raw disk so a USB-stick-like volume exists:
+#   wolvm new <vm> --from-image installed.qcow2 --drive /scratch/qa100-files/stick.img
+#   (truncate -s 64M stick.img; mkfs.vfat -n STICK stick.img)
+# Bugs it reproduces (.claude/v012/qa100/files-console-session.md):
+#   H4-6  no gvfs-mtp / gvfs-gphoto2 / gvfs-smb: phones, cameras and shares never show in Files.
+#   H4-14 the WolOS nautilus extension and every default app in mimeapps.list must be on the image.
+# wolvm journey <vm> tests/wolvm/journeys/qa100-files-media.yaml
+name: Files has its backends, default apps, extension, mounts a stick for the active session, Search lists home
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop session up
+- ssh: "pacman -Q nautilus gvfs gvfs-afc udisks2 file-roller xdg-user-dirs 2>&1"
+  rc: any
+  save: files-packages.txt
+- ssh: "ls /usr/lib/gvfs/ | sort"
+  save: gvfs-backends.txt
+  caption: the gvfs backends on the image
+- ssh: "test -x /usr/lib/gvfs/gvfsd-mtp && echo have-mtp || echo no-mtp"
+  expect: "have-mtp"
+  caption: H4-6 Android phones (MTP) appear in Files
+- ssh: "test -x /usr/lib/gvfs/gvfsd-smb && echo have-smb || echo no-smb"
+  expect: "have-smb"
+  caption: H4-6 network shares in Other Locations
+- ssh: "test -x /usr/lib/gvfs/gvfsd-trash && test -x /usr/lib/gvfs/gvfsd-afc && echo trash-afc-ok"
+  expect: "trash-afc-ok"
+# H4-14: the WolOS right-click extension and the default apps.
+- ssh: "ls /usr/lib/nautilus/extensions-4/"
+  expect: "libwolos-analyze.so"
+  save: nautilus-extensions.txt
+  caption: Check for Malware extension installed (desktop/nautilus/wolos-analyze.c)
+- ssh: "missing=; for d in $(grep -v '^#' /usr/share/applications/mimeapps.list | grep '=' | cut -d= -f2 | tr ';' '\\n' | sort -u | grep .); do test -f /usr/share/applications/$d || missing=\"$missing $d\"; done; echo missing:$missing; test -z \"$missing\" && echo all-default-apps-present"
+  expect: "all-default-apps-present"
+  save: mimeapps-targets.txt
+  caption: every default app named in mimeapps.list has a desktop file (eog, Papers, Amberol, Celluloid, FileRoller, TextEditor, Geary, Calendar, helium, Nautilus)
+- ssh: "su -l alice -c 'XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus xdg-mime query default inode/directory'"
+  expect: "org.gnome.Nautilus.desktop"
+- ssh: "su -l alice -c 'XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus xdg-mime query default image/png'"
+  expect: "org.gnome.eog.desktop"
+# Removable media: the extra disk mounts for the active session through udisks + polkit (10-wolos.rules).
+- ssh: "lsblk -o NAME,FSTYPE,LABEL,MOUNTPOINT /dev/vdb 2>&1"
+  rc: any
+  save: stick.txt
+- ssh: "su -l alice -c 'XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus udisksctl mount -b /dev/vdb' 2>&1"
+  expect: "Mounted /dev/vdb at /run/media/alice/"
+  save: stick-mount.txt
+  caption: a plain user of the active session mounts a stick without a password (polkit upstream rule kept by 10-wolos.rules)
+- ssh: "su -l alice -c 'XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus gio mount -li' 2>&1 | head -40"
+  rc: any
+  save: gio-mounts.txt
+- ssh: "su -l alice -c 'echo hello > /run/media/alice/STICK/hello.txt && gio trash /run/media/alice/STICK/hello.txt && ls -A /run/media/alice/STICK/' 2>&1"
+  rc: any
+  save: stick-trash.txt
+  caption: trashing on removable media uses the volume's own .Trash-1000 (gvfs), not the home trash
+- ssh: "su -l alice -c 'XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus udisksctl unmount -b /dev/vdb' 2>&1"
+  expect: "Unmounted /dev/vdb"
+# Files (as Nautilus) opens and runs as the session user: start it through the shell's app launcher.
+- ssh: "su -l alice -c 'XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus WAYLAND_DISPLAY=wayland-1 setsid -f nautilus --new-window /home/alice' ; sleep 5; pgrep -u 1000 -x nautilus >/dev/null && echo nautilus-running"
+  expect: "nautilus-running"
+  rc: any
+- wait-stable:
+  timeout: 60
+  caption: Files on the home folder (sidebar: Recent, Starred, Home, Documents..., Trash, STICK when plugged)
+- shot files-home
+- key: ctrl-h
+- wait-stable:
+  timeout: 30
+  caption: Ctrl+H shows hidden names (.config, .cache, .zsh_history)
+- key: ctrl-h
+- ssh: "pkill -u 1000 -x nautilus; echo closed"
+  expect: "closed"
+# Search's file index (crates/shell/src/files.rs): rebuilt at login, no hidden names, no build output.
+- ssh: "su -l alice -c 'mkdir -p ~/Documents/Notes ~/code/app/node_modules/x ~/code/app/target; touch ~/Documents/Notes/plan.md ~/.config/secret.txt ~/code/app/node_modules/x/i.js ~/code/app/target/bin ~/code/app/main.rs'; echo made"
+  expect: "made"
+- ssh: "f=/home/alice/.cache/wolos/files; test -f $f && echo have-index; stat -c '%y' $f; wc -l $f"
+  rc: any
+  save: files-index.txt
+  caption: the index exists (shell at login, hourly, Search when older than 30 s)
+- ssh: "su -l alice -c 'XDG_RUNTIME_DIR=/run/user/1000 wol shell show search' ; sleep 2; echo shown"
+  expect: "shown"
+  rc: any
+- type: plan.md
+- wait-stable:
+  timeout: 30
+  caption: Search finds Documents/Notes/plan.md by name (kind Text)
+- shot search-plan
+- key: esc
+- ssh: "f=/home/alice/.cache/wolos/files; grep -c . $f; grep -q '^Documents/Notes/plan.md$' $f && echo listed-plan; grep -q 'secret.txt' $f && echo HIDDEN-LISTED || echo hidden-skipped; grep -q node_modules $f && echo BUILD-LISTED || echo build-skipped"
+  expect: "hidden-skipped"
+  save: files-index-rules.txt
+- ssh: "grep -q node_modules /home/alice/.cache/wolos/files && echo BUILD-LISTED || echo build-skipped"
+  expect: "build-skipped"
+- logs:
+  n: 400

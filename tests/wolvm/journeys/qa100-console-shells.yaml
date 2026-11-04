@@ -1,0 +1,89 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-H4: the console setup of every shell (ADR 0032 "Console") on an installed disk, as uid 1000
+# (Alice Liddell / curiouser). Checks through `su -l` + the shells' own -c/-i so no window is needed.
+# Bugs it reproduces (.claude/v012/qa100/files-console-session.md):
+#   H4-4  Settings > "Shell in the terminal" = bash: wol-term-shell starts a non-login bash that never
+#         reads /usr/share/wolos/bash/bashrc (no prompt, keys, su function, hints): the step
+#         "bash through wol-term-shell has the WolOS setup" fails until fixed.
+# wolvm journey <vm> tests/wolvm/journeys/qa100-console-shells.yaml
+name: every shell gets the WolOS console (keys, history, su, hints) through wol-term-shell
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop session up
+- ssh: "getent passwd 1000; cat /etc/shells; ls -l /usr/bin/wol-term-shell /usr/share/wolos/console/hints.tsv /usr/share/wolos/zsh/zshrc /usr/share/wolos/bash/bashrc /usr/share/wolos/fish/config.fish /usr/share/wolos/nu/autoload/wolos.nu /etc/zsh/zshenv /etc/fish/conf.d/wolos.fish /etc/profile.d/wolos-console.sh"
+  rc: any
+  save: console-files.txt
+  caption: the shipped console files
+- ssh: "getent passwd 1000 | cut -d: -f7"
+  expect: "/usr/bin/zsh"
+  caption: the login shell stays zsh (ADR 0032)
+# zsh: interactive setup from /etc/zsh/zshenv.
+- ssh: "su -l alice -c 'TERM=foot zsh -ic \"whence -w _wolos_hint_precmd; whence -w su; echo HIST=\\$HISTSIZE\"'"
+  expect: "su: function"
+  save: zsh-setup.txt
+  caption: zsh has the WolOS hooks, the su function and HISTSIZE=50000
+- ssh: "su -l alice -c 'TERM=foot zsh -ic \"apt install cowsay\" 2>&1'; echo rc=$?"
+  expect: "wopkg install cowsay"
+  rc: any
+  save: zsh-hint-apt.txt
+  caption: command-not-found hint for apt (hints.tsv row) with the wopkg suggestion
+- ssh: "su -l alice -c 'TERM=foot zsh -ic \"pacman -S cowsay\" 2>&1'; echo rc=$?"
+  expect: "sudo pacman -S cowsay"
+  rc: any
+  save: zsh-hint-pacman.txt
+  caption: post-command hint for pacman without sudo
+- ssh: "su -l alice -c 'TERM=foot zsh -ic \"su --version\" 2>&1' | head -3; echo rc=$?"
+  rc: any
+  save: zsh-su-passthrough.txt
+  caption: su with another option still reaches the real su (with a hint first)
+# wol-term-shell: default (no file) is zsh with SHELL set.
+- ssh: "su -l alice -c 'rm -f ~/.config/wolos/terminal-shell; /usr/bin/wol-term-shell -c \"echo SHELL=\\$SHELL; echo ZSH=\\$ZSH_VERSION\"'"
+  expect: "SHELL=/usr/bin/zsh"
+  save: term-shell-default.txt
+- ssh: "su -l alice -c 'mkdir -p ~/.config/wolos; echo pwsh > ~/.config/wolos/terminal-shell; /usr/bin/wol-term-shell -c \"echo SHELL=\\$SHELL\"' 2>&1"
+  expect: "is not installed, so this window uses zsh"
+  save: term-shell-missing.txt
+  caption: a shell chosen in Settings but not installed gives zsh and one sentence
+# H4-4: bash through wol-term-shell (what Super+Return opens with bash chosen).
+- ssh: "su -l alice -c 'echo bash > ~/.config/wolos/terminal-shell; TERM=foot /usr/bin/wol-term-shell -ic \"declare -F _wolos_hint; declare -F su; echo HIST=\\$HISTSIZE\" 2>&1'"
+  expect: "_wolos_hint"
+  rc: any
+  save: bash-term-shell.txt
+  caption: H4-4 bash through wol-term-shell has the WolOS setup (fails: non-login bash reads neither profile.d nor the WolOS bashrc)
+- ssh: "su -l alice -c 'TERM=foot bash -lic \"declare -F _wolos_hint; echo HIST=\\$HISTSIZE\" 2>&1'"
+  expect: "_wolos_hint"
+  save: bash-login.txt
+  caption: a login bash (ssh, console) does get it through /etc/profile.d/wolos-console.sh
+- ssh: "su -l alice -c 'TERM=foot bash -lic \"apt install cowsay\" 2>&1'; echo rc=$?"
+  expect: "wopkg install cowsay"
+  rc: any
+  save: bash-hint-apt.txt
+# fish and nu, when installed (console module); skipped cleanly otherwise.
+- ssh: "if command -v fish >/dev/null; then su -l alice -c 'TERM=foot fish -ic \"functions -q su; and echo su-function; functions -q __wolos_hint_postexec; and echo hint-hook\"'; else echo fish-not-installed su-function hint-hook; fi"
+  expect: "hint-hook"
+  rc: any
+  save: fish-setup.txt
+- ssh: "if command -v nu >/dev/null; then su -l alice -c 'echo $NU_VENDOR_AUTOLOAD_DIR; TERM=foot nu -l -c \"which su | get type | first\"'; else echo nu-not-installed /usr/share/wolos/nu/autoload custom; fi"
+  expect: "custom"
+  rc: any
+  save: nu-setup.txt
+  caption: nu finds the WolOS autoload through NU_VENDOR_AUTOLOAD_DIR (from the login shell's profile.d)
+- ssh: "su -l alice -c 'wol hint \"dnf install cowsay\" --not-found' 2>&1; echo rc=$?"
+  expect: "rc=0"
+  save: wol-hint.txt
+- ssh: "su -l alice -c 'LANG=pt_BR.UTF-8 wol hint \"apt install cowsay\" --not-found' 2>&1; echo rc=$?"
+  rc: any
+  save: wol-hint-pt.txt
+  caption: translated table when hints.pt_BR.tsv/hints.pt.tsv ship (English otherwise)
+- ssh: "su -l alice -c 'rm -f ~/.config/wolos/terminal-shell' && echo cleaned"
+  expect: "cleaned"
+- logs:
+  n: 400
