@@ -128,3 +128,4 @@ qa100-crit2-desktop-idle | installed,account:alice | pass | CRIT-2 QA-PERF-1: Hy
 qa100-live-disk-full | installed,account:alice,ssh | fail:QA-LIVE-17 | WE-LIVE: @home capped at 85 % of the pool, the system keeps room and the journal is capped (unrun)
 qa100-we-live-stick-unmounted-at-logout | installed,account:alice,drive,ssh | fail:QA-FILES-22 | WE-LIVE: a stick the account mounted is unmounted at logout (wolos-media-unmount.service; unrun)
 qa100-we-live-dock-trash-and-focus-dnd | installed,account:alice,ssh | fail:QA-LIVE1-12 | WE-LIVE: Dock Trash raises Files, the Do Not Disturb row turns it off (unrun)
+qa100-doctor-failure-report | installed,account:alice,ssh | fail:QA-WEB-24 | SETTINGS-F: every Doctor failure is a report (CLI exit + JSON, bridge, app); fails on 0.12.1 where Doctor is absent (unrun)
