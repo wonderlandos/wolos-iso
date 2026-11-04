@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# APPS-E2E journeys gate (QA100_MANIFEST=tests/wolvm/e2e.manifest tests/run-installed.sh qa100): one line per
+# e2e-*.yaml journey, same columns and values as qa100.manifest (journey | needs | expect | why).
+e2e-gallery | installed,account:alice | pass | a PNG opens from Files in Gallery; Delete, Undo and Share work on a fresh system
