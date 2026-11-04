@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H22 (kernel-boot): the live medium after its key was enrolled (live-secureboot.yaml),
+# started again with Secure Boot turned OFF in the firmware ("nothing changes", ADR 0025). Two
+# runs of wolvm, because the firmware switch is a host-side step:
+#   wolvm new sb --iso wolos.iso --secureboot --tpm --force
+#   wolvm journey sb tests/wolvm/journeys/live-secureboot.yaml      # enrols the live key once
+#   wolvm set sb --secureboot off
+#   wolvm journey sb tests/wolvm/journeys/qa100-boot-live-sb-off-later.yaml
+# Then `wolvm set sb --secureboot on` and the same journey with expect "SecureBoot enabled" proves
+# the enrolled key still starts the medium (MokList survives the switch).
+# Facts this run pins (2026-11-04, 0.12.1 ISO): no key screen with Secure Boot off, shim chains
+# straight through, lockdown stays "none" on the live medium whatever the firmware says (the live
+# command line carries no lockdown word), the same four kernel warnings as every boot.
+name: live medium, key enrolled, Secure Boot turned off later, no key screen
+steps:
+- start
+- wait-text: "Install WolOS: the first screen of the live image"
+  timeout: 300
+  caption: straight to the live system, no "Security Violation", no MokManager
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 120
+- shot: live-desktop-sb-off
+- ssh: "mokutil --sb-state"
+  expect: "SecureBoot disabled"
+  save: sb-state.txt
+- ssh: "bootctl status 2>/dev/null | grep -E 'Secure Boot|Loader:|Current Entry'"
+  expect: "Current Entry: wolos.efi"
+  save: bootctl.txt
+- ssh: "cat /sys/kernel/security/lockdown"
+  expect: "[none]"
+  save: lockdown.txt
+  caption: the live kernel is not locked down (no lockdown= word on the medium's command line)
+- ssh: "mokutil --list-enrolled | grep -c 'CN=WolOS Live Image 2026'"
+  expect: "1"
+  caption: the enrolled key stays in MokList
+- ssh: "dmesg --level=emerg,alert,crit,err,warn | wc -l"
+  save: dmesg-warn-count.txt
+- ssh: "dmesg --level=emerg,alert,crit,err,warn"
+  save: dmesg-warn.txt
+- ssh: "systemctl --failed --no-legend | wc -l"
+  expect: "0"
+- stop:
+  force: true

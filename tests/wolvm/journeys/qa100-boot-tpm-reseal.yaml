@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 H22 (kernel-boot), BOOT-1: after Secure Boot is turned off (or new firmware changes PCR 7)
+# the chip refuses, the person types the recovery key once, and wolos-tpm-reseal must bind the
+# chip again so the NEXT start is automatic. Disk from
+#   WOLOS_SECBOOT=mok WOLOS_ENCRYPT=tpm WOLOS_KEEP_VM=1 WOLOS_KEEP_DISK=1 tests/test-install.sh ISO
+# (recovery key = the "wolos-install: recovery" line of serial-install.log), then on the host:
+#   wolvm set install --secureboot off
+#   RK=<recovery key> envsubst < this file > /tmp/j.yaml; wolvm journey install /tmp/j.yaml
+# 0.12.1 result (2026-11-04): step "second start, nobody types" FAILS: the prompt
+# "Please enter recovery key for disk WolOS (wolosroot)" comes again on every start; root's user
+# keyring is empty after switch-root ("keyring is empty"), so `wol encrypt reseal` finds nothing
+# and exits 0 (Result=success) without resealing.
+name: chip refused once, recovery key typed, next start is automatic again
+steps:
+- start
+- wait-text: "Please enter recovery key for disk"
+  timeout: 120
+  caption: PCR 7 changed, the chip refuses (expected once)
+- type: "${RK}\n"
+- wait-agent:
+  timeout: 300
+- ssh: "keyctl list @u"
+  save: keyring-after-unlock.txt
+  rc: any
+  caption: what wol encrypt reseal will look for (systemd-cryptsetup's cached secret)
+- ssh: "journalctl -b -u wolos-tpm-reseal -o cat --no-pager; systemctl show -p Result --value wolos-tpm-reseal"
+  save: reseal.txt
+- ssh: "journalctl -b -u wolos-tpm-reseal -o cat --no-pager | grep -c 'opens with the security chip again'"
+  expect: "1"
+  caption: reseal must say it bound the chip again
+- stop
+- start
+- wait-agent:
+  timeout: 240
+  caption: second start, nobody types (fails on 0.12.1: the recovery prompt again)
+- ssh: "journalctl -b -o cat --no-pager | grep -ci 'enter recovery key'"
+  expect: "0"
+- stop:
+  force: true
