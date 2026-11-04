@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 WD-ADR, QA-CRASH-4: no crash evidence was ever kept: coredump.conf.d/wolos.conf had
+# Storage=none with ProcessSizeMax=0, so systemd-coredump read nothing and every crash said
+# "terminated abnormally without generating a coredump". Now ProcessSizeMax=64M: the journal gets
+# the stack trace, still no core file on disk (Storage=none).
+#   wolvm journey crash tests/wolvm/journeys/qa100-wd-adr-crash-evidence.yaml
+name: crash evidence, a crash leaves a stack trace in the journal and no core file
+steps:
+- wait-agent:
+  timeout: 120
+- ssh: "systemd-analyze cat-config systemd/coredump.conf | grep -E '^(Storage|ProcessSizeMax)=' | tr '\\n' ' '"
+  expect: "Storage=none ProcessSizeMax=64M"
+- ssh: "runuser -u $(id -nu 1000) -- sh -c 'sleep 300 & echo $! > /tmp/victim'; sleep 1; kill -SEGV $(cat /tmp/victim); sleep 4; coredumpctl info --no-pager $(cat /tmp/victim) > /tmp/ci.txt 2>&1; grep -c 'without generating a coredump' /tmp/ci.txt; grep -c 'Stack trace of thread' /tmp/ci.txt"
+  expect: "0\n1"
+  save: coredumpctl-info.txt
+  caption: CRASH-4, 0.12.1 prints 1 and 0 (no processing)
+- ssh: "find /var/lib/systemd/coredump -type f | wc -l"
+  expect: "0"
+- logs:
+  n: 100
