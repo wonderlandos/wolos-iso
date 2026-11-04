@@ -887,7 +887,7 @@ fn helium_browser_is_the_signed_official_tarball_repackaged() {
     assert_eq!(hashes.len(), 4, "{sums}");
     assert_eq!(
         hashes[0],
-        "ba92acb27ec6cda36a8b948e2154009aaee0d633222ad244be25e736a143e6fa"
+        "3759ea4e95bf4ef4a0a6477e3d73576b0f03906f2e80357275bfc6cacafb5fac"
     );
     assert_eq!(hashes[1], "SKIP", "the .asc is verified, not hashed");
     for h in [hashes[0], hashes[2], hashes[3]] {
