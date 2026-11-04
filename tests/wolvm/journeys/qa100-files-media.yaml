@@ -41,11 +41,11 @@ steps:
 - ssh: "missing=; for d in $(grep -v '^#' /usr/share/applications/mimeapps.list | grep '=' | cut -d= -f2 | tr ';' '\\n' | sort -u | grep .); do test -f /usr/share/applications/$d || missing=\"$missing $d\"; done; echo missing:$missing; test -z \"$missing\" && echo all-default-apps-present"
   expect: "all-default-apps-present"
   save: mimeapps-targets.txt
-  caption: every default app named in mimeapps.list has a desktop file (eog, Papers, Amberol, Celluloid, FileRoller, TextEditor, Geary, Calendar, helium, Nautilus)
+  caption: every default app named in mimeapps.list has a desktop file (Gallery, Papers, Amberol, Celluloid, FileRoller, TextEditor, Geary, Calendar, helium, Nautilus)
 - ssh: "su -l alice -c 'XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus xdg-mime query default inode/directory'"
   expect: "org.gnome.Nautilus.desktop"
 - ssh: "su -l alice -c 'XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus xdg-mime query default image/png'"
-  expect: "org.gnome.eog.desktop"
+  expect: "org.wolos.gallery.desktop"
 # Removable media: the extra disk mounts for the active session through udisks + polkit (10-wolos.rules).
 - ssh: "lsblk -o NAME,FSTYPE,LABEL,MOUNTPOINT /dev/vdb 2>&1"
   rc: any
