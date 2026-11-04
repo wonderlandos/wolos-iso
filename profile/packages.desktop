@@ -100,6 +100,9 @@ rtkit                  # realtime audio threads (PipeWire)
 # Energy Mode, Low/High Power Mode, `wol power apply`: wol_core::power::policy runs powerprofilesctl
 # (on through wolos-system's 51-wolos-image.preset).
 power-profiles-daemon
+thermald                # Intel's cooling helper (DPTF): holds temperatures before the fan or the throttle; enabled by wolos-system's preset; ends cleanly (SuccessExitStatus=2) on a CPU it does not know, and not in VMs
+fprintd                 # fingerprint readers (libfprint); D-Bus activated, nothing runs without a reader; PAM is not touched
+bolt                    # Thunderbolt/USB4 device authorisation (boltd, D-Bus activated)
 # Terminal: zsh for every account (/etc/zsh/zshenv), sudo for wheel (sudoers.d/wolos)
 zsh-autosuggestions
 zsh-syntax-highlighting

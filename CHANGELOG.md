@@ -7,6 +7,7 @@ lists what changed in the image, its checks and its tests. The four repositories
 ## 0.12.1 (unreleased)
 
 Image
+- Modern-laptop hardware: `fprintd`, `bolt` and `thermald` join the desktop list (4 MiB); README "Hardware support" has the table and what is left off; `checks/tests/image_modern_hardware.rs` keeps the list, the absences and the Doctor rows in step.
 - Package snapshot 2026-11-02: `linux-firmware` 20261019 (the 0.12.0 image had 20260916) and 31 other package updates; `profile/snapshot` and both `pacman.conf` files point at it.
 - The builder image is pinned to a new digest in `.github/builder-image`.
 - `linux-wolos` is 1:1.0+7.3.1-1 (stable Linux 7.3.1); the image checks that pin the kernel version (`checks/tests/image_profile.rs`) follow it.

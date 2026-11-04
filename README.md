@@ -102,6 +102,26 @@ the tools in `$PATH` (the image, a VM, or a directory of candidates first in `$P
 - Not done: busybox/toybox. Arch packages depend on the GNU names, a second provider would add conflicts for no size gain.
 - Revisit when `uutils-findutils` reaches `extra` (then run the matrix, add it to `wolos-base` `provides`/`conflicts` as for coreutils) or when uutils-diffutils passes the `third-` cases. Sources: https://documentation.ubuntu.com/release-notes/26.04/summary-for-lts-users/ (`rust-coreutils`, `sudo-rs`), https://discourse.ubuntu.com/t/an-update-on-rust-coreutils/80773 (cp/mv/rm), https://discourse.ubuntu.com/t/carefully-but-purposefully-oxidising-ubuntu/56995 (findutils/diffutils as opt-in experiments), https://github.com/uutils/findutils-tracking and https://github.com/uutils/diffutils-tracking (suite results), Launchpad `rust-coreutils`, `rust-findutils`, `rust-diffutils` publishing history.
 
+## Hardware support
+
+Added 2026-11-04 (order: "use advanced drivers of Intel etc."). What a 2020-and-newer Intel or AMD laptop needs, what the image ships for it, and the `wol doctor hardware` row that reads it (wolos `docs/modules/hardware.md` has the long table and the reasons for each absence). `checks/tests/image_modern_hardware.rs` keeps the list, the absences and the doctor rows in step.
+
+| Need | On the image (`profile/packages.*`) | Size added |
+|---|---|---|
+| Video decode (VA-API) | `mesa` (AMD), `intel-media-driver` (Intel Broadwell+), `libva-utils` | already shipped |
+| Vulkan | `vulkan-intel` (anv, hasvk), `vulkan-radeon` (RADV), loader, tools, `lib32-` pair | already shipped |
+| Wi-Fi, Bluetooth, GPU, audio firmware | `linux-firmware` (meta: every split part), `intel-ucode`, `amd-ucode`, `sof-firmware`, `wireless-regdb` | already shipped |
+| Fingerprint reader | `fprintd` (+ `libfprint`) | 3.0 MiB installed |
+| Thunderbolt, USB4 | `bolt` | 0.4 MiB |
+| Cooling (Intel) | `thermald`, enabled by `wolos-system`'s preset | 0.7 MiB |
+| Power modes | `power-profiles-daemon` (the only power daemon) | already shipped |
+
+Left off (each with its reason in the wolos doc): the X11 DDX drivers (`xf86-video-*`, Wayland only), `intel-compute-runtime` and `intel-graphics-compiler` (393 MiB, on demand), `linux-firmware-qcom` (210 MiB, not x86), `tlp` and `auto-cpufreq` (a second power daemon), NVIDIA (installed online by the hardware catalogue).
+
+## x86-64-v3
+
+Evaluated 2026-11-04 for our own packages (`wolos-*`, `hyprland-wolos`, `rsh`); numbers, decision and the installer guard are in wolos `docs/modules/x86-64-v3.md`. The forge builds the standard `x86-64` flavour; `wolos-build pkg --march v3` builds the same recipes as `x86_64_v3` packages into a separate output (`out-v3`) for a `[wolos-v3]` repo that `wol mirror gate` would turn on with the CachyOS ones on AVX2 CPUs only.
+
 ## Tuning
 
 wolos `files/usr/lib/sysctl.d/70-wolos-performance.conf`, `systemd/*.conf.d/70-wolos-limits.conf`, `systemd/*.conf.d/70-wolos-malloc.conf` (glibc thread cache: 64 chunks per bin instead of 7), `etc/security/limits.d`, and the PipeWire/WirePlumber drop-ins under wolos `files/usr/share` hold the game and audio defaults (values from CachyOS-Settings and Bazzite). PipeWire's minimum quantum is 64 frames so VMs keep working. No `PROTON_*` defaults are set globally: each is game-specific, so `wol games` sets them per title.
