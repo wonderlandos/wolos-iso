@@ -21,6 +21,12 @@ steps:
   rc: any
   save: locales-before.txt
   caption: which locales exist on the machine
+- ssh: "for l in en_US de_DE pt_BR ja_JP zh_CN; do locale -a | grep -q \"^$l\\.utf8$\" && echo \"$l ok\" || echo \"$l MISSING\"; done"
+  rc: any
+  save: locales-generated.txt
+  caption: SET-27 (fixed by A1) every language Settings offers is generated at install (locale.gen), English (US) included
+- ssh: "locale -a | grep -c -e '^en_US.utf8$' -e '^de_DE.utf8$' -e '^pt_BR.utf8$' -e '^ja_JP.utf8$' -e '^zh_CN.utf8$'"
+  expect: "5"
 - ssh: "u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 sh -c 'nohup wol-settings \"Language & Region\" >/dev/null 2>&1 &'; sleep 3; echo launched"
   expect: "launched"
 - wait-stable:
@@ -37,7 +43,10 @@ steps:
 - ssh: "h=$(getent passwd 1000 | cut -d: -f6); grep -o '\"language\"[^,}]*' \"$h/.config/wolos/desktop.json\"; grep -n 'LANG\\|LC_ALL' \"$h/.config/hypr/\"*.lua \"$h/.config/hypr/\"*.conf 2>/dev/null"
   rc: any
   save: language-saved.txt
-  caption: the pref and the exported LANG/LC_ALL
+  caption: the pref and the exported LANG (SET-27 fixed: never LC_ALL)
+- ssh: "h=$(getent passwd 1000 | cut -d: -f6); grep -c LC_ALL \"$h/.config/hypr/\"*.lua 2>/dev/null | grep -v ':0' || echo no-lc-all"
+  expect: "no-lc-all"
+  rc: any
 - ssh: "u=$(id -nu 1000); runuser -u \"$u\" -- env LC_ALL=de_DE.UTF-8 LANG=de_DE.UTF-8 sh -c 'locale 2>&1 | head -3; date +%A'"
   rc: any
   save: locale-check.txt

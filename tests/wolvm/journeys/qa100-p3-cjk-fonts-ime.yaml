@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# QA100-P3 B-02, B-03, B-04: Japanese and Chinese are offered in Language & Region, but the image
-# has no CJK font (packages.desktop: noto-fonts, noto-fonts-emoji only), no input method (no fcitx5
-# or ibus, no GTK_IM_MODULE/QT_IM_MODULE/XMODIFIERS), and the clock and date are English literals
-# in 24-hour form whatever the language (clock.rs DAYS/MONTHS, datetime.rs clock_line).
+# QA100-P3 B-02, B-03, B-04 and the A9 fixes (QA-ACC-12, QA-LIVE-11, QA-LIVE-12): Japanese and Chinese
+# are offered in Language & Region, so the image must draw them (noto-fonts-cjk in packages.desktop,
+# /etc/fonts/conf.d/70-wolos-cjk-arabic.conf from wolos-system), the terminal must draw emoji, Hebrew and
+# Arabic and carry the title "Terminal" (not foot's own "foot"), and the optional "Input methods"
+# module (ime: fcitx5) must be listed and export XMODIFIERS/QT_IM_MODULE once installed. The clock and
+# date are English literals in 24-hour form whatever the language (clock.rs DAYS/MONTHS, datetime.rs
+# clock_line): the last steps are for the record.
 # Needs an installed disk with the test account (Alice Liddell / curiouser).
 # wolvm journey <vm> tests/wolvm/journeys/qa100-p3-cjk-fonts-ime.yaml
 name: CJK fonts, input method and locale-formatted dates
@@ -17,11 +20,57 @@ steps:
 - wait-stable:
   timeout: 120
   caption: desktop up
-- ssh: "echo 'fonts ja:'; fc-list :lang=ja family | head -3; echo 'fonts zh:'; fc-list :lang=zh-cn family | head -3; echo 'fonts ko:'; fc-list :lang=ko family | head -3; echo 'fonts ar:'; fc-list :lang=ar family | head -3; echo 'ime packages:'; pacman -Qq | grep -E '^(fcitx|ibus|anthy|mozc|rime)' ; echo 'im env:'; u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus systemctl --user show-environment | grep -E 'IM_MODULE|XMODIFIERS'; echo probe-done"
+# QA-ACC-12 / QA-LIVE-11: the font the system picks per language (fc-match :lang=...) is a real face.
+- ssh: "fc-match -f '%{family}\\n' ':lang=ja'"
+  expect: "Noto Sans CJK"
+  save: fc-match-ja.txt
+  caption: ASSERT (QA-ACC-12) Japanese text gets Noto Sans CJK, not Noto Sans (no glyphs)
+- ssh: "fc-match -f '%{family}\\n' ':lang=zh-cn'"
+  expect: "Noto Sans CJK"
+  save: fc-match-zh.txt
+- ssh: "fc-match -f '%{family}\\n' ':lang=ko'"
+  expect: "Noto Sans CJK"
+  save: fc-match-ko.txt
+- ssh: "fc-match -f '%{family}\\n' ':lang=ar'"
+  expect: "Noto Sans Arabic"
+  save: fc-match-ar.txt
+  caption: ASSERT (QA-LIVE-11) Arabic gets Noto Sans Arabic, not Noto Nastaliq Urdu
+- ssh: "fc-match -f '%{family}\\n' ':lang=he'"
+  expect: "Noto Sans Hebrew"
+  save: fc-match-he.txt
+- ssh: "fc-match -f '%{family}\\n' 'sans-serif'; fc-match -f '%{family}\\n' 'monospace'"
+  expect: "JetBrains Mono"
+  save: fc-match-latin.txt
+  caption: Latin text stays Inter (sans-serif) and JetBrains Mono (monospace); the CJK file does not take them over
+- ssh: "fc-list : family | grep -c 'Noto Color Emoji'"
+  expect: "1"
+# Terminal (foot): title and glyphs. The text is printed, not pasted, by a program running in the window
+# (no clipboard tool needed); the shot is the proof for QA-LIVE-11 (terminal-paste-renders).
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f foot -e sh -c \"printf '%s\\n' '🐇🎩✨ שלום עולם مرحبا بالعالم 日本語 中文 한국어'; sleep 300\" >/dev/null 2>&1; sleep 3; pgrep -u 1000 -x foot >/dev/null && echo foot-running"
+  expect: "foot-running"
+- wait-stable:
+  timeout: 30
+- shot: terminal-paste-renders
+  caption: "ASSERT (QA-LIVE-11): the line shows rabbit, hat, sparkles, Hebrew, Arabic, Japanese, Chinese and Korean as glyphs. BUG if boxes or '>....'"
+- ssh: "u=$(id -nu 1000); sig=$(ls /run/user/1000/hypr | head -1); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=\"$sig\" hyprctl clients -j | grep -E '\"(class|title)\"' | grep -A1 foot"
+  expect: "\"title\": \"Terminal\""
+  save: foot-title.txt
+  caption: ASSERT (QA-LIVE-12) the window title is Terminal, like the menu bar, not foot
+- ssh: "pkill -u 1000 -x foot; echo closed"
   rc: any
-  expect: "probe-done"
-  save: cjk-fonts-ime.txt
-  caption: "BUG (B-03) if 'fonts ja/zh/ko' are empty; BUG (B-02) if no IME package and no IM env. Arabic is not offered, its line is for the record"
+  expect: "closed"
+# B-02: the Input methods module is a registry record with its recipe; the session half is shipped.
+- ssh: "wol modules status ime; wol modules status scanner"
+  expect: "fcitx5"
+  save: modules-ime-scanner.txt
+  caption: ASSERT the ime and scanner modules are listed with their packages and a download size
+- ssh: "test -r /etc/profile.d/wolos-ime.sh && sh -c '. /etc/profile.d/wolos-ime.sh; echo XMOD=${XMODIFIERS:-unset}'"
+  expect: "XMOD=unset"
+  caption: without fcitx5 installed the session exports nothing (the module is off)
+- ssh: "pacman -Si wolos-module-ime wolos-module-scanner 2>&1 | grep -E '^(Name|Depends On)'"
+  rc: any
+  save: module-recipes.txt
+  caption: the recipes are in the [wolos] repo (network or a synced list needed; the line is for the record)
 - ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings 'Language & Region' >/dev/null 2>&1; sleep 3; pgrep -u 1000 -x wol-settings >/dev/null && echo settings-running"
   expect: "settings-running"
 - wait-stable:

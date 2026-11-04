@@ -56,11 +56,9 @@ steps:
 - ssh: "test -x /usr/sbin/acpiconf && echo have-acpiconf || echo no-acpiconf"
   expect: "no-acpiconf"
   caption: the image has no acpiconf (FreeBSD): wol-login must not call it for Sleep
-- ssh: "shutdown -p +60 >/tmp/shutdown-p.txt 2>&1; rc=$?; shutdown -c >/dev/null 2>&1; cat /tmp/shutdown-p.txt; echo rc=$rc"
-  expect: "rc=0"
-  rc: any
-  save: shutdown-p.txt
-  caption: H4-1 `shutdown -p now` is what wol-login runs for Shut Down; systemd's shutdown has no -p (passes only after the fix)
+- ssh: "grep -c -a -e acpiconf -e /sbin/shutdown /usr/bin/wol-login || true"
+  expect: "0"
+  caption: H4-1 (fixed by A1) wol-login no longer names the FreeBSD commands; Sleep, Restart and Shut Down run systemctl suspend, reboot, poweroff
 - ssh: "systemctl --dry-run suspend && systemctl --dry-run poweroff && systemctl --dry-run reboot && echo systemctl-verbs-ok"
   expect: "systemctl-verbs-ok"
   caption: the verbs the session menu uses (admin::session_power_argv) exist; the login window should use the same

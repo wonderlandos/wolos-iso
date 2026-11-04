@@ -2,7 +2,7 @@
 # QA-100 P1 (persona "first day"): first boot of an installed disk with no account, the Setup
 # Assistant in Portuguese (Brasil), the desktop that follows, Software Update, the Store, Lock,
 # the Shut Down sheet and the second boot. Proves P1-02 (language chosen in Setup never reaches
-# the session: LANG stays C.UTF-8, no pt_BR locale generated; builds on H4-3 and H1 D1), P1-03
+# the session; FIXED by A1: /etc/locale.conf LANG=pt_BR.UTF-8, every language generated at install; builds on H4-3 and H1 D1), P1-03
 # (Updates Available notice next to "WolOS is up to date"; builds on H2 U7), P1-05 (no Sleep or
 # Restart reachable with the mouse), P1-06 (second boot shows the lock screen, the manual says the
 # login window; builds on H3-7) and P1-08 (hostname and time zone untouched: H3-8).
@@ -70,14 +70,20 @@ steps:
 - ssh: "loginctl list-sessions --no-legend | grep -q aliceliddell && echo session-up"
   expect: "session-up"
 - ssh: "cat /etc/locale.conf; locale -a"
+  expect: "LANG=pt_BR.UTF-8"
   save: locale.txt
-  caption: P1-02, the disk has LANG=C.UTF-8 and only the C locales
-- ssh: "P=$(pgrep -u 1000 -n wol-shell); tr '\\0' '\\n' < /proc/$P/environ | grep '^LANG='"
-  expect: "LANG=C.UTF-8"
-  caption: P1-02, the session is not Portuguese (Setup wrote ~/.login_conf, a FreeBSD file: H4-3)
-- ssh: "cat /home/aliceliddell/.login_conf"
-  expect: "pt_BR"
-  save: login_conf.txt
+  caption: P1-02 / FILES-3 (fixed), /etc/locale.conf says LANG=pt_BR.UTF-8 and every language is generated (pt_BR.utf8, de_DE.utf8, ja_JP.utf8, en_US.utf8 in locale -a)
+- ssh: "locale -a | grep -c -e '^pt_BR.utf8$' -e '^en_US.utf8$' -e '^de_DE.utf8$' -e '^ja_JP.utf8$'"
+  expect: "4"
+  caption: SET-27, the locales Settings offers exist on the machine
+- ssh: "P=$(pgrep -u 1000 -n wol-shell); tr '\\0' '\\n' < /proc/$P/environ | grep -e '^LANG=' -e '^LC_ALL=' || true"
+  expect: "LANG=pt_BR.UTF-8"
+  caption: P1-02 (fixed), the session is Portuguese: LANG from /etc/locale.conf through the login shell's profile.d, and no LC_ALL
+- ssh: "P=$(pgrep -u 1000 -n wol-shell); tr '\\0' '\\n' < /proc/$P/environ | grep -c '^LC_ALL=' || true"
+  expect: "0"
+  caption: SET-27, LC_ALL is never exported
+- ssh: "test ! -e /home/aliceliddell/.login_conf && echo no-freebsd-login-conf"
+  expect: "no-freebsd-login-conf"
 - ssh: "timedatectl show | grep Timezone; cat /etc/hostname"
   save: zone-host.txt
   caption: P1-08 / H3-8, UTC and the name wolos, nothing in Setup asked
