@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 live-4 F1 (CRITICAL): Settings > Software Update > Update Now never worked on an installed
+# system: wol-admind (PATH=/usr/bin:/usr/sbin, cleared env) ran a bare `pacman -Syu` that is the real
+# pacman, not the sealed system's wrapper, could not lock the read-only database, threw its stderr
+# away, and the page blamed the person's internet. This tree builds the update in the other root
+# slot from absolute paths (core update::pkg, api admind update_now) and logs the step's own words.
+# UNRUN here (needs the installed-up checkpoint with the network up): written for the VM run.
+# Update Now = the `pkg-upgrade` request to wol-admind; `wol update install` sends the same request.
+#   wolvm snapshot-restore inst installed-up && wolvm journey inst tests/wolvm/journeys/qa100-update-now-installed.yaml
+name: Update Now on an installed system builds the other slot and says why when it cannot
+steps:
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+- ssh: "grep -o 'subvol=@wolos-[ab]' /proc/cmdline; bootctl list --json=short | grep -c '\"id\"'"
+  save: before.txt
+# The admin daemon's own environment: a bare `pacman` there is the real one (live-4 F1).
+- ssh: "env -i PATH=/usr/bin:/usr/sbin command -v pacman; ls -l /usr/local/bin/pacman"
+  rc: any
+  save: pacman-resolution.txt
+  caption: under wol-admind's PATH `pacman` is /usr/bin/pacman; the wrapper is only in /usr/local/bin
+# Update Now as the person at the computer: the same pkg-upgrade request, password on stdin.
+- ssh: "printf 'curiouser\\n' | su -l alice -c 'timeout 1700 wol update install --json' >/tmp/update-now.log 2>&1; echo rc=$?; tail -5 /tmp/update-now.log"
+  timeout: 1800
+  rc: any
+  save: update-now.txt
+- ssh: "journalctl -u wol-admind --no-pager -n 40 | grep 'pkg-upgrade'"
+  rc: any
+  save: admind-journal.txt
+  caption: the journal names the restore point and the slot it updates into
+# Either the other slot was built (success), or the journal carries the step's own words.
+- ssh: "j=$(journalctl -u wol-admind --no-pager -n 60); if echo \"$j\" | grep -q 'updated into wolos-'; then echo built; elif echo \"$j\" | grep 'pkg-upgrade' | grep -q 'failed: '; then echo failed-with-reason; else echo failed-without-reason; fi"
+  expect: "built|failed-with-reason"
+  caption: "F1: never 'pkg-upgrade: failed' with nothing behind it"
+- ssh: "grep -ci 'check that you.re online' /tmp/update-now.log || true"
+  rc: any
+  save: no-network-blame.txt
+  caption: the page's old sentence for any failure was the network one; it is not printed for a failure that is not the network
+- ssh: "test -d /run/wolos/top/@wolos-a -o -d /run/wolos/top/@wolos-b && echo running-slot-still-there"
+  expect: "running-slot-still-there"
+  caption: the restore point is untouched either way
+- logs:
+  n: 300
+- stop

@@ -79,6 +79,15 @@ steps:
 - ssh: "grep -qiE 'already|in progress|another update|lock' /tmp/apply4.log && echo second-refused"
   expect: "second-refused"
   caption: "U4: a second update while one runs is refused with a sentence, not run beside it"
+# U4 (wol-admind half, QA-100 B1): Update Now from Settings is the same admin request; it must not
+# start a second slot build beside the running one either, and must say why.
+- ssh: "wol admin pkg-upgrade </dev/null >/tmp/apply5.log 2>&1; echo update-now-rc=$?; cat /tmp/apply5.log; journalctl -t wol-admind -b --no-pager -n 20 | grep -i 'another update' || true"
+  timeout: 120
+  rc: any
+  save: update-now-while-locked.txt
+- ssh: "grep -qi 'another update is running' /tmp/apply5.log && echo update-now-refused"
+  expect: "update-now-refused"
+  caption: "U4: Update Now while a slot update runs is refused with the sentence, and nothing started"
 - ssh: "n=0; while [ $n -lt 1700 ] && ! grep -q '^rc=' /tmp/apply3.log; do sleep 5; n=$((n+5)); done; tail -3 /tmp/apply3.log"
   timeout: 1800
   rc: any

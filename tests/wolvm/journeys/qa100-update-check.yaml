@@ -37,6 +37,39 @@ steps:
   rc: any
   save: pacman-qu-rc.txt
   caption: what the real pacman answers for -Qu with nothing pending (1 means U1 bites)
+# QA-STORE-57 (first-login-no-banner): the release a fresh install runs is not an update. The
+# check's signed base is the running version, so `wol update status` counts 0 and the shell, which
+# applies the same `installed(running)` filter, never posts "Updates Available".
+- ssh: "echo running: $(cat /usr/lib/wolos-release.json); echo status: $(wol update status --json); wol update status --json | grep -q 'count.:0' && echo count-zero"
+  expect: "count-zero"
+  save: first-login-no-banner.txt
+  caption: first-login-no-banner - a release equal to the running one counts 0
+- ssh: "sleep 330; ! grep -q 'Updates Available' /home/alice/.local/state/wolos/notify.json 2>/dev/null && echo no-updates-banner"
+  timeout: 400
+  expect: "no-updates-banner"
+  caption: first-login-no-banner - two due polls later the notification history has no "Updates Available"
+# click-notice (live-1 M1): a banner "Updates Available" has a default action that opens Software
+# Update. Forge one newer package in the check's findings, wait for the due poll, click the banner.
+- ssh: "cd /var/lib/wolos/updates && printf 'wol-shell 0.12.1-1 -> 0.12.9-1\\n' > pkg && date +%s > checked && chmod 644 pkg checked && echo forged-package-update"
+  expect: "forged-package-update"
+  caption: click-notice - a package update the shell has not told about yet
+- ssh: "sleep 330; su -l alice -c 'WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/$(id -u alice) pgrep -f \"notify-send -a WolOS -w -A default=Open\" >/dev/null && echo banner-waits-for-click'"
+  timeout: 400
+  rc: any
+  expect: "banner-waits-for-click"
+  caption: click-notice - the banner process waits on the default=Open action (a banner without it would have no process)
+- screenshot: click-notice-banner
+- note: "EDIT the click below to the banner's centre from click-notice-banner.png (top right, under the menu bar), then rerun from this step."
+- click: 1500 90
+  caption: click-notice - click the banner
+- wait-stable:
+  timeout: 20
+- ssh: "pgrep -u $(id -u alice) -af 'wol-settings.*Software Update' && echo settings-opened-on-software-update"
+  rc: any
+  expect: "settings-opened-on-software-update"
+  caption: click-notice - the click opened Settings on Software Update
+- ssh: "rm -f /var/lib/wolos/updates/pkg /var/lib/wolos/updates/checked"
+  rc: any
 # Offline: no stamp, an honest sentence.
 - ssh: "nmcli networking off || ip link set dev $(ip -o route get 1.1.1.1 2>/dev/null | awk '{print $5}') down; sleep 2; ip -br addr"
   rc: any
