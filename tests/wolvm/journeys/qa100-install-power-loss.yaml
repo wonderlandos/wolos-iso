@@ -8,13 +8,10 @@
 name: power loss during an install, then a second install on the same disk
 steps:
 - start
-- wait-text: "wolos-install: files 15"
+- power-cut: "files 15"
   timeout: 900
-  caption: the first install reached "Copying WolOS"
-- sleep: 20
-- stop:
-  force: true
-  caption: the power cut (qemu killed, nothing synced)
+  delay: 20
+  caption: the first install reached "Copying WolOS" (wolos-install: files 15); 20 s later the power cut (qemu killed, nothing synced)
 - start:
   caption: the stick again, the same autoinstall words
 - wait-agent:

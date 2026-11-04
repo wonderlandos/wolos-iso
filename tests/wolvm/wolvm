@@ -7,12 +7,15 @@ the installer, the reboot into the installed disk, login and the apps. Python 3 
   wolvm new NAME --iso X | --from-image DISK [--disk 40G] [--mem 6G] [--smp 4] [--tpm] [--secureboot]
             [--gpu virtio|vmsvga|std|qxl|virtio-gl | --virtio | --vmsvga] [--res 1280x800]
             [--ssh] [--direct] [--append ARGS] [--cred NAME=VALUE]... [--force]
-            [--drive FILE[,ro|,snapshot]]... [--no-net] [--iso-bus ide|virtio]
+            [--drive FILE[,ro|,snapshot]]... [--no-net] [--iso-bus ide|virtio] [--no-tpm]
+            [--audio N] [--displays N] [--s3] [--disk-bus virtio|nvme|sata] [--disk-lbs B] [--disk-pbs B]
+            [--extra-bus virtio|nvme|sata] [--extra-lbs B] [--extra-pbs B] [--qemu-arg ARGS]...
   wolvm start NAME | stop NAME [--force] | status NAME | list | rm NAME
   wolvm set NAME [--boot disk|cdrom] [--iso X | --no-iso] [--append ARGS] [--mem M] [--gpu G]
-            [--secureboot on|off] [--net on|off]
+            [--secureboot on|off] [--net on|off] [--tpm on|off] [--audio N] [--displays N] [--s3 on|off]
   wolvm eject NAME                           take the ISO out of the running VM
-  wolvm screenshot NAME OUT.png              QMP screendump; prints "OUT.png WxH"
+  wolvm screenshot NAME OUT.png [--head N]   QMP screendump; prints "OUT.png WxH" (--head: --displays VMs)
+  wolvm frames NAME DIR [--every MS] [--for S]  burst of screenshots (no pointer nudge) DIR/frame-NNN.png
   wolvm wait-stable NAME [--timeout S]       until two screens 2 s apart are identical
   wolvm type NAME TEXT                       US keyboard; \\n in TEXT is Enter (use $'..' in sh)
   wolvm key NAME COMBO...                    ctrl-alt-t ret esc tab super f2 ... one combo per arg
@@ -24,6 +27,14 @@ the installer, the reboot into the installed disk, login and the apps. Python 3 
   wolvm ssh-open NAME                        --ssh VMs: start sshd + accept port 22 in the guest (this boot)
   wolvm logs NAME [-n N] [-u UNIT] [-o FILE] journal of the current boot (serial log as fallback)
   wolvm snapshot NAME save|restore|list|delete [TAG]   running: whole VM (savevm); stopped: disks
+  wolvm qmp NAME JSON|COMMAND [ARGS-JSON]    one raw QMP command, prints the reply
+  wolvm plug NAME usb-audio|usb-storage|usb-kbd|usb-mouse [--file IMG] [--id ID] [--ro]   hot-plug (xhci)
+  wolvm unplug NAME ID                       hot-unplug what plug added
+  wolvm display NAME N on|off                connector Virtual-N plugged/unplugged in the guest (DRM force)
+  wolvm suspend NAME | wake NAME             S3 (VM made with --s3): systemctl suspend / system_wakeup
+  wolvm power-cut NAME --at REGEX [--timeout S] [--delay S]   kill QEMU when the install log reaches a stage
+  wolvm disk-edit NAME [--nbd DEV] [--key-file F] [--read-only] [--no-snapshot] CMD   stopped VM only:
+                                             disk via qemu-nbd, ESP/@var/@wolos-a/top mounted, CMD as root
   wolvm journey NAME FILE [--out DIR] [--from N] [--keep-going]  replay steps, a screenshot each
   wolvm report DIR                           DIR/report.md + DIR/index.html for a human
 Global: --dry-run (print the qemu command / QMP JSON, run nothing), --home DIR (or $WOLVM_HOME).
@@ -41,6 +52,13 @@ GPUS = {"virtio": ["-device", "virtio-vga,xres={x},yres={y}"],
         "vmsvga": ["-device", "vmware-svga"], "std": ["-device", "VGA,xres={x},yres={y}"],
         "qxl": ["-device", "qxl-vga,xres={x},yres={y}"]}
 DRY = False
+DISK_BUSES = ("virtio", "nvme", "sata")
+# HDA cards for --audio N, in order: (controller, codec). The first is the classic intel-hda with a
+# duplex codec (output + input), the second the ICH9 one with an output-only codec (the QA-100 devices
+# hunters' pair), then two more for "many cards" cases. All play into the null audiodev snd0.
+AUDIO_CARDS = [("intel-hda", "hda-duplex"), ("ich9-intel-hda", "hda-output"), ("intel-hda", "hda-micro"),
+               ("ich9-intel-hda", "hda-duplex")]
+MAX_DISPLAYS = 4
 
 
 def read_file(path, mode="r"):
@@ -123,11 +141,92 @@ def qmp_button(button, down):
             "arguments": {"events": [{"type": "btn", "data": {"button": button, "down": down}}]}}
 
 
-def qmp_screendump(path, fmt="png"):
+def qmp_screendump(path, fmt="png", device=None, head=None):
     a = {"filename": path}
     if fmt != "ppm":
         a["format"] = fmt
+    if device:
+        a["device"] = device
+    if head is not None:
+        a["head"] = int(head)
     return {"execute": "screendump", "arguments": a}
+
+
+def qmp_parse(text, args_json=None):
+    """'{"execute": ...}' as it is, or a bare command name ('system_wakeup', 'query-status') with
+    optional JSON arguments: one QMP message."""
+    t = text.strip()
+    if t.startswith("{"):
+        msg = json.loads(t)
+        if not isinstance(msg, dict) or "execute" not in msg:
+            raise ValueError(f"qmp: not a QMP command: {t[:80]}")
+        return msg
+    cmd, _, rest = t.partition(" ")
+    if not re.fullmatch(r"[a-z][a-z0-9_-]*", cmd):
+        raise ValueError(f"qmp: bad command {cmd!r}")
+    a = args_json if args_json is not None else rest.strip()
+    msg = {"execute": cmd}
+    if a:
+        msg["arguments"] = json.loads(a) if isinstance(a, str) else a
+    return msg
+
+
+USB_KINDS = {"usb-audio": "usbaudio", "usb-storage": "usbstick", "usb-kbd": "usbkbd", "usb-mouse": "usbmouse"}
+
+
+def plug_msgs(kind, dev_id, file=None, ro=False):
+    """QMP messages that hot-plug one USB device on the VM's xhci bus (qemu-xhci,id=xhci). usb-audio
+    plays into the VM's audiodev snd0 (always present); usb-storage is a raw image as a removable stick."""
+    if kind not in USB_KINDS:
+        raise ValueError(f"plug: kind must be one of {', '.join(sorted(USB_KINDS))}")
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,30}", dev_id):
+        raise ValueError(f"plug: bad id {dev_id!r}")
+    dev = {"driver": kind, "id": dev_id, "bus": "xhci.0"}
+    msgs = []
+    if kind == "usb-storage":
+        if not file:
+            raise ValueError("plug usb-storage needs an image file")
+        node = dev_id + "-blk"
+        msgs.append({"execute": "blockdev-add", "arguments": {
+            "driver": "raw", "node-name": node, "read-only": bool(ro),
+            "file": {"driver": "file", "filename": file, "read-only": bool(ro)}}})
+        dev.update({"drive": node, "removable": True})
+    elif kind == "usb-audio":
+        dev["audiodev"] = "snd0"
+    msgs.append({"execute": "device_add", "arguments": dev})
+    return msgs
+
+
+def unplug_msgs(dev_id, kind=None):
+    """device_del, then (usb-storage) blockdev-del of its node once the guest let the device go."""
+    msgs = [{"execute": "device_del", "arguments": {"id": dev_id}}]
+    if kind == "usb-storage":
+        msgs.append({"execute": "blockdev-del", "arguments": {"node-name": dev_id + "-blk"}})
+    return msgs
+
+
+def display_cmd(n, on):
+    """Guest shell: plug (on) or unplug (off) connector Virtual-N of virtio-gpu through the DRM
+    debugfs force file, then a udev change so the compositor sees a hotplug (what the QA-100 hunters
+    did by hand). Prints the connector status after."""
+    n = int(n)
+    if n < 1:
+        raise ValueError("display: connector numbers start at 1")
+    state = "on" if on else "off"
+    return ("mountpoint -q /sys/kernel/debug || mount -t debugfs none /sys/kernel/debug; "
+            f"F=$(ls /sys/kernel/debug/dri/*/Virtual-{n}/force 2>/dev/null | head -1); "
+            f"[ -n \"$F\" ] || {{ echo 'no connector Virtual-{n} (wolvm new --displays N)'; exit 3; }}; "
+            f"echo {state} > \"$F\" && udevadm trigger --action=change --subsystem-match=drm && udevadm settle -t 5; "
+            f"cat /sys/class/drm/card*-Virtual-{n}/status")
+
+
+INSTALL_STAGE_CMD = "grep -a '^wolos-install:' /run/wolos/install/log 2>/dev/null | tail -n 1"
+
+
+def last_install_stage(text):
+    """The last 'wolos-install: <stage>' line of a log text, or ''."""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip().startswith("wolos-install:")]
+    return lines[-1] if lines else ""
 
 
 def qmp_hmp(line):
@@ -168,6 +267,8 @@ VERBS = {  # verb -> how its argument string splits: "one" (whole), "words", "no
     "click": "words", "wait-text": "one", "wait-agent": "none", "wait-stable": "none", "sleep": "one",
     "ssh": "one", "exec": "one", "logs": "none", "checkpoint": "one", "snapshot-save": "one",
     "snapshot-restore": "one", "eject": "none", "boot": "one", "note": "one", "serial-send": "one",
+    "qmp": "one", "plug": "words", "unplug": "one", "display": "words", "suspend": "none", "wake": "none",
+    "frames": "one", "power-cut": "one", "disk-edit": "one",
 }
 
 
@@ -221,24 +322,56 @@ def parse_step(item):
         args = [_unquote(arg)]
     else:
         args = [str(arg)]
-    if kind in ("one", "words") and not args and verb not in ("shot", "screenshot", "checkpoint", "boot"):
+    if kind in ("one", "words") and not args and verb not in ("shot", "screenshot", "checkpoint", "boot", "frames"):
         raise ValueError(f"{verb}: needs an argument")
     return {"verb": verb, "args": args, "opts": opts}
 
 
+def _block(lines, i, parent_indent):
+    """A YAML literal block ('key: |' or '|-'): the lines after i indented deeper than the key,
+    dedented by the first one's indent. Returns (text without the final newline, next index)."""
+    out, ind, j = [], None, i + 1
+    while j < len(lines):
+        ln = lines[j]
+        if ln.strip():
+            k = len(ln) - len(ln.lstrip(" "))
+            if k <= parent_indent:
+                break
+            ind = k if ind is None else ind
+            out.append(ln[min(ind, k):])
+        else:
+            out.append("")
+        j += 1
+    while out and not out[-1]:
+        out.pop()
+    return "\n".join(out), j
+
+
 def parse_yaml_steps(text):
     """The YAML subset journeys use: optional top-level 'key: value' lines, then '- step' items,
-    each either '- verb args' or '- verb: value' with indented 'option: value' lines under it."""
+    each either '- verb args' or '- verb: value' with indented 'option: value' lines under it.
+    A value of '|' or '|-' takes the deeper-indented lines below as a literal block (shell scripts)."""
     meta, items, cur = {}, [], None
-    for n, line in enumerate(text.splitlines(), 1):
+    lines = text.splitlines()
+    n = 0
+    while n < len(lines):
+        line = lines[n]
+        n += 1
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         s = line.strip()
+        indent = len(line) - len(line.lstrip(" "))
         if s.startswith("- ") or s == "-":
             body = s[1:].strip()
             m = re.match(r"^([A-Za-z][\w-]*):(?:\s+(.*))?$", body)
             if m and m.group(1) in VERBS:
-                cur = {m.group(1): _scalar(m.group(2) or "")}
+                v = (m.group(2) or "").strip()
+                if v in ("|", "|-"):
+                    # the item's keys sit at indent + 2 ("- " then the key): the block is deeper
+                    v, n = _block(lines, n - 1, indent + 2)
+                    cur = {m.group(1): v}
+                else:
+                    cur = {m.group(1): _scalar(v)}
                 items.append(cur)
             else:
                 cur = None
@@ -247,7 +380,10 @@ def parse_yaml_steps(text):
             m = re.match(r"^([A-Za-z][\w-]*):\s*(.*)$", s)
             if not m:
                 raise ValueError(f"line {n}: expected 'option: value'")
-            cur[m.group(1)] = _scalar(m.group(2))
+            if m.group(2).strip() in ("|", "|-"):
+                cur[m.group(1)], n = _block(lines, n - 1, indent)
+            else:
+                cur[m.group(1)] = _scalar(m.group(2))
         else:
             m = re.match(r"^([A-Za-z][\w-]*):\s*(.*)$", s)
             if not m:
@@ -296,9 +432,38 @@ def default_append(cfg, live=True):
     VM boots the ISO (wolos.autoinstall must never reach the installed system). systemd-boot and
     systemd-stub take it from SMBIOS type 11 (ignored with Secure Boot on)."""
     a = "console=tty0 console=ttyS0,115200" if cfg.get("console", True) else ""
+    # --displays N: heads 2..N start connected (virtio-gpu reports only head 1 until the UI enables
+    # the others, and -display none never does): video=Virtual-K:WxHe forces each one on.
+    for k in range(2, int(cfg.get("displays", 1) or 1) + 1):
+        a = (a + f" video=Virtual-{k}:{cfg.get('res') or '1280x800'}e").strip()
     if live and cfg.get("append"):
         a = (a + " " + cfg["append"]).strip()
     return a
+
+
+def blk_device(bus, drive, n, lbs=None, pbs=None, boot=""):
+    """-device args for one disk on bus virtio|nvme|sata (sata: port n of the ich9-ahci ahci0),
+    with optional logical/physical block sizes (512, 4096: 4Kn and 512e disks)."""
+    if bus not in DISK_BUSES:
+        raise ValueError(f"disk bus must be one of {', '.join(DISK_BUSES)}")
+    sz = (f",logical_block_size={int(lbs)}" if lbs else "") + (f",physical_block_size={int(pbs)}" if pbs else "")
+    if bus == "nvme":
+        return ["-device", f"nvme,drive={drive},serial=WOLNVME{n}{sz}{boot}"]
+    if bus == "sata":
+        return ["-device", f"ide-hd,drive={drive},bus=ahci0.{n}{sz}{boot}"]
+    return ["-device", f"virtio-blk-pci,drive={drive}{sz}{boot}"]
+
+
+def gpu_args(cfg, x, y):
+    """The display device. --displays N (virtio, virtio-gl) sets max_outputs=N and the id vga0 that
+    a per-head screendump names."""
+    out = [a.format(x=x, y=y) for a in GPUS[cfg.get("gpu", "virtio")]]
+    n = int(cfg.get("displays", 1) or 1)
+    if n > 1:
+        if cfg.get("gpu", "virtio") not in ("virtio", "virtio-gl"):
+            raise ValueError("--displays > 1 needs --gpu virtio or virtio-gl")
+        out[1] = out[1].replace(",", f",id=vga0,max_outputs={n},", 1)
+    return out
 
 
 def qemu_cmd(cfg, d, run=None):
@@ -311,6 +476,8 @@ def qemu_cmd(cfg, d, run=None):
     c = ["qemu-system-x86_64", "-name", f"wolvm-{cfg['name']}", "-machine", "q35" + (",smm=on" if sb else "")]
     c += ["-accel", "kvm", "-cpu", "host"] if kvm else ["-accel", "tcg,thread=multi", "-cpu", "max"]
     c += ["-smp", str(cfg.get("smp", 4)), "-m", str(cfg.get("mem", "6G"))]
+    if cfg.get("s3"):  # q35 hides S3 by default: the guest's "systemctl suspend" needs it
+        c += ["-global", "ICH9-LPC.disable_s3=0"]
     if sb:
         c += ["-global", "driver=cfi.pflash01,property=secure,value=on"]
     c += ["-drive", f"if=pflash,format=raw,readonly=on,file={qemu_escape(cfg['fw_code'])}",
@@ -319,13 +486,17 @@ def qemu_cmd(cfg, d, run=None):
     direct = bool(cfg.get("iso") and cfg.get("direct") and not disk_first)
     # -kernel takes bootindex 0 itself (QEMU's linuxboot option ROM): then no bootindex at all.
     bi = (lambda n: "") if direct else (lambda n: f",bootindex={n}")
-    c += ["-drive", f"file={qemu_escape(p('disk.qcow2'))},if=none,id=disk0,format=qcow2,discard=unmap",
-          "-device", f"virtio-blk-pci,drive=disk0{bi(0 if disk_first else 1)}"]
+    bus, xbus = cfg.get("disk_bus") or "virtio", cfg.get("extra_bus") or "virtio"
+    if bus == "sata" or (xbus == "sata" and cfg.get("drives")):
+        c += ["-device", "ich9-ahci,id=ahci0"]
+    c += ["-drive", f"file={qemu_escape(p('disk.qcow2'))},if=none,id=disk0,format=qcow2,discard=unmap"]
+    c += blk_device(bus, "disk0", 0, cfg.get("disk_lbs"), cfg.get("disk_pbs"), bi(0 if disk_first else 1))
     for n, (path, mode) in enumerate(split_drive(x) for x in cfg.get("drives", [])):
         # Extra disks as they are (raw, no conversion: tests compare their bytes): /dev/vdb, vdc...
+        # (or nvme1n1.../sdb... with --extra-bus)
         flags = {"ro": ",readonly=on", "snapshot": ",snapshot=on"}.get(mode, "")
-        c += ["-drive", f"file={qemu_escape(path)},if=none,id=extra{n},format=raw{flags}",
-              "-device", f"virtio-blk-pci,drive=extra{n}"]
+        c += ["-drive", f"file={qemu_escape(path)},if=none,id=extra{n},format=raw{flags}"]
+        c += blk_device(xbus, f"extra{n}", n + 1, cfg.get("extra_lbs"), cfg.get("extra_pbs"))
     if cfg.get("iso") and cfg.get("iso_bus") == "virtio":
         # The ISO as a USB-stick-like disk: writable, changes thrown away at exit (snapshot=on).
         c += ["-drive", f"file={qemu_escape(cfg['iso'])},if=none,id=cdrom0,format=raw,snapshot=on",
@@ -345,12 +516,18 @@ def qemu_cmd(cfg, d, run=None):
             c += ["-smbios", f"type=11,value={qemu_escape(key + '=' + extra)}"]
     for cred in cfg.get("creds", []):
         c += ["-smbios", f"type=11,value={qemu_escape('io.systemd.credential:' + cred)}"]
-    c += [a.format(x=x, y=y) for a in GPUS[cfg.get("gpu", "virtio")]]
+    c += gpu_args(cfg, x, y)
     if "-display" not in GPUS[cfg.get("gpu", "virtio")]:
         c += ["-display", "none"]
     if cfg.get("vnc"):
         c += ["-vnc", cfg["vnc"]]
-    c += ["-device", "qemu-xhci", "-device", "usb-tablet"]
+    # The null audiodev is always there so a usb-audio device can be hot-plugged (wolvm plug);
+    # --audio N adds N HDA cards. No card at all is the default (qa100-dev-no-sound-card).
+    c += ["-audiodev", "none,id=snd0"]
+    for i, (ctl, codec) in enumerate(AUDIO_CARDS[:int(cfg.get("audio", 0) or 0)]):
+        c += ["-device", f"{ctl},id=hda{i}", "-device", f"{codec},bus=hda{i}.0,audiodev=snd0"]
+    # id=xhci: hot-plugged USB devices go on bus xhci.0
+    c += ["-device", "qemu-xhci,id=xhci", "-device", "usb-tablet"]
     if cfg.get("net", True):
         nic = "user,model=virtio-net-pci"
         if run.get("ssh_port"):
@@ -366,6 +543,8 @@ def qemu_cmd(cfg, d, run=None):
     if cfg.get("tpm"):
         c += ["-chardev", f"socket,id=tpmc,path={p('tpm.sock')}", "-tpmdev", "emulator,id=tpm0,chardev=tpmc",
               "-device", "tpm-tis,tpmdev=tpm0"]
+    for extra in cfg.get("qemu_args", []):  # --qemu-arg, last so they can add to anything above
+        c += shlex.split(extra)
     c += ["-daemonize", "-pidfile", p("qemu.pid")]
     return c
 
@@ -548,6 +727,20 @@ def extract_direct(iso, d):
     return out
 
 
+def check_audio(n):
+    if not 0 <= int(n) <= len(AUDIO_CARDS):
+        die(f"--audio {n}: 0..{len(AUDIO_CARDS)} cards")
+    return int(n)
+
+
+def check_displays(n, gpu):
+    if not 1 <= int(n) <= MAX_DISPLAYS:
+        die(f"--displays {n}: 1..{MAX_DISPLAYS}")
+    if int(n) > 1 and gpu not in ("virtio", "virtio-gl"):
+        die(f"--displays {n} needs --gpu virtio or virtio-gl (virtio-vga max_outputs), not {gpu}")
+    return int(n)
+
+
 def cmd_new(a):
     vm = VM(a.home, a.name)
     if os.path.exists(vm.cfg_path):
@@ -558,6 +751,10 @@ def cmd_new(a):
         if not DRY:
             shutil.rmtree(vm.dir)
     gpu = "vmsvga" if a.vmsvga else "virtio" if a.virtio else a.gpu
+    if a.tpm and a.no_tpm:
+        die("--tpm and --no-tpm together")
+    check_audio(a.audio)
+    check_displays(a.displays, gpu)
     fw_code = find_fw(FW_CODE_SB if a.secureboot else FW_CODE)
     fw_vars = find_fw(FW_VARS)
     if not fw_code or not fw_vars:
@@ -572,7 +769,10 @@ def cmd_new(a):
            "append": a.append or "", "creds": list(a.cred or []), "ssh": a.ssh, "fw_code": fw_code,
            "kvm": os.access("/dev/kvm", os.R_OK | os.W_OK), "vnc": a.vnc, "console": not a.no_console,
            "drives": [f"{os.path.abspath(p)}{(',' + m) if m else ''}" for p, m in (split_drive(x) for x in a.drive or [])],
-           "net": not a.no_net, "iso_bus": a.iso_bus}
+           "net": not a.no_net, "iso_bus": a.iso_bus, "audio": a.audio, "displays": a.displays, "s3": a.s3,
+           "disk_bus": a.disk_bus, "disk_lbs": a.disk_lbs, "disk_pbs": a.disk_pbs, "extra_bus": a.extra_bus,
+           "extra_lbs": a.extra_lbs, "extra_pbs": a.extra_pbs, "qemu_args": list(a.qemu_arg or [])}
+    cfg["tpm"] = a.tpm and not a.no_tpm
     for path, _ in (split_drive(x) for x in cfg["drives"]):
         if not os.path.isfile(path) and not DRY:
             die(f"--drive {path}: no such file")
@@ -609,7 +809,8 @@ def cmd_new(a):
             die("--direct needs --iso")
         cfg["direct"] = extract_direct(iso, vm.dir)
     vm.save_cfg(cfg)
-    print(f"{vm.name}: {vm.dir} ({a.disk} disk, {gpu}, tpm={a.tpm}, secureboot={a.secureboot}, kvm={cfg['kvm']})")
+    print(f"{vm.name}: {vm.dir} ({a.disk} {cfg['disk_bus']} disk, {gpu} x{cfg['displays']}, audio={cfg['audio']}, "
+          f"s3={cfg['s3']}, tpm={cfg['tpm']}, secureboot={a.secureboot}, kvm={cfg['kvm']})")
     return 0
 
 
@@ -712,38 +913,79 @@ def nudge(vm, q):
         time.sleep(0.4)
 
 
-def screenshot(vm, out, do_nudge=True):
+def head_target(cfg, head):
+    """(device, head) for a screendump of head N: None, None for the default head of a one-display VM;
+    --displays VMs name their virtio-vga vga0."""
+    if head is None:
+        return None, None
+    n = int(cfg.get("displays", 1) or 1)
+    if not 0 <= int(head) < n:
+        raise ValueError(f"head {head}: this VM has {n} display(s) (0..{n - 1}; wolvm new --displays N)")
+    return ("vga0", int(head)) if n > 1 else (None, None)
+
+
+def screenshot(vm, out, do_nudge=True, head=None, q=None):
     out = os.path.abspath(out)
-    q = vm.qmp()
+    dev, hd = head_target(vm.cfg, head) if head is not None else (None, None)
+    q = q or vm.qmp()
     if do_nudge:
         nudge(vm, q)
     if DRY:
-        q.call(qmp_screendump(out))
+        q.call(qmp_screendump(out, "png", dev, hd))
         return 0, 0
     os.makedirs(os.path.dirname(out), exist_ok=True)
     if os.path.exists(out):
         os.remove(out)
     try:
-        q.call(qmp_screendump(out, "png"))
+        q.call(qmp_screendump(out, "png", dev, hd))
     except RuntimeError as e:
         if "format" not in str(e).lower() and "png" not in str(e).lower():
             raise
         tmp = out + ".ppm"
-        q.call(qmp_screendump(tmp, "ppm"))
+        q.call(qmp_screendump(tmp, "ppm", dev, hd))
         png, _ = ppm_to_png(read_file(tmp, "rb"))
         os.remove(tmp)
         write_file(out, png, "wb")
     size = png_size(out)
-    run = vm.run
-    run["screen"] = list(size)
-    vm.save_run(run)
+    if not hd:  # the pointer maps onto head 0
+        run = vm.run
+        run["screen"] = list(size)
+        vm.save_run(run)
     return size
+
+
+def frames(vm, out_dir, prefix="frame", every_ms=150, secs=10.0, head=None):
+    """A burst of screenshots, no pointer nudge (a nudge would repaint what is being judged): one
+    every every_ms for secs seconds, or as fast as QEMU writes them. Returns the file names."""
+    q, names, k = vm.qmp(), [], 0
+    end = time.time() + float(secs)
+    while True:
+        t0 = time.time()
+        name = f"{prefix}-{k:03d}.png"
+        try:
+            screenshot(vm, os.path.join(out_dir, name), False, head, q)
+            names.append(name)
+        except (RuntimeError, ValueError) as e:  # e.g. "no surface" during a mode switch: skip the frame
+            if DRY:
+                raise
+            sys.stderr.write(f"frame {k}: {e}\n")
+        k += 1
+        if DRY or time.time() >= end:
+            break
+        time.sleep(max(0.0, every_ms / 1000.0 - (time.time() - t0)))
+    return names
+
+
+def cmd_frames(a):
+    names = frames(VM(a.home, a.name), os.path.abspath(a.dir), a.prefix, a.every, a.secs, a.head)
+    print(f"{len(names)} frames in {os.path.abspath(a.dir)}" + (f" ({names[0]} .. {names[-1]})" if names else ""))
+    return 0 if names else 1
 
 
 def cmd_screenshot(a):
     vm = VM(a.home, a.name)
     try:
-        w, h = screenshot(vm, a.out, not a.no_nudge)
+        w, h = screenshot(vm, a.out, not a.no_nudge, a.head)
     except RuntimeError as e:  # e.g. virtio-gl "no surface": never reuse an old frame
         die(f"screendump: {e}")
     print(f"{os.path.abspath(a.out)} {w}x{h}")
@@ -1009,6 +1251,258 @@ def cmd_snapshot(a):
     return 0
 
 
+def qmp_status(q):
+    return (q.call({"execute": "query-status"}) or {}).get("status", "")
+
+
+def wait_status(vm, want, timeout):
+    """Polls query-status until it is one of want (e.g. 'suspended', 'running')."""
+    end = time.time() + timeout
+    while True:
+        st = qmp_status(vm.qmp())
+        if DRY or st in want:
+            return True, st
+        if time.time() > end or not vm.pid():
+            return False, st
+        time.sleep(0.5)
+
+
+def cmd_qmp(a):
+    msg = qmp_parse(a.command, a.args)
+    r = VM(a.home, a.name).qmp().call(msg)
+    if not DRY:
+        print(r if isinstance(r, str) else json.dumps(r, indent=1))
+    return 0
+
+
+def plug(vm, kind, dev_id=None, file=None, ro=False):
+    """Hot-plugs one USB device; remembers its kind in run.json so unplug can clean up after it."""
+    dev_id = dev_id or USB_KINDS.get(kind, "dev") + "0"
+    if file and not DRY:
+        file = os.path.abspath(file)
+        if not os.path.isfile(file):
+            raise ValueError(f"plug: {file}: no such image")
+    q = vm.qmp()
+    for m in plug_msgs(kind, dev_id, file, ro):
+        q.call(m)
+    if not DRY:
+        run = vm.run
+        run.setdefault("plugged", {})[dev_id] = kind
+        vm.save_run(run)
+    return dev_id
+
+
+def unplug(vm, dev_id, timeout=15):
+    run = vm.run
+    kind = run.get("plugged", {}).get(dev_id)
+    q = vm.qmp()
+    msgs = unplug_msgs(dev_id, kind)
+    q.call(msgs[0])
+    end = time.time() + timeout
+    while not DRY:  # device_del only asks the guest; the device is gone when QOM no longer has it
+        names = [p.get("name") for p in q.call({"execute": "qom-list", "arguments": {"path": "/machine/peripheral"}})]
+        if dev_id not in names:
+            break
+        if time.time() > end:
+            raise RuntimeError(f"unplug {dev_id}: the guest still holds it after {timeout} s")
+        time.sleep(0.3)
+    for m in msgs[1:]:
+        q.call(m)
+    if not DRY:
+        run.get("plugged", {}).pop(dev_id, None)
+        vm.save_run(run)
+
+
+def cmd_plug(a):
+    print(f"plugged {plug(VM(a.home, a.name), a.kind, a.id, a.file, a.ro)}")
+    return 0
+
+
+def cmd_unplug(a):
+    unplug(VM(a.home, a.name), a.id, a.timeout)
+    print(f"unplugged {a.id}")
+    return 0
+
+
+def set_display(vm, n, state, timeout=60):
+    if state not in ("on", "off"):
+        raise ValueError("display: on or off")
+    want = int(vm.cfg.get("displays", 1) or 1)
+    if not DRY and int(n) > want:
+        raise ValueError(f"display {n}: this VM has {want} display(s) (wolvm new --displays N)")
+    cmd = display_cmd(n, state == "on")
+    if DRY:
+        print(cmd)
+        return 0, ""
+    rc, out, err = guest(vm, cmd, timeout)
+    return rc, (out + err).strip()
+
+
+def cmd_display(a):
+    rc, text = set_display(VM(a.home, a.name), a.n, a.state)
+    print(text)
+    return rc
+
+
+def suspend(vm, timeout=60):
+    """S3: systemctl suspend in the guest (started, not waited on: the guest stops answering), then
+    until QEMU says 'suspended'."""
+    if not vm.cfg.get("s3") and not DRY:
+        raise RuntimeError(f"{vm.name} has S3 off (wolvm set {vm.name} --s3 on, then start again)")
+    if DRY:
+        print(json.dumps({"execute": "guest-exec", "arguments": {"path": "/bin/sh", "arg": ["-c", "systemctl suspend"]}}))
+    else:
+        vm.agent().call("guest-exec", path="/bin/sh", arg=["-c", "sleep 0.5; systemctl suspend"])
+    return wait_status(vm, ("suspended",), timeout)
+
+
+def wake(vm, timeout=60):
+    vm.qmp().call({"execute": "system_wakeup"})
+    return wait_status(vm, ("running",), timeout)
+
+
+def cmd_suspend(a):
+    ok, st = suspend(VM(a.home, a.name), a.timeout)
+    print("suspended" if ok else f"not suspended after {a.timeout} s (status {st})")
+    return 0 if ok else 1
+
+
+def cmd_wake(a):
+    ok, st = wake(VM(a.home, a.name), a.timeout)
+    print("running" if ok else f"not running after {a.timeout} s (status {st})")
+    return 0 if ok else 1
+
+
+def install_stage(vm):
+    """The last 'wolos-install:' line, from the live system's install log (guest agent) or, when
+    the agent does not answer, from the serial console."""
+    try:
+        rc, out, _ = vm.agent(timeout=5).run(INSTALL_STAGE_CMD, 15)
+        if rc == 0 and out.strip():
+            return last_install_stage(out)
+    except (OSError, RuntimeError, TimeoutError, ValueError):
+        pass
+    return last_install_stage(serial_text(vm))
+
+
+def power_cut(vm, regex, timeout=900, delay=0.0, every=2.0):
+    """Waits until the install reaches a stage matching regex, then (after delay s) kills QEMU:
+    no shutdown, nothing synced, like pulling the plug. Returns (cut?, the stage line)."""
+    pat = re.compile(regex)
+    if DRY:
+        print(f"until /{regex}/ in: {INSTALL_STAGE_CMD}; sleep {delay}; quit")
+        return True, ""
+    end, line = time.time() + timeout, ""
+    while time.time() < end and vm.pid():
+        line = install_stage(vm)
+        if pat.search(line):
+            if delay:
+                time.sleep(float(delay))
+            cmd_stop(argparse.Namespace(home=os.path.dirname(os.path.dirname(vm.dir)), name=vm.name,
+                                        force=True, timeout=5))
+            return True, line
+        time.sleep(every)
+    return False, line
+
+
+def cmd_power_cut(a):
+    ok, line = power_cut(VM(a.home, a.name), a.at, a.timeout, a.delay)
+    print(f"CUT at: {line}" if ok else f"no stage matched /{a.at}/ in {a.timeout} s; last: {line or '(none)'}")
+    return 0 if ok else 1
+
+
+# ---------------------------------------------------------------- installed-disk edit (tamper tests)
+def disk_edit_plan(disk, nbd, mnt, mapper, key_file=None, read_only=False, luks=False):
+    """(attach, detach) argv lists for editing a stopped VM's installed disk on the host: qemu-nbd
+    exports disk.qcow2 as nbd, the ESP (p1) and the btrfs (p2, opened with key_file when it is LUKS)
+    are mounted as mnt/esp, mnt/top (subvolid 5), mnt/var (@var) and mnt/slot (@wolos-a).
+    Every command needs root; detach is safe to run after a partial attach."""
+    ro = ["--read-only"] if read_only else []
+    mo = ["-o", "ro"] if read_only else []
+    part = lambda k: f"{nbd}p{k}"
+    root = f"/dev/mapper/{mapper}" if luks else part(2)
+    attach = [["qemu-nbd", "--connect", nbd, "--format", "qcow2"] + ro + [disk],
+              ["udevadm", "settle", "-t", "10"],
+              ["mkdir", "-p"] + [os.path.join(mnt, n) for n in ("esp", "top", "var", "slot")],
+              ["mount"] + mo + [part(1), os.path.join(mnt, "esp")]]
+    if luks:
+        attach.append(["cryptsetup", "open"] + (["--readonly"] if read_only else []) +
+                      ["--key-file", key_file or "-", part(2), mapper])
+    attach += [["mount", "-o", ("ro," if read_only else "") + "subvolid=5", root, os.path.join(mnt, "top")],
+               ["mount", "-o", ("ro," if read_only else "") + "subvol=@var", root, os.path.join(mnt, "var")],
+               ["mount", "-o", ("ro," if read_only else "") + "subvol=@wolos-a", root, os.path.join(mnt, "slot")]]
+    detach = [["sync"]] + [["umount", os.path.join(mnt, n)] for n in ("slot", "var", "top", "esp")]
+    if luks:
+        detach.append(["cryptsetup", "close", mapper])
+    detach.append(["qemu-nbd", "--disconnect", nbd])
+    return attach, detach
+
+
+def disk_edit(vm, command, nbd="/dev/nbd0", key_file=None, read_only=False, snapshot_first=True):
+    """Runs command (sh -c, as root, env ESP TOP VAR SLOT) against the stopped VM's disk. Safety:
+    refuses a running VM (two writers corrupt qcow2) and an nbd device already in use, takes a qemu-img
+    snapshot 'pre-edit-<time>' first (wolvm snapshot NAME restore TAG undoes the edit), and always
+    unmounts, closes and disconnects, also when the command fails."""
+    if vm.pid() and not DRY:
+        raise RuntimeError(f"{vm.name} is running: stop it first (a qcow2 must have one writer)")
+    if not re.fullmatch(r"/dev/nbd\d+", nbd):
+        raise ValueError(f"--nbd {nbd}: expected /dev/nbdN")
+    sudo = [] if (os.name != "posix" or os.geteuid() == 0) else ["sudo", "-n"]
+    disk, mnt, mapper = vm.p("disk.qcow2"), vm.p("mnt"), f"wolvm-{vm.name}"
+    dev = os.path.basename(nbd)
+    if not DRY:
+        if not shutil.which("qemu-nbd"):
+            raise RuntimeError("qemu-nbd missing (pacman -S qemu-img)")
+        if not os.path.exists(nbd):
+            sh(sudo + ["modprobe", "nbd", "max_part=16"])
+        if os.path.exists(f"/sys/block/{dev}/pid"):
+            raise RuntimeError(f"{nbd} is in use (another qemu-nbd); pick another with --nbd")
+    tag = None
+    if snapshot_first and not read_only:
+        tag = time.strftime("pre-edit-%Y%m%d-%H%M%S")
+        if DRY:
+            sh(["qemu-img", "snapshot", "-c", tag, disk])
+        else:
+            snapshot(vm, "save", tag)
+    # Is p2 LUKS? Known only once attached: attach the disk, look, then mount the rest.
+    attach, detach = disk_edit_plan(disk, nbd, mnt, mapper, key_file, read_only, luks=False)
+    log = []
+    rc = 1
+    try:
+        for cmd in attach[:2]:
+            r = sh(sudo + cmd)
+            if r.returncode:
+                raise RuntimeError(f"{shlex.join(cmd)}: {r.stderr.strip()[-300:]}")
+        luks = False
+        if not DRY:
+            r = sh(sudo + ["blkid", "-o", "value", "-s", "TYPE", f"{nbd}p2"])
+            luks = r.stdout.strip() == "crypto_LUKS"
+            if luks and not key_file:
+                raise RuntimeError(f"{nbd}p2 is LUKS: give --key-file (the recovery key, no newline)")
+        attach, detach = disk_edit_plan(disk, nbd, mnt, mapper, key_file, read_only, luks)
+        for cmd in attach[2:]:
+            r = sh(sudo + cmd)
+            if r.returncode and "@wolos-a" not in " ".join(cmd):  # a disk with only slot B is fine
+                raise RuntimeError(f"{shlex.join(cmd)}: {r.stderr.strip()[-300:]}")
+        env = {"ESP": os.path.join(mnt, "esp"), "TOP": os.path.join(mnt, "top"),
+               "VAR": os.path.join(mnt, "var"), "SLOT": os.path.join(mnt, "slot")}
+        r = sh(sudo + ["env"] + [f"{k}={v}" for k, v in env.items()] + ["sh", "-c", command])
+        rc = r.returncode
+        log.append(r.stdout + r.stderr)
+    finally:
+        for cmd in detach:
+            sh(sudo + cmd)
+    if tag:
+        log.append(f"(undo: wolvm snapshot {vm.name} restore {tag})")
+    return rc, "".join(log)
+
+
+def cmd_disk_edit(a):
+    rc, text = disk_edit(VM(a.home, a.name), " ".join(a.cmd), a.nbd, a.key_file, a.read_only, not a.no_snapshot)
+    sys.stdout.write(text if text.endswith("\n") or not text else text + "\n")
+    return rc
+
+
 def cmd_eject(a):
     VM(a.home, a.name).qmp().call({"execute": "eject", "arguments": {"id": "cd0", "force": True}})
     print("ejected")
@@ -1029,6 +1523,14 @@ def cmd_set(a):
             cfg[k] = getattr(a, k)
     if a.net:
         cfg["net"] = a.net == "on"
+    if a.tpm:
+        cfg["tpm"] = a.tpm == "on"
+    if a.s3:
+        cfg["s3"] = a.s3 == "on"
+    if a.audio is not None:
+        cfg["audio"] = check_audio(a.audio)
+    if a.displays is not None:
+        cfg["displays"] = check_displays(a.displays, cfg.get("gpu", "virtio"))
     if a.secureboot:
         if not cfg.get("secureboot"):
             die(f"{vm.name} was made without --secureboot (no secure firmware, no keys)")
@@ -1146,7 +1648,55 @@ def run_step(vm, st, out_dir, idx):
         cmd_serial(argparse.Namespace(home=os.path.dirname(os.path.dirname(vm.dir)), name=vm.name,
                                       action="send", text=args[0]))
         return True, ""
+    if v == "qmp":
+        r = vm.qmp().call(qmp_parse(args[0]))
+        text = r if isinstance(r, str) else json.dumps(r)
+        return (str(o["expect"]) in text if "expect" in o else True), text[-2000:]
+    if v == "plug":
+        dev_id = plug(vm, args[0], o.get("id"), args[1] if len(args) > 1 else o.get("file"), bool(o.get("ro")))
+        return True, f"plugged {args[0]} as {dev_id}"
+    if v == "unplug":
+        unplug(vm, args[0], float(o.get("timeout", 15)))
+        return True, f"unplugged {args[0]}"
+    if v == "display":
+        if len(args) != 2:
+            return False, "display: N on|off"
+        rc, text = set_display(vm, args[0], args[1], t)
+        want = "connected" if args[1] == "on" else "disconnected"
+        return rc == 0 and (DRY or want in text.split()), text
+    if v == "suspend":
+        ok, st = suspend(vm, float(o.get("timeout", 60)))
+        return ok, f"status {st}"
+    if v == "wake":
+        ok, st = wake(vm, float(o.get("timeout", 60)))
+        return ok, f"status {st}"
+    if v == "frames":
+        names = frames(vm, out_dir, f"{idx:02d}-{slug(args[0]) if args else 'frames'}", float(o.get("every", 150)),
+                       float(o.get("for", 10)), o.get("head"))
+        st["frames"] = names
+        return bool(names), f"{len(names)} frames" + (f": {names[0]} .. {names[-1]}" if names else "")
+    if v == "power-cut":
+        ok, line = power_cut(vm, args[0], float(o.get("timeout", 900)), float(o.get("delay", 0)))
+        return ok, (f"CUT at: {line}" if ok else f"no stage matched; last: {line or '(none)'}")
+    if v == "disk-edit":
+        rc, text = disk_edit(vm, args[0], o.get("nbd", "/dev/nbd0"), o.get("key-file"), bool(o.get("read-only")),
+                             o.get("snapshot", True) is not False)
+        if o.get("save"):
+            write_file(os.path.join(out_dir, os.path.basename(str(o["save"]))), text)
+        ok = (o.get("rc", 0) == "any" or rc == int(o.get("rc", 0))) and (str(o["expect"]) in text if "expect" in o else True)
+        return ok, f"rc={rc}\n{text[-2000:]}"
     return False, f"unhandled verb {v}"
+
+
+def shot_heads(cfg, spec):
+    """The heads a step's screenshot covers: [None] (the default head) unless the step says
+    heads: all (every display of a --displays VM) or heads: 0,2."""
+    if spec in (None, "", False):
+        return [None]
+    n = int(cfg.get("displays", 1) or 1)
+    if str(spec) == "all":
+        return list(range(n)) if n > 1 else [None]
+    return [int(h) for h in str(spec).replace(" ", "").split(",") if h != ""]
 
 
 def slug(s):
@@ -1185,17 +1735,23 @@ def cmd_journey(a):
                 if st["opts"].get("on-fail-restore"):
                     snapshot(vm, "restore", st["opts"]["on-fail-restore"])
             shot = None
-            want_shot = st["opts"].get("shot", True) and st["verb"] not in ("stop", "note", "boot", "logs")
+            want_shot = st["opts"].get("shot", True) and st["verb"] not in (
+                "stop", "note", "boot", "logs", "frames", "power-cut", "disk-edit", "suspend")
+            heads, more = shot_heads(vm.cfg, st["opts"].get("heads")), []
             if want_shot and vm.pid():
                 name = (st["args"][0] if st["verb"] in ("shot", "screenshot") and st["args"] else "-".join([st["verb"]] + ([slug(" ".join(st["args"]))] if st["args"] else [])))
-                shot = f"{i:02d}-{slug(name)}.png"
-                try:
-                    screenshot(vm, os.path.join(out, shot))
-                except (OSError, RuntimeError, ValueError) as e:
-                    detail += f"\n(screenshot failed: {e})"
-                    shot = None
+                for h in heads:
+                    f = f"{i:02d}-{slug(name)}" + (f"-h{h}" if h is not None else "") + ".png"
+                    try:
+                        screenshot(vm, os.path.join(out, f), h in (None, 0), h)
+                        more.append(f)
+                    except (OSError, RuntimeError, ValueError) as e:
+                        detail += f"\n(screenshot{'' if h is None else f' head {h}'} failed: {e})"
+                shot, more = (more[0], more[1:]) if more else (None, [])
             rec = {"n": i, "step": label, "opts": st["opts"], "ok": ok, "secs": round(time.time() - t0, 1),
                    "shot": shot, "detail": detail, "caption": st["opts"].get("caption", "")}
+            if more or st.get("frames"):
+                rec["more"] = more + st.get("frames", [])
             jl.write(json.dumps(rec) + "\n")
             jl.flush()
             print(f"{'ok  ' if ok else 'FAIL'} {i:02d} {label[:70]}" + (f"  [{shot}]" if shot else ""), flush=True)
@@ -1239,6 +1795,8 @@ def write_report(d):
             md.append(r["caption"])
         if r.get("shot"):
             md.append(f"![{r['step']}]({r['shot']})")
+        for m in r.get("more", []):
+            md.append(f"![{m}]({m})")
         if r.get("detail"):
             md += ["```", r["detail"], "```"]
         md.append("")
@@ -1261,6 +1819,9 @@ def write_report(d):
             h.append(f"<p>{e(r['caption'])}</p>")
         if r.get("shot"):
             h.append(f"<a href='{e(r['shot'])}'><img src='{e(r['shot'])}' loading=lazy></a>")
+        if r.get("more"):  # other heads, burst frames: a strip of small pictures
+            h.append("<div>" + "".join(f"<a href='{e(m)}'><img src='{e(m)}' loading=lazy style='max-width:24%;margin:2px'"
+                                       f" title='{e(m)}'></a>" for m in r["more"]) + "</div>")
         if r.get("detail"):
             h.append(f"<pre>{e(r['detail'])}</pre>")
         h.append("</div>")
@@ -1286,7 +1847,9 @@ def cmd_doctor(a):
                              ("swtpm", False, "--tpm needs it: pacman -S swtpm"),
                              ("virt-fw-vars", False, "--secureboot needs it: pacman -S virt-firmware"),
                              ("bsdtar", False, "--direct needs it: pacman -S libarchive"),
-                             ("ssh", False, "--ssh needs openssh"), ("ssh-keygen", False, "--ssh needs openssh")):
+                             ("ssh", False, "--ssh needs openssh"), ("ssh-keygen", False, "--ssh needs openssh"),
+                             ("qemu-nbd", False, "disk-edit needs it (qemu-img)"),
+                             ("cryptsetup", False, "disk-edit of an encrypted disk needs it")):
         p = shutil.which(tool)
         checks.append((tool, bool(p), p or hint, need))
     for label, names, need in (("ovmf-code", FW_CODE, True), ("ovmf-code-secboot", FW_CODE_SB, False),
@@ -1329,6 +1892,18 @@ def parser():
     n.add_argument("--iso-bus", choices=["ide", "virtio"], default="ide",
                    help="virtio: the ISO as a writable throwaway disk (snapshot=on), like a USB stick")
     n.add_argument("--from-image", help="start from a copy of this raw/qcow2 disk instead of an empty one")
+    n.add_argument("--no-tpm", action="store_true", help="no TPM chip (the default; wins over a --tpm in a wrapper)")
+    n.add_argument("--audio", type=int, default=0, metavar="N", help=f"N HDA sound cards (0..{len(AUDIO_CARDS)}, default none)")
+    n.add_argument("--displays", type=int, default=1, metavar="N",
+                   help=f"N heads on virtio-vga (max_outputs, 1..{MAX_DISPLAYS}); heads 2..N start connected")
+    n.add_argument("--s3", action="store_true", help="offer S3 sleep (-global ICH9-LPC.disable_s3=0): suspend/wake")
+    n.add_argument("--disk-bus", choices=DISK_BUSES, default="virtio", help="bus of the main disk (/dev/vda, nvme0n1, sda)")
+    n.add_argument("--disk-lbs", type=int, choices=[512, 4096], help="main disk logical block size")
+    n.add_argument("--disk-pbs", type=int, choices=[512, 4096], help="main disk physical block size")
+    n.add_argument("--extra-bus", choices=DISK_BUSES, default="virtio", help="bus of the --drive disks")
+    n.add_argument("--extra-lbs", type=int, choices=[512, 4096]); n.add_argument("--extra-pbs", type=int, choices=[512, 4096])
+    n.add_argument("--qemu-arg", action="append", metavar="ARGS",
+                   help="extra QEMU arguments (shell-split, added last), e.g. --qemu-arg '-device usb-kbd'")
     n.add_argument("--force", action="store_true"); n.set_defaults(fn=cmd_new)
     for name, fn in (("start", cmd_start), ("status", cmd_status), ("rm", cmd_rm), ("eject", cmd_eject)):
         s = sp.add_parser(name); s.add_argument("name"); s.set_defaults(fn=fn)
@@ -1339,11 +1914,33 @@ def parser():
     s.add_argument("--iso"); s.add_argument("--no-iso", action="store_true"); s.add_argument("--append")
     s.add_argument("--mem"); s.add_argument("--gpu", choices=sorted(GPUS)); s.add_argument("--res"); s.add_argument("--vnc")
     s.add_argument("--secureboot", choices=["on", "off"], help="SecureBootEnable in the vars (VM made with --secureboot, stopped)")
-    s.add_argument("--net", choices=["on", "off"])
+    s.add_argument("--net", choices=["on", "off"]); s.add_argument("--tpm", choices=["on", "off"])
+    s.add_argument("--s3", choices=["on", "off"]); s.add_argument("--audio", type=int, metavar="N")
+    s.add_argument("--displays", type=int, metavar="N")
     s.set_defaults(fn=cmd_set)
     s = sp.add_parser("screenshot", aliases=["shot"]); s.add_argument("name"); s.add_argument("out")
     s.add_argument("--no-nudge", action="store_true", help="do not wiggle the pointer to force a repaint")
+    s.add_argument("--head", type=int, help="display head 0..N-1 of a --displays VM")
     s.set_defaults(fn=cmd_screenshot)
+    s = sp.add_parser("frames"); s.add_argument("name"); s.add_argument("dir")
+    s.add_argument("--every", type=float, default=150, metavar="MS"); s.add_argument("--for", dest="secs", type=float, default=10)
+    s.add_argument("--prefix", default="frame"); s.add_argument("--head", type=int); s.set_defaults(fn=cmd_frames)
+    s = sp.add_parser("qmp"); s.add_argument("name"); s.add_argument("command"); s.add_argument("args", nargs="?")
+    s.set_defaults(fn=cmd_qmp)
+    s = sp.add_parser("plug"); s.add_argument("name"); s.add_argument("kind", choices=sorted(USB_KINDS))
+    s.add_argument("--file"); s.add_argument("--id"); s.add_argument("--ro", action="store_true"); s.set_defaults(fn=cmd_plug)
+    s = sp.add_parser("unplug"); s.add_argument("name"); s.add_argument("id"); s.add_argument("--timeout", type=float, default=15)
+    s.set_defaults(fn=cmd_unplug)
+    s = sp.add_parser("display"); s.add_argument("name"); s.add_argument("n", type=int); s.add_argument("state", choices=["on", "off"])
+    s.set_defaults(fn=cmd_display)
+    for name, fn in (("suspend", cmd_suspend), ("wake", cmd_wake)):
+        s = sp.add_parser(name); s.add_argument("name"); s.add_argument("--timeout", type=float, default=60); s.set_defaults(fn=fn)
+    s = sp.add_parser("power-cut"); s.add_argument("name"); s.add_argument("--at", required=True, metavar="REGEX")
+    s.add_argument("--timeout", type=float, default=900); s.add_argument("--delay", type=float, default=0)
+    s.set_defaults(fn=cmd_power_cut)
+    s = sp.add_parser("disk-edit"); s.add_argument("name"); s.add_argument("cmd", nargs="+")
+    s.add_argument("--nbd", default="/dev/nbd0"); s.add_argument("--key-file"); s.add_argument("--read-only", action="store_true")
+    s.add_argument("--no-snapshot", action="store_true"); s.set_defaults(fn=cmd_disk_edit)
     s = sp.add_parser("wait-stable"); s.add_argument("name"); s.add_argument("--timeout", type=float, default=60)
     s.set_defaults(fn=cmd_wait_stable)
     s = sp.add_parser("type"); s.add_argument("name"); s.add_argument("text")

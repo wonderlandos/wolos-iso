@@ -4,7 +4,7 @@
 # "unknown object ... remove_surface(o)" from the compositor, focus_grab.rs:255-280), while Session,
 # Overview, Widgets, Shortcuts, Themes, Force Quit and the lock screen survived (1/1 each), and the
 # Control Center survived this run (DEV2-1 saw 2/2): the death is intermittent, so every panel is
-# plugged three times. Needs `-device virtio-vga,max_outputs=2` (see qa100-dev2-display-hotplug-cc).
+# plugged three times. Needs two heads: `wolvm new ... --displays 2` (see qa100-dev2-display-hotplug-cc).
 #   wolvm journey crash tests/wolvm/journeys/qa100-crash-hotplug-panels.yaml
 name: crash-surface, a display plugged with any panel open never ends the shell
 steps:

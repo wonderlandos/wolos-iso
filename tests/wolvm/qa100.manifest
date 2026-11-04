@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-100 journeys gate (tests/run-installed.sh qa100): one line per qa-*.yaml / qa100-*.yaml journey.
+#   journey | needs | expect | why
+# journey: file name in tests/wolvm/journeys without .yaml.
+# needs (comma list; a journey runs only when the gate's --have covers every one):
+#   live         the VM boots the 0.12.1 ISO (live session, account `live`, uid 1000)
+#   installed    the VM boots an installed 0.12.1 disk
+#   iso-install  the journey installs itself: a fresh VM with the ISO (and the autoinstall words in its header)
+#   account:NAME a desktop account on the installed disk (alice = Alice Liddell/curiouser, aliceliddell,
+#                bob/curiouser, tester/tester123); account:none = no account yet (Setup Assistant)
+#   network      the guest reaches the internet (Store, update, module download)
+#   displays:N   at least N heads (wolvm new --displays N)
+#   audio        HDA sound cards (wolvm new --audio 2); no-audio = no card at all (the wolvm default)
+#   s3           S3 sleep offered (wolvm new --s3) for the suspend/wake steps
+#   usb          USB hot-plug through QMP (plug/unplug steps; an image file next to the run)
+#   disk-edit    the host edits the stopped VM's disk first (wolvm disk-edit, qemu-nbd + sudo)
+#   tpm, secureboot, drive (an extra raw disk, --drive), ssh (--ssh), release-0120 (the 0.12.0 ISO)
+# expect: pass, or fail:<id> = the registry id (.claude/v012/qa100/BUGS.md, registry 4) the journey is
+#   expected to FAIL on today (rel/0.12.1). Ids written <report>:<local id> come from hunter reports
+#   that registry 4 has not merged yet (crash-surface, devices-r2, kernel-boot, kernel-boot-r2,
+#   data-safety, launcher-notify, upgrade-path, plugins-maker-r2).
+qa-auth-two-requests | installed,account:alice | fail:QA-HUNT-1 | Cancel prints "Incorrect password" (confirmed on 0.12.1); QA-QAF-6 two requests also present
+qa-settings-keynav | installed,account:alice | fail:QA-HUNT-12 | Up from Wi-Fi lands on the search row; QA-HUNT-13 rings round rows
+qa-toggle-polling | installed,account:alice,audio | fail:QA-HUNT-11 | Control Center tile flips back on the 1 s poll
+qa-undo-two-changes | installed,account:alice | fail:QA-HUNT-16 | Undo toast names only the last change (QA-QAF-9 confirmed on 0.12.1)
+qa-widgets-edit-above-settings | installed,account:alice | fail:QA-HUNT-15 | first Esc after Edit Widgets does nothing (confirmed on 0.12.1)
+qa100-boot-live-sb-off-later | live,secureboot,tpm | pass | pins facts: no key screen with Secure Boot off (needs live-secureboot.yaml first, then wolvm set --secureboot off)
+qa100-boot-tpm-reseal | installed,tpm,secureboot | fail:kernel-boot:BOOT-1 | recovery key asked on every start; reseal finds an empty keyring (RK= via envsubst)
+qa100-boot2-floor-ghost-loop | installed,disk-edit | fail:kernel-boot-r2:BOOT2-3 | restart loop every ~25 s (floor 99 + ghost wolos-b entry); related QA-STORE-3
+qa100-boot2-no-entry | installed,disk-edit | fail:kernel-boot-r2:BOOT2-1 | lost/garbage loader entry drops into the firmware menu
+qa100-boot2-refused-slot-silent | installed,disk-edit | fail:kernel-boot-r2:BOOT2-4 | verity-notice written, nobody shows it
+qa100-boot2-seal-symlinks | installed | fail:kernel-boot-r2:BOOT2-5 | symlinked commands outside the seal
+qa100-console-shells | installed,account:alice | fail:QA-FILES-4 | bash through wol-term-shell has no WolOS setup
+qa100-crash-hotplug-panels | installed,account:any,displays:2 | fail:crash-surface:CRASH-1 | a display plugged with Notifications/Clipboard open ends wol-shell (intermittent)
+qa100-crash-session-bus-loss | installed,account:any | fail:crash-surface:CRASH-2 | the session bus going away ends wol-shell silently
+qa100-crash-settings-quit-abort | installed,account:tester | fail:crash-surface:CRASH-3 | Settings aborts on every quit (extends QA-VIS1-24)
+qa100-data-full-disk-login | installed,account:tester,account:bob | fail:data-safety:H20-3 | full disk: the second login ends silently; H20-4 no quota, journal corrupted
+qa100-data-rollback-apps | installed,account:any,network | fail:data-safety:H20-2 | rollback loses the Store apps layered before the update
+qa100-data-seal-layers | installed,network | fail:data-safety:H20-1 | a live layer fails the seal check at the next start
+qa100-dev-no-sound-card | installed,account:any,no-audio | fail:QA-DEV-6 | no card: Dummy Output shown as a speaker; QA-DEV-8 no OSD without WirePlumber (needs --audio 0)
+qa100-dev-printer-ippeve | installed,account:any | fail:QA-DEV-3 | a dead printer stays "Printing"
+qa100-dev2-bt-no-adapter | installed,account:any | fail:devices-r2:DEV2-3 | bluetoothctl spawned every 2 s with no adapter; DEV2-4
+qa100-dev2-display-hotplug-cc | installed,account:any,displays:2 | fail:devices-r2:DEV2-1 | plugging a display with the Control Center open kills the shell
+qa100-dev2-usb-media-camera | installed,account:any,usb | fail:devices-r2:DEV2-5 | unreadable USB disk shown nowhere; QA-DEV-9/QA-DEV-15 no camera indicator (browser step by hand)
+qa100-doctor-check | installed,account:any | fail:QA-DOC-5 | Doctor false positives/dead ends (feature newer than 0.12.1: fails on absence there)
+qa100-files-media | installed,account:alice,drive | fail:QA-FILES-6 | no gvfs-mtp/gphoto2/smb; QA-FILES-14 (extra disk = a vfat stick image)
+qa100-gfx-two-displays | installed,account:alice,displays:2 | fail:QA-GFX-1 | Below rule leaves the screens diagonal; QA-GFX-5, QA-GFX-7
+qa100-gfx2-power | installed,account:alice,s3 | fail:QA-GFX-22 | the sleep hook gets "no answer" for its lock; QA-GFX-10/11/23
+qa100-gfx2-replug | installed,account:alice,displays:3 | fail:QA-GFX-18 | a display re-plugged gets no wallpaper/bar/Dock; QA-GFX-19 150 % becomes 1.6
+qa100-install-gui-erase | iso-install | pass | template: Erase Disk with a password by keyboard, then the disk boots (keys adjusted from the shots)
+qa100-install-power-loss | iso-install,tpm | pass | power cut at "files 15", second install finishes (FIX-install prelude, QA-DOC-1 fixed in 0.12.1)
+qa100-install-two-disks | iso-install,tpm,drive | fail:QA-DOC-18 | Done page never says how to start Windows on the other disk (drive = mk_disk windows image)
+qa100-ln-launcher-toggle | installed,account:tester | fail:launcher-notify:LN-01 | Search's process stays after it closes; the next toggle needs two presses
+qa100-ln-notify-burst | installed,account:tester | fail:launcher-notify:LN-10 | a notification burst floods the screen; QA-DESIGN-29, LN-12..14
+qa100-ln-shell-crash | installed,account:tester | fail:launcher-notify:LN-20 | SIGKILL on wol-shell leaves a black screen (no supervisor in 0.12.1)
+qa100-net-ethernet-states | live,ssh,network | fail:QA-NET-11 | Network pane read once; QA-NET-12 three meanings of online
+qa100-net-firewall-state | live,ssh | fail:QA-NET-1 | firewall state wrong; QA-NET-4, QA-NET-13
+qa100-net-sharing-live | live,ssh | fail:QA-NET-6 | Authenticate sheet for the locked `live` account
+qa100-p1-everyday-devices | installed,account:aliceliddell | fail:QA-FDAY-10 | Wi-Fi reads On with no adapter; QA-FDAY-12..15
+qa100-p1-first-boot-ptbr | iso-install,tpm,ssh | fail:QA-FDAY-2 | first boot pt-BR persona; QA-FDAY-5
+qa100-p1-live-try | live,tpm,ssh | fail:QA-FDAY-1 | live try persona; QA-FDAY-7 lock screen dead end, QA-FDAY-11
+qa100-p2-cli-power-user | installed,account:alice | fail:QA-PWR-6 | CLI power user steps marked "fails until fixed"; QA-PWR-5/9/10/15/16
+qa100-p2-dev-module | installed,account:alice,network | fail:QA-PWR-4 | developer module install; QA-PWR-25 rootless podman
+qa100-p2-scripts-rsh | installed,account:alice | fail:QA-PWR-1 | wol script / rsh; QA-PWR-2, QA-PWR-3
+qa100-p3-a11y-tree | installed,account:alice | fail:QA-ACC-1 | accessibility tree gaps; QA-ACC-2/3
+qa100-p3-cjk-fonts-ime | installed,account:alice | fail:QA-ACC-11 | CJK fonts/IME; QA-ACC-12
+qa100-p3-login-keyboard-layout | installed,account:alice | fail:QA-ACC-10 | the login window ignores the account's keyboard layout
+qa100-p3-lowmem-metered | installed,account:alice,network | fail:QA-ACC-18 | low memory / metered network (best at --mem 4G)
+qa100-plug-author-cli | installed,account:bob | fail:QA-PLUG-1 | the manual's 5-step plugin recipe; QA-PLUG-2, QA-PLUG-11
+qa100-plug-misbehave | installed,account:bob | fail:QA-PLUG-10 | misbehaving plugins; QA-PLUG-13
+qa100-plug2-maker-broken-save | installed,account:bob | fail:plugins-maker-r2:PLUG2-3 | Saved says nothing about a broken manifest; QA-PLUG-9
+qa100-plug2-mcp-orphan | installed,account:bob | fail:plugins-maker-r2:PLUG2-1 | the approval sheet of a dead MCP client still runs the change
+qa100-plug2-modules-install | installed,account:bob | fail:plugins-maker-r2:PLUG2-7 | Install Local AI: "The change did not work" (sealed root, QA-STORE-42)
+qa100-plug2-strikes-notice | installed,account:bob | fail:plugins-maker-r2:PLUG2-2 | a plugin turned off after 3 failures in silence; PLUG2-9
+qa100-session-login-power | installed,account:alice | fail:QA-FILES-1 | power_argv uses shutdown -p; QA-FILES-2 group input, QA-FILES-11 keyring
+qa100-settings-cc-nightshift | installed,account:alice | fail:QA-SET-46 | Night Shift tile and Ctrl+Super+N disagree
+qa100-settings-language | installed,account:alice | fail:QA-SET-27 | languages offered whose locale is not generated
+qa100-settings-lock-undo | installed,account:alice | fail:QA-SET-3 | undo of the lock timeout does not reach hypridle
+qa100-settings-search-enter | installed,account:alice | fail:QA-SET-1 | clearing the search returns to the pre-search pane
+qa100-setup-first-boot | iso-install | fail:QA-DOC-7 | first boot with no account: README-wolvm and code disagree
+qa100-sheet-esc-panes | installed,account:alice | fail:QA-VIS2-37 | Esc across panes with a sheet up; QA-VIS2-34/35, QA-LIVE-8
+qa100-sheet-handoff-black | live | fail:QA-VIS2-4 | Try WolOS hand-off shows the card and console text between black frames (frames step)
+qa100-sheet-modules-row | installed,account:alice | fail:QA-VIS2-41 | the Modules row spinner stretches the list
+qa100-sheet-store-get-label | installed,account:alice,network | fail:QA-VIS2-46 | Get flips to Installing before the password; QA-STORE-59
+qa100-store-pkg-paths | installed,network | fail:QA-STORE-32 | ENOSPC wording (partly on 0.12.1); QA-STORE-42 not reproducible in 0.12.1
+qa100-system-installed-faults | installed,account:none | fail:QA-SYS-1 | wold start-limit-hit after a crash burst: black screen for good
+qa100-system-live-faults | live | fail:QA-SYS-14 | log noise on every live boot
+qa100-update-check | installed,network | fail:QA-STORE-7 | a badly signed manifest still counts (U7, unknown on 0.12.1); QA-STORE-1 not reproducible
+qa100-update-power-loss | installed,network | fail:QA-STORE-8 | leftover @wolos-tx / half slot after a cut during an update
+qa100-update-slot-failure | installed,network | fail:QA-STORE-3 | a failed replace leaves a dangling entry (confirmed on 0.12.1); QA-STORE-4 no update lock
+qa100-upg-0120-to-0121 | iso-install,release-0120,tpm,network | fail:upgrade-path:UPG-2 | Update Now fails in 3 s on 0.12.0; UPG-1, UPG-3, UPG-4, UPG-6
+qa100-upg-survival | installed,release-0120,account:aliceliddell | fail:upgrade-path:UPG-5 | what survives 0.12.0 -> 0.12.1 and back; UPG-7
+qa100-webapp-doctor-launch | installed,account:alice | fail:QA-WEB-1 | Doctor web app launch (feature not in 0.12.1: fails on absence); QA-WEB-24
+qa100-webapp-doctor-theme | installed,account:alice | fail:QA-WEB-2 | Doctor ignores the theme (feature not in 0.12.1)
+qa100-webapp-lifecycle | installed,account:alice | fail:QA-WEB-5 | closing the window leaves the approval sheet's child (feature not in 0.12.1)
+qa100-wm-decorations-xwayland-fill | live,tpm,ssh | fail:QA-WM-2 | XWayland windows undecorated; QA-WM-3
+qa100-wm-minimise-focus | live,tpm,ssh | fail:QA-WM-1 | minimise leaves focus on the hidden window
+qa100-wm-semaphore-states | live,tpm,ssh | fail:QA-SHELL-1 | title-bar buttons misbehave (umbrella; QA-VIS1-23..26)

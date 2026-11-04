@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# QA100-R2-gfx: battery and charger faked with the kernel's test_power module; suspend needs qemu
-# `-global ICH9-LPC.disable_s3=0` and a QMP system_wakeup after the suspend step (wolvm has no verb
-# for it: run `{"execute":"system_wakeup"}` on the QMP socket by hand or from the driver script).
+# QA100-R2-gfx: battery and charger faked with the kernel's test_power module; suspend needs a VM
+# with S3 (`wolvm new ... --s3` or `wolvm set <vm> --s3 on`: -global ICH9-LPC.disable_s3=0); the
+# `suspend` step waits for QEMU's "suspended", `wake` sends system_wakeup.
 # GFX-10/GFX-4: Battery page shows "50% · On battery", no time left, no Energy Mode.
 # GFX-11: on battery the displays turn off at 120 s idle while the lock comes at 300 s.
 # GFX2-5: the sleep hook logs "lock uid 1000: no answer"; GFX2-6: heads stay dark after resume.
@@ -29,9 +29,13 @@ steps:
   save: idle-135.txt
   caption: GFX-11 — dpmsStatus false on every head and no-wol-lock = screens off before the lock
 - key: shift
-- ssh: "systemctl suspend; sleep 1; echo suspending"
-  caption: now send QMP system_wakeup after ~8 s
-- sleep: 30
+- suspend:
+  timeout: 60
+  caption: systemctl suspend in the guest; QEMU reports suspended
+- sleep: 8
+- wake:
+  timeout: 60
+- sleep: 20
 - wait-agent:
   timeout: 90
 - shot: after-resume

@@ -435,5 +435,435 @@ class StopAfterPoweroff(unittest.TestCase):
         self.assertTrue(out.rstrip().endswith("t: stopped"), out)
 
 
+class BlockScalars(unittest.TestCase):
+    def test_item_and_option_blocks(self):
+        text = """steps:
+- ssh: |
+    a=1
+      indented
+    echo "$a"
+
+  expect: "1"
+  save: |
+    out.txt
+- shot done
+"""
+        meta, items = W.parse_yaml_steps(text)
+        st = W.parse_step(items[0])
+        self.assertEqual(st["args"], ['a=1\n  indented\necho "$a"'])
+        self.assertEqual(st["opts"], {"expect": "1", "save": "out.txt"})
+        self.assertEqual(W.parse_step(items[1])["args"], ["done"])
+
+    def test_crash_hotplug_journey_parses(self):
+        _, steps = W.load_journey(os.path.join(HERE, "journeys", "qa100-crash-hotplug-panels.yaml"))
+        matrix = [s for s in steps if s["opts"].get("save") == "hotplug-matrix.txt"][0]
+        self.assertIn("for p in control-center", matrix["args"][0])
+        self.assertTrue(matrix["args"][0].endswith('echo "deaths=$dead"'))
+        self.assertEqual(matrix["opts"]["expect"], "deaths=0")
+
+
+class NewVerbs(unittest.TestCase):
+    def test_parse(self):
+        self.assertEqual(W.parse_step("plug usb-storage /i/stick.img")["args"], ["usb-storage", "/i/stick.img"])
+        self.assertEqual(W.parse_step("display 2 on")["args"], ["2", "on"])
+        self.assertEqual(W.parse_step({"frames": None, "every": 100, "for": 3})["opts"], {"every": 100, "for": 3})
+        self.assertEqual(W.parse_step("suspend")["args"], [])
+        self.assertEqual(W.parse_step({"power-cut": "files 15", "delay": 20})["args"], ["files 15"])
+        self.assertEqual(W.parse_step({"qmp": '{"execute": "query-status"}'})["args"], ['{"execute": "query-status"}'])
+        for bad in ("plug", "unplug", "power-cut", "disk-edit", "qmp"):
+            with self.assertRaises(ValueError, msg=bad):
+                W.parse_step(bad)
+
+    def test_qmp_parse(self):
+        self.assertEqual(W.qmp_parse("system_wakeup"), {"execute": "system_wakeup"})
+        self.assertEqual(W.qmp_parse('device_del {"id": "x"}'), {"execute": "device_del", "arguments": {"id": "x"}})
+        self.assertEqual(W.qmp_parse("device_del", '{"id": "y"}')["arguments"], {"id": "y"})
+        self.assertEqual(W.qmp_parse('{"execute": "quit"}'), {"execute": "quit"})
+        for bad in ('{"x": 1}', "Bad Cmd", "rm;-rf"):
+            with self.assertRaises(ValueError, msg=bad):
+                W.qmp_parse(bad)
+
+    def test_plug_msgs(self):
+        m = W.plug_msgs("usb-storage", "stick0", "/i/s.img", ro=True)
+        self.assertEqual(m[0]["execute"], "blockdev-add")
+        self.assertEqual(m[0]["arguments"]["node-name"], "stick0-blk")
+        self.assertEqual(m[0]["arguments"]["file"], {"driver": "file", "filename": "/i/s.img", "read-only": True})
+        self.assertEqual(m[1]["arguments"], {"driver": "usb-storage", "id": "stick0", "bus": "xhci.0",
+                                             "drive": "stick0-blk", "removable": True})
+        a = W.plug_msgs("usb-audio", "a0")
+        self.assertEqual(a, [{"execute": "device_add", "arguments": {"driver": "usb-audio", "id": "a0",
+                                                                     "bus": "xhci.0", "audiodev": "snd0"}}])
+        with self.assertRaises(ValueError):
+            W.plug_msgs("usb-storage", "s")  # no image
+        with self.assertRaises(ValueError):
+            W.plug_msgs("pci-bomb", "s")
+        with self.assertRaises(ValueError):
+            W.plug_msgs("usb-audio", "bad id")
+        self.assertEqual([x["execute"] for x in W.unplug_msgs("stick0", "usb-storage")], ["device_del", "blockdev-del"])
+        self.assertEqual(W.unplug_msgs("a0", "usb-audio"), [{"execute": "device_del", "arguments": {"id": "a0"}}])
+
+    def test_display_cmd_and_stage(self):
+        c = W.display_cmd(2, True)
+        self.assertIn("Virtual-2/force", c)
+        self.assertIn("echo on >", c)
+        self.assertIn("udevadm trigger --action=change --subsystem-match=drm", c)
+        self.assertIn("echo off >", W.display_cmd(3, False))
+        with self.assertRaises(ValueError):
+            W.display_cmd(0, True)
+        log = "x\nwolos-install: disk 5\nnoise\nwolos-install: files 15 Copying WolOS\n"
+        self.assertEqual(W.last_install_stage(log), "wolos-install: files 15 Copying WolOS")
+        self.assertEqual(W.last_install_stage("nothing"), "")
+
+    def test_heads(self):
+        two = dict(CFG, displays=2)
+        self.assertEqual(W.head_target(CFG, None), (None, None))
+        self.assertEqual(W.head_target(CFG, 0), (None, None))
+        self.assertEqual(W.head_target(two, 1), ("vga0", 1))
+        with self.assertRaises(ValueError):
+            W.head_target(two, 2)
+        self.assertEqual(W.shot_heads(two, "all"), [0, 1])
+        self.assertEqual(W.shot_heads(CFG, "all"), [None])
+        self.assertEqual(W.shot_heads(two, None), [None])
+        self.assertEqual(W.shot_heads(two, "0, 1"), [0, 1])
+        self.assertEqual(W.qmp_screendump("/a.png", "png", "vga0", 1)["arguments"],
+                         {"filename": "/a.png", "format": "png", "device": "vga0", "head": 1})
+
+
+class HardwareCmd(unittest.TestCase):
+    def test_defaults_unchanged_but_hotplug_ready(self):
+        c = W.qemu_cmd(CFG, "/vm")
+        self.assertIn("qemu-xhci,id=xhci", c)
+        self.assertEqual(opt_after(c, "-audiodev"), ["none,id=snd0"])
+        self.assertFalse(any("hda" in a for a in c))  # no sound card by default
+        self.assertNotIn("ICH9-LPC.disable_s3=0", c)
+        self.assertFalse(any("max_outputs" in a for a in c))
+
+    def test_audio(self):
+        dev = opt_after(W.qemu_cmd(dict(CFG, audio=2), "/vm"), "-device")
+        self.assertIn("intel-hda,id=hda0", dev)
+        self.assertIn("hda-duplex,bus=hda0.0,audiodev=snd0", dev)
+        self.assertIn("ich9-intel-hda,id=hda1", dev)
+        self.assertIn("hda-output,bus=hda1.0,audiodev=snd0", dev)
+        self.assertFalse(any("hda2" in a for a in dev))
+
+    def test_displays(self):
+        c = W.qemu_cmd(dict(CFG, displays=3), "/vm")
+        self.assertIn("virtio-vga,id=vga0,max_outputs=3,xres=1280,yres=800", c)
+        smb = opt_after(c, "-smbios")[0]
+        self.assertIn("video=Virtual-2:1280x800e video=Virtual-3:1280x800e", smb)
+        self.assertNotIn("Virtual-1", smb)
+        gl = W.qemu_cmd(dict(CFG, displays=2, gpu="virtio-gl", boot="disk"), "/vm")
+        self.assertIn("virtio-vga-gl,id=vga0,max_outputs=2,xres=1280,yres=800", gl)
+        self.assertIn("video=Virtual-2:1280x800e", opt_after(gl, "-smbios")[0])  # the installed boot too
+        with self.assertRaises(ValueError):
+            W.qemu_cmd(dict(CFG, displays=2, gpu="vmsvga"), "/vm")
+
+    def test_s3_and_extra_args(self):
+        c = W.qemu_cmd(dict(CFG, s3=True, qemu_args=["-device usb-kbd", "-global foo.bar=1"]), "/vm")
+        self.assertEqual(c[c.index("ICH9-LPC.disable_s3=0") - 1], "-global")
+        i = c.index("-daemonize")
+        self.assertEqual(c[i - 4:i], ["-device", "usb-kbd", "-global", "foo.bar=1"])
+
+    def test_disk_buses(self):
+        c = W.qemu_cmd(dict(CFG, disk_bus="nvme", disk_lbs=4096, disk_pbs=4096), "/vm")
+        self.assertIn("nvme,drive=disk0,serial=WOLNVME0,logical_block_size=4096,physical_block_size=4096,bootindex=1", c)
+        self.assertNotIn("ich9-ahci,id=ahci0", c)
+        c = W.qemu_cmd(dict(CFG, disk_bus="sata", boot="disk"), "/vm")
+        self.assertIn("ich9-ahci,id=ahci0", c)
+        self.assertIn("ide-hd,drive=disk0,bus=ahci0.0,bootindex=0", c)
+        c = W.qemu_cmd(dict(CFG, extra_bus="sata", extra_pbs=4096, drives=["/t/w.raw"]), "/vm")
+        dev = opt_after(c, "-device")
+        self.assertLess(dev.index("ich9-ahci,id=ahci0"), dev.index("ide-hd,drive=extra0,bus=ahci0.1,physical_block_size=4096"))
+        self.assertIn("virtio-blk-pci,drive=disk0,bootindex=1", dev)
+        self.assertNotIn("ich9-ahci,id=ahci0", W.qemu_cmd(dict(CFG, extra_bus="sata"), "/vm"))  # no extra disk
+        with self.assertRaises(ValueError):
+            W.blk_device("scsi", "d", 0)
+
+    def test_disk_edit_plan(self):
+        att, det = W.disk_edit_plan("/vm/disk.qcow2", "/dev/nbd1", "/vm/mnt", "wolvm-t")
+        self.assertEqual(att[0], ["qemu-nbd", "--connect", "/dev/nbd1", "--format", "qcow2", "/vm/disk.qcow2"])
+        self.assertIn(["mount", "/dev/nbd1p1", "/vm/mnt/esp"], att)
+        self.assertIn(["mount", "-o", "subvol=@var", "/dev/nbd1p2", "/vm/mnt/var"], att)
+        self.assertFalse(any(c[0] == "cryptsetup" for c in att + det))
+        self.assertEqual(det[0], ["sync"])
+        self.assertEqual(det[-1], ["qemu-nbd", "--disconnect", "/dev/nbd1"])
+        att, det = W.disk_edit_plan("/d", "/dev/nbd0", "/m", "wolvm-t", "/k", read_only=True, luks=True)
+        self.assertIn("--read-only", att[0])
+        self.assertIn(["cryptsetup", "open", "--readonly", "--key-file", "/k", "/dev/nbd0p2", "wolvm-t"], att)
+        self.assertIn(["mount", "-o", "ro,subvol=@wolos-a", "/dev/mapper/wolvm-t", "/m/slot"], att)
+        self.assertIn(["cryptsetup", "close", "wolvm-t"], det)
+        self.assertLess(det.index(["umount", "/m/esp"]), det.index(["cryptsetup", "close", "wolvm-t"]))
+
+    def test_disk_edit_refuses_a_running_vm(self):
+        with tempfile.TemporaryDirectory() as d, \
+                unittest.mock.patch.object(W, "DRY", False), \
+                unittest.mock.patch.object(W.VM, "pid", lambda self: 4242):
+            with self.assertRaises(RuntimeError):
+                W.disk_edit(W.VM(d, "t"), "true")
+
+    def test_disk_edit_always_detaches(self):
+        """The command fails, the mounts and the nbd still go (no device left behind)."""
+        ran = []
+
+        def fake_sh(cmd, **kw):
+            ran.append(cmd)
+            rc = 7 if "sh" in cmd and "-c" in cmd else 0
+            out = "btrfs" if "blkid" in cmd else ""
+            return subprocess.CompletedProcess(cmd, rc, out, "")
+        with tempfile.TemporaryDirectory() as d, \
+                unittest.mock.patch.object(W, "DRY", False), \
+                unittest.mock.patch.object(W.VM, "pid", lambda self: None), \
+                unittest.mock.patch.object(W, "sh", fake_sh), \
+                unittest.mock.patch.object(W.shutil, "which", lambda t: "/usr/bin/" + t), \
+                unittest.mock.patch.object(W.os.path, "exists", lambda p: p == "/dev/nbd0"), \
+                unittest.mock.patch.object(W.os, "geteuid", lambda: 0), \
+                unittest.mock.patch.object(W, "snapshot", lambda vm, act, tag=None: f"{act} {tag}"):
+            rc, text = W.disk_edit(W.VM(d, "t"), "exit 7")
+        self.assertEqual(rc, 7)
+        self.assertIn("undo: wolvm snapshot t restore pre-edit-", text)
+        flat = [" ".join(c) for c in ran]
+        self.assertTrue(flat[-1].startswith("qemu-nbd --disconnect /dev/nbd0"), flat[-3:])
+        self.assertTrue(any(f.startswith("umount ") and f.endswith("/esp") for f in flat))
+        self.assertFalse(any("cryptsetup" in f for f in flat))
+        env = [c for c in ran if c[0] == "env"][0]
+        self.assertTrue(any(a.startswith("VAR=") and a.endswith(os.path.join("mnt", "var")) for a in env))
+
+
+class FakeQmp:
+    def __init__(self, replies=None):
+        self.sent, self.replies = [], replies or {}
+
+    def call(self, msg):
+        self.sent.append(msg)
+        r = self.replies.get(msg["execute"], {})
+        return r.pop(0) if isinstance(r, list) else r
+
+
+class StepsRun(unittest.TestCase):
+    def vm(self, d, cfg=None, pid=4242):
+        vm = W.VM(d, "t")
+        os.makedirs(vm.dir, exist_ok=True)
+        put(vm.cfg_path, json.dumps(cfg or dict(CFG, s3=True, displays=2)))
+        return vm
+
+    def test_qmp_step(self):
+        q = FakeQmp({"query-status": {"status": "running"}})
+        with tempfile.TemporaryDirectory() as d, unittest.mock.patch.object(W.VM, "qmp", lambda self: q):
+            vm = self.vm(d)
+            ok, detail = W.run_step(vm, W.parse_step({"qmp": "query-status", "expect": "running"}), d, 1)
+            self.assertTrue(ok, detail)
+            ok, _ = W.run_step(vm, W.parse_step({"qmp": "query-status", "expect": "paused"}), d, 2)
+            self.assertFalse(ok)
+
+    def test_plug_unplug_storage(self):
+        q = FakeQmp({"qom-list": [[{"name": "stick0"}], [{"name": "usb-tablet"}]]})
+        with tempfile.TemporaryDirectory() as d, \
+                unittest.mock.patch.object(W, "DRY", False), \
+                unittest.mock.patch.object(W.VM, "qmp", lambda self: q), \
+                unittest.mock.patch.object(W.time, "sleep", lambda s: None):
+            vm = self.vm(d)
+            img = os.path.join(d, "s.img")
+            put(img, b"\0" * 512)
+            ok, detail = W.run_step(vm, W.parse_step({"plug": f"usb-storage {img}", "id": "stick0"}), d, 1)
+            self.assertTrue(ok, detail)
+            self.assertEqual(vm.run["plugged"], {"stick0": "usb-storage"})
+            ok, detail = W.run_step(vm, W.parse_step("unplug stick0"), d, 2)
+            self.assertTrue(ok, detail)
+            self.assertEqual([m["execute"] for m in q.sent],
+                             ["blockdev-add", "device_add", "device_del", "qom-list", "qom-list", "blockdev-del"])
+            self.assertEqual(vm.run["plugged"], {})
+
+    def test_suspend_wake(self):
+        q = FakeQmp({"query-status": [{"status": "running"}, {"status": "suspended"}, {"status": "running"}]})
+
+        class Ag:
+            calls = []
+
+            def call(self, cmd, **a):
+                self.calls.append((cmd, a))
+                return {"pid": 1}
+        with tempfile.TemporaryDirectory() as d, \
+                unittest.mock.patch.object(W, "DRY", False), \
+                unittest.mock.patch.object(W.VM, "qmp", lambda self: q), \
+                unittest.mock.patch.object(W.VM, "pid", lambda self: 4242), \
+                unittest.mock.patch.object(W.VM, "agent", lambda self, timeout=10: Ag()), \
+                unittest.mock.patch.object(W.time, "sleep", lambda s: None):
+            vm = self.vm(d)
+            ok, detail = W.run_step(vm, W.parse_step("suspend"), d, 1)
+            self.assertTrue(ok, detail)
+            self.assertIn("systemctl suspend", Ag.calls[0][1]["arg"][1])
+            ok, detail = W.run_step(vm, W.parse_step("wake"), d, 2)
+            self.assertTrue(ok, detail)
+            self.assertIn({"execute": "system_wakeup"}, q.sent)
+            put(vm.cfg_path, json.dumps(CFG))  # no S3: refused, not hung
+            with self.assertRaises(RuntimeError):
+                W.run_step(vm, W.parse_step("suspend"), d, 3)
+
+    def test_power_cut(self):
+        stages = iter(["", "wolos-install: disk 5", "wolos-install: files 15 Copying"])
+        stopped = []
+        with tempfile.TemporaryDirectory() as d, \
+                unittest.mock.patch.object(W, "DRY", False), \
+                unittest.mock.patch.object(W.VM, "pid", lambda self: 4242), \
+                unittest.mock.patch.object(W, "install_stage", lambda vm: next(stages)), \
+                unittest.mock.patch.object(W, "cmd_stop", lambda a: stopped.append(a.force) or 0), \
+                unittest.mock.patch.object(W.time, "sleep", lambda s: None):
+            ok, detail = W.run_step(self.vm(d), W.parse_step({"power-cut": "files 1[0-9]", "delay": 1}), d, 1)
+        self.assertTrue(ok, detail)
+        self.assertEqual(detail, "CUT at: wolos-install: files 15 Copying")
+        self.assertEqual(stopped, [True])  # forced: no powerdown, nothing synced
+
+    def test_frames_and_heads_in_journey(self):
+        shots = []
+
+        def fake_shot(vm, out, nudge=True, head=None, q=None):
+            shots.append((os.path.basename(out), nudge, head))
+            put(out, b"x")
+            return 1280, 800
+        clock = iter([0.0, 0.0, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2] + [5.0] * 50)
+        with tempfile.TemporaryDirectory() as d, \
+                unittest.mock.patch.object(W, "DRY", False), \
+                unittest.mock.patch.object(W, "screenshot", fake_shot), \
+                unittest.mock.patch.object(W.VM, "qmp", lambda self: FakeQmp()), \
+                unittest.mock.patch.object(W.VM, "pid", lambda self: 4242), \
+                unittest.mock.patch.object(W.time, "time", lambda: next(clock)), \
+                unittest.mock.patch.object(W.time, "sleep", lambda s: None):
+            vm = self.vm(d)
+            j = os.path.join(d, "j.yaml")
+            put(j, "steps:\n- frames: try\n  every: 100\n  for: 0.25\n- note: x\n- sleep: 0\n  heads: all\n")
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = W.cmd_journey(W.argparse.Namespace(home=d, name="t", file=j, out=os.path.join(d, "o"),
+                                                        frm=1, keep_going=True))
+            self.assertEqual(rc, 0, buf.getvalue())
+            recs = [json.loads(x) for x in get(os.path.join(d, "o", "journey.jsonl")).splitlines()][1:]
+        frames = [s for s in shots if s[0].startswith("01-try-")]
+        self.assertGreaterEqual(len(frames), 2)
+        self.assertTrue(all(not nudge for _, nudge, _ in frames))  # a nudge would repaint the frames judged
+        self.assertIsNone(recs[0]["shot"])  # no extra screenshot after a burst
+        self.assertEqual(recs[0]["more"], [f for f, _, _ in frames])
+        self.assertEqual([(f, h) for f, _, h in shots if f.startswith("03-")], [("03-sleep-0-h0.png", 0), ("03-sleep-0-h1.png", 1)])
+        self.assertEqual(recs[2]["shot"], "03-sleep-0-h0.png")
+        self.assertEqual(recs[2]["more"], ["03-sleep-0-h1.png"])
+
+
+class NewCli(unittest.TestCase):
+    run_cli = DryRun.run_cli
+    make_fw = DryRun.make_fw
+
+    def test_new_hardware_flags_dry(self):
+        with tempfile.TemporaryDirectory() as d:
+            fw, iso = self.make_fw(d)
+            os.environ["WOLVM_OVMF"] = fw
+            try:
+                with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                    self.run_cli("--home", d, "--dry-run", "new", "hw", "--iso", iso, "--tpm", "--no-tpm")
+                with contextlib.redirect_stderr(io.StringIO()):
+                    rc, out = self.run_cli("--home", d, "--dry-run", "new", "hw", "--iso", iso, "--audio", "2",
+                                           "--displays", "2", "--s3", "--disk-bus", "nvme", "--disk-lbs", "4096",
+                                           "--extra-bus", "sata", "--drive", iso, "--qemu-arg", "-device usb-kbd",
+                                           "--no-tpm")
+            finally:
+                del os.environ["WOLVM_OVMF"]
+            self.assertEqual(rc, 0)
+            for want in ("hda-output,bus=hda1.0,audiodev=snd0", "virtio-vga,id=vga0,max_outputs=2",
+                         "ICH9-LPC.disable_s3=0", "nvme,drive=disk0,serial=WOLNVME0,logical_block_size=4096",
+                         "ide-hd,drive=extra0,bus=ahci0.1", "-device usb-kbd -daemonize", '"tpm": false',
+                         '"displays": 2', '"s3": true'):
+                self.assertIn(want, out)
+            self.assertNotIn("-tpmdev", out)
+
+    def test_bad_counts_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            fw, iso = self.make_fw(d)
+            os.environ["WOLVM_OVMF"] = fw
+            try:
+                for argv in (["--audio", "9"], ["--displays", "0"], ["--displays", "2", "--vmsvga"]):
+                    with self.assertRaises(SystemExit, msg=argv), contextlib.redirect_stderr(io.StringIO()):
+                        self.run_cli("--home", d, "--dry-run", "new", "x", "--iso", iso, *argv)
+            finally:
+                del os.environ["WOLVM_OVMF"]
+
+    def test_set_hardware_dry(self):
+        with tempfile.TemporaryDirectory() as d:
+            vm = os.path.join(d, "vms", "t")
+            os.makedirs(vm)
+            put(os.path.join(vm, "vm.json"), json.dumps(CFG))
+            rc, out = self.run_cli("--home", d, "--dry-run", "set", "t", "--audio", "1", "--displays", "3",
+                                   "--s3", "on", "--tpm", "on")
+            self.assertEqual(rc, 0)
+            cfg = json.loads(out)
+            self.assertEqual((cfg["audio"], cfg["displays"], cfg["s3"], cfg["tpm"]), (1, 3, True, True))
+
+    def test_qmp_plug_display_dry(self):
+        with tempfile.TemporaryDirectory() as d:
+            vm = os.path.join(d, "vms", "t")
+            os.makedirs(vm)
+            put(os.path.join(vm, "vm.json"), json.dumps(dict(CFG, displays=2)))
+            rc, out = self.run_cli("--home", d, "--dry-run", "qmp", "t", "system_wakeup")
+            self.assertEqual(json.loads(out), {"execute": "system_wakeup"})
+            rc, out = self.run_cli("--home", d, "--dry-run", "plug", "t", "usb-audio")
+            self.assertIn('"driver": "usb-audio", "id": "usbaudio0"', out)
+            rc, out = self.run_cli("--home", d, "--dry-run", "display", "t", "2", "on")
+            self.assertIn("Virtual-2/force", out)
+            rc, out = self.run_cli("--home", d, "--dry-run", "screenshot", "t", os.path.join(d, "a.png"), "--head", "1")
+            self.assertIn('"device": "vga0", "head": 1', out)
+            rc, out = self.run_cli("--home", d, "--dry-run", "disk-edit", "t", "--nbd", "/dev/nbd3", "ls $ESP")
+            self.assertEqual(rc, 0)
+            self.assertIn("qemu-img snapshot -c pre-edit-", out)
+            self.assertIn("qemu-nbd --connect /dev/nbd3 --format qcow2", out)
+            self.assertIn("qemu-nbd --disconnect /dev/nbd3", out)
+
+
+class AllJourneys(unittest.TestCase):
+    """Every journey in tests/wolvm/journeys parses and dry-runs (wolvm --dry-run journey), and every
+    qa-/qa100- journey has exactly one line in the qa100 gate manifest."""
+
+    def test_dry_run_every_journey(self):
+        files = sorted(f for f in os.listdir(os.path.join(HERE, "journeys")) if f.endswith((".yaml", ".json")))
+        self.assertGreater(len(files), 70)
+        for f in files:
+            _, steps = W.load_journey(os.path.join(HERE, "journeys", f))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = W.main(["--dry-run", "journey", "x", os.path.join(HERE, "journeys", f)])
+            lines = buf.getvalue().splitlines()
+            self.assertEqual(rc, 0, f)
+            self.assertEqual(len(lines), len(steps), f)
+            self.assertTrue(all(ln[:2].isdigit() for ln in lines), f)
+
+    def test_manifest_covers_every_qa_journey(self):
+        rows = {}
+        for ln in get(os.path.join(HERE, "qa100.manifest")).splitlines():
+            if not ln.strip() or ln.lstrip().startswith("#"):
+                continue
+            cols = [c.strip() for c in ln.split("|")]
+            self.assertEqual(len(cols), 4, ln)
+            j, needs, expect, why = cols
+            self.assertNotIn(j, rows, f"{j} twice")
+            rows[j] = (needs, expect)
+            self.assertRegex(expect, r"^(pass|fail:(QA-[A-Z0-9]+(-[A-Z0-9]+)?-\d+[a-z]?|[a-z0-9-]+:[A-Z0-9]+-\d+))$", ln)
+            self.assertTrue(why, ln)
+            base = [n for n in needs.split(",") if n in ("live", "installed", "iso-install")]
+            self.assertEqual(len(base), 1, f"{j}: exactly one of live/installed/iso-install")
+            for n in needs.split(","):
+                self.assertRegex(n, r"^(live|installed|iso-install|network|audio|no-audio|s3|usb|disk-edit|tpm|"
+                                    r"secureboot|drive|ssh|release-0120|displays:[2-4]|account:[a-z0-9]+)$", f"{j}: {n}")
+        qa = sorted(f[:-5] for f in os.listdir(os.path.join(HERE, "journeys")) if f.startswith(("qa-", "qa100-")))
+        self.assertEqual(sorted(rows), qa)
+        # the hardware a journey's own header asks for is in its needs
+        for j, (needs, _) in rows.items():
+            text = get(os.path.join(HERE, "journeys", j + ".yaml"))
+            verbs = {s["verb"] for s in W.load_journey(os.path.join(HERE, "journeys", j + ".yaml"))[1]}
+            if verbs & {"suspend", "wake"}:
+                self.assertIn("s3", needs, j)
+            if verbs & {"plug", "unplug"}:
+                self.assertIn("usb", needs, j)
+            if "Virtual-2" in text:
+                self.assertIn("displays:", needs, j)
+            if "qemu-nbd" in text or "disk-edit" in verbs:
+                self.assertIn("disk-edit", needs, j)
+
+
 if __name__ == "__main__":
     unittest.main()

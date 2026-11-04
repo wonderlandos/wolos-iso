@@ -15,7 +15,8 @@ tests/wolvm/wolvm doctor        # KVM, qemu, qemu-img, OVMF (+secboot), swtpm, v
 ```
 
 `MISS` lines are required, `warn` lines only matter for one option (`--tpm` needs swtpm,
-`--secureboot` needs virt-fw-vars, `--direct` needs bsdtar). VMs live in `$WOLVM_HOME`
+`--secureboot` needs virt-fw-vars, `--direct` needs bsdtar, `disk-edit` needs qemu-nbd and, for an
+encrypted disk, cryptsetup). VMs live in `$WOLVM_HOME`
 (default `~/.local/share/wolvm`); on the forge use the big disk: `export WOLVM_HOME=/scratch/<you>/wolvm`.
 
 ## Commands
@@ -26,9 +27,12 @@ tests/wolvm/wolvm doctor        # KVM, qemu, qemu-img, OVMF (+secboot), swtpm, v
 | `start NAME` / `stop NAME [--force]` | daemonized qemu (+ swtpm); stop = ACPI power button, then quit, then kill |
 | `status NAME` / `list` / `rm NAME` | JSON status: running, guest agent up, boot device, screen size |
 | `set NAME --boot disk\|cdrom / --iso X / --no-iso / --append ARGS / --net on\|off` | for the next start (after install: `--boot disk`) |
+| `new NAME ... --audio N --displays N --s3 --no-tpm --disk-bus virtio\|nvme\|sata --disk-lbs 512\|4096 --disk-pbs 512\|4096 --extra-bus B --extra-lbs B --extra-pbs B --qemu-arg ARGS...` | the hardware the QA-100 hunters needed (below) |
+| `set NAME --audio N / --displays N / --s3 on\|off / --tpm on\|off` | the same on an existing VM, for the next start |
 | `set NAME --secureboot on\|off` | VM made with `--secureboot`, stopped: flips `SecureBootEnable` in `vars.qcow2` (virt-fw-vars); keys stay enrolled |
 | `eject NAME` | take the ISO out of the running VM |
-| `screenshot NAME OUT.png` | QMP screendump as PNG, prints `OUT.png WxH`; nudges the pointer 1 px first (`--no-nudge`) |
+| `screenshot NAME OUT.png [--head N]` | QMP screendump as PNG, prints `OUT.png WxH`; nudges the pointer 1 px first (`--no-nudge`); `--head N`: head N of a `--displays` VM (0 is the first) |
+| `frames NAME DIR [--every MS --for S --prefix P --head N]` | burst of screendumps, no nudge: `DIR/frame-000.png`... one every MS (default 150) for S seconds (default 10), as fast as QEMU writes them if slower |
 | `wait-stable NAME [--timeout S]` | until two screens 2 s apart are identical (animations done, page loaded) |
 | `type NAME TEXT [-e]` | US keyboard; `-e` reads `\n`, `\t` |
 | `key NAME COMBO...` | `ret esc tab spc backspace up down f2 ctrl-alt-t super shift-tab ctrl-alt-f3` (QEMU qcodes; aliases enter, super, win, del) |
@@ -40,6 +44,13 @@ tests/wolvm/wolvm doctor        # KVM, qemu, qemu-img, OVMF (+secboot), swtpm, v
 | `ssh-open NAME` | `--ssh` VMs: through the agent, start sshd and accept port 22 in nftables (`inet wolos`), this boot only |
 | `logs NAME [-n N] [-u UNIT] [-o FILE]` | `journalctl -b` of the current boot; serial log when the guest is unreachable |
 | `snapshot NAME save\|restore\|list\|delete TAG` | running: the whole VM incl. RAM and TPM (savevm, ~4 s); stopped: disk + vars only |
+| `qmp NAME JSON\|COMMAND [ARGS-JSON]` | one raw QMP command (`qmp v system_wakeup`, `qmp v device_del '{"id":"x"}'`), prints the reply |
+| `plug NAME usb-audio\|usb-storage\|usb-kbd\|usb-mouse [--file IMG --id ID --ro]` | hot-plug a USB device on the xhci bus; `usb-storage` = a raw image as a removable stick (`blockdev-add` + `device_add`), `usb-audio` plays into the null audiodev |
+| `unplug NAME ID` | `device_del`, waits until the guest let go, then `blockdev-del` of a stick's image |
+| `display NAME N on\|off` | plug or unplug connector `Virtual-N` in the guest (DRM debugfs `force` + udev change: the compositor sees a hotplug); `--displays` VMs |
+| `suspend NAME` / `wake NAME [--timeout S]` | S3 (`--s3` VMs): `systemctl suspend` through the agent, until QEMU says `suspended`; `system_wakeup`, until `running` |
+| `power-cut NAME --at REGEX [--timeout S --delay S]` | polls the live system's install log (`wolos-install:` lines, guest agent; serial console as fallback) until a stage matches, waits `--delay`, kills QEMU (nothing synced) |
+| `disk-edit NAME [--nbd /dev/nbdN --key-file F --read-only --no-snapshot] CMD` | stopped VM: the installed disk on the host through qemu-nbd, CMD as root with `$ESP $TOP $VAR $SLOT` mounted (see "Editing an installed disk") |
 | `journey NAME FILE [--out DIR --from N --keep-going]` | replay steps, screenshot after each, `journey.jsonl`, report |
 | `report DIR` | `DIR/report.md` and `DIR/index.html` from a journey dir (or any dir of PNGs) |
 
@@ -50,11 +61,33 @@ running VM fails (savevm needs qcow2 everywhere). `new --no-net` gives no networ
 installs). `new --iso-bus virtio` attaches the ISO as a writable throwaway virtio disk
 (`snapshot=on`), like a USB stick, instead of a CD drive; works with `--direct`.
 
+`new --disk-bus nvme|sata` puts the VM's own disk on NVMe (`/dev/nvme0n1`) or SATA (`ich9-ahci`,
+`/dev/sda`) instead of virtio (`/dev/vda`: change `wolos.autoinstall=` to match); `--disk-lbs`/`--disk-pbs`
+set the logical/physical block size (4096/4096 = a 4Kn disk, 512/4096 = 512e); `--extra-bus`,
+`--extra-lbs`, `--extra-pbs` do the same for every `--drive`. `--qemu-arg ARGS` (repeatable,
+shell-split) is appended last, for anything wolvm has no flag for. `--no-tpm` is the default made
+explicit (it wins over a `--tpm` some wrapper passes; `--tpm --no-tpm` together is refused).
+
+Hardware for the QA journeys:
+- `--audio N` adds N HDA cards (1: `intel-hda` + `hda-duplex`, 2: + `ich9-intel-hda` + `hda-output`,
+  up to 4), all playing into a null audiodev `snd0`. Without it the VM has no sound card (what
+  `qa100-dev-no-sound-card.yaml` needs). `snd0` is always there so `plug usb-audio` works on any VM.
+- `--displays N` (virtio or virtio-gl only) gives virtio-vga `max_outputs=N` and the id `vga0`,
+  and adds `video=Virtual-K:<res>e` for K = 2..N to the console words (heads 2..N start connected:
+  with `-display none` nothing else turns them on). Like the console words, these ride SMBIOS
+  and are ignored with Secure Boot enforced (use `--direct` there). Screenshot one head with
+  `screenshot --head K`; in a journey, `heads: all` (or `heads: 0,2`) on any step takes one per
+  head (`NN-name-h0.png`, `-h1.png`...).
+- `--s3` adds `-global ICH9-LPC.disable_s3=0` (q35 hides S3 otherwise) for `suspend` / `wake`.
+- USB hot-plug needs nothing at `new`: the xhci controller has the id `xhci` (bus `xhci.0`).
+
 `new --from-image DISK` starts from a copy of an existing raw/qcow2 disk (an installed system,
 or a prepared ESP such as `tests/wolvm/mok-esp.sh` builds).
 
 `--dry-run` before the command prints the qemu command line (`new`, `start`) or the QMP JSON
-(`key`, `type`, `click`, `screenshot`, `stop`, `snapshot`) and changes nothing.
+(`key`, `type`, `click`, `screenshot`, `stop`, `snapshot`, `qmp`, `plug`, `unplug`, `wake`), the guest
+command (`display`, `suspend`, `power-cut`), the host commands (`disk-edit`, `set --secureboot`) or the
+numbered steps of a journey (`journey`), and changes nothing.
 
 How the guest is reached without changing the ISO:
 - **Serial console**: wolvm passes `console=tty0 console=ttyS0,115200` as SMBIOS type 11
@@ -95,9 +128,33 @@ bash $F run "$V snapshot live save before-disk-page; $V click live 824 599; $V w
 
 YAML subset (or JSON): top-level `name:`, then `- verb args` or `- verb: value` with indented
 options. Verbs: `start stop shot type key click wait-text wait-agent wait-stable sleep ssh exec logs
-checkpoint snapshot-save snapshot-restore eject boot note serial-send`. Options for every step:
-`timeout`, `retry`, `on-fail-restore: TAG`, `shot: false`, `caption`; `ssh`: `expect`, `rc` (number
-or `any`), `save: file.txt`, `user`; `wait-text`: `regex`, `new`; `click`: `button`, `double`.
+checkpoint snapshot-save snapshot-restore eject boot note serial-send qmp plug unplug display suspend
+wake frames power-cut disk-edit`. Options for every step: `timeout`, `retry`, `on-fail-restore: TAG`,
+`shot: false`, `caption`, `heads: all|0,1`; `ssh`: `expect`, `rc` (number or `any`), `save: file.txt`,
+`user`; `wait-text`: `regex`, `new`; `click`: `button`, `double`; `qmp`: `expect` (in the JSON reply);
+`plug`: `id`, `ro` (`- plug: usb-storage stick.img`); `frames`: `every` (ms), `for` (s), `head`;
+`power-cut`: `delay` (s after the match), `timeout`; `disk-edit`: `expect`, `rc`, `save`, `nbd`,
+`key-file`, `read-only`, `snapshot: false`. A value `|` takes the deeper-indented lines below as a
+literal block (multi-line shell scripts):
+
+```yaml
+- ssh: |
+    for p in control-center notifications; do wol shell show $p; sleep 1; done
+    echo done
+  expect: done
+- plug: usb-storage usb-bad.img        # relative to where wolvm runs
+  id: usbbad
+- display: 2 on                        # Virtual-2 plugged, the next shot has `heads: all`
+  heads: all
+- suspend
+- sleep: 8
+- wake
+- frames: handoff                      # NN-handoff-000.png ... every 150 ms for 10 s
+  every: 150
+  for: 10
+- power-cut: "files 1[0-9]"            # the install log reached "wolos-install: files 1x"
+  delay: 20
+```
 
 ```yaml
 name: live ISO boots to the installer
@@ -122,10 +179,63 @@ into the disk), `install-gui.yaml` (a keyboard template the agent adapts screen 
 A failed step stops the run; fix the step and rerun with `--from N` after `snapshot restore`.
 Each run writes `journey.jsonl`, the PNGs, saved command output, `serial.log`, `report.md`, `index.html`.
 
+## Editing an installed disk (tamper tests)
+
+`wolvm disk-edit NAME CMD` is the host-side half of the boot tamper journeys
+(`qa100-boot2-*.yaml`): it exports the stopped VM's `disk.qcow2` with `qemu-nbd`, mounts the ESP
+(p1) at `$ESP`, and from the btrfs on p2 (opened with `cryptsetup --key-file F` when it is LUKS: the
+recovery key, written without a newline) the top level at `$TOP`, `@var` at `$VAR` and `@wolos-a` at
+`$SLOT`, all under the VM's own `mnt/`; then runs `sh -c CMD` as root and takes everything down again.
+
+```sh
+wolvm disk-edit inst 'echo 99 > $VAR/lib/wolos/secureboot/floor'
+wolvm disk-edit inst --key-file rk 'rm -f $ESP/loader/entries/wolos-a.conf'
+wolvm disk-edit inst --read-only 'ls -l $ESP/EFI/wolos'
+```
+
+Safety, in order: it refuses a running VM (two writers corrupt a qcow2); it refuses an nbd device
+already in use (`/sys/block/nbdN/pid`; pick another with `--nbd /dev/nbd3`) and loads `nbd
+max_part=16` when there is none; before a writing edit it takes the stopped-VM snapshot
+`pre-edit-<time>` of the disk and the vars (`wolvm snapshot NAME restore pre-edit-...` undoes the
+edit; `--no-snapshot` skips it); it unmounts, closes the LUKS mapping and disconnects in a
+`finally`, also when CMD fails; `--read-only` exports and mounts read-only. It needs root:
+it runs its commands through `sudo -n` when not root, so give the user passwordless sudo for
+qemu-nbd/mount/cryptsetup or run it as root. CMD is a root shell on the host: quote it, and never
+point it at host paths outside `$ESP $TOP $VAR $SLOT`. If a run is killed in the middle (SIGKILL),
+clean up by hand: `sudo umount <home>/vms/NAME/mnt/*; sudo cryptsetup close wolvm-NAME;
+sudo qemu-nbd -d /dev/nbd0`.
+
+## The QA-100 gate
+
+`tests/run-installed.sh qa100` runs the QA-100 journeys (`qa-*.yaml`, `qa100-*.yaml`) against one
+wolvm VM and reports each against `tests/wolvm/qa100.manifest`: per journey its needs (`live`,
+`installed` or `iso-install`; `account:NAME`, `network`, `displays:N`, `audio`/`no-audio`, `s3`,
+`usb`, `disk-edit`, `tpm`, `secureboot`, `drive`, `ssh`, `release-0120`) and the result expected on
+today's release: `pass`, or `fail:<id>` with the BUGS.md id (`.claude/v012/qa100/BUGS.md`) the
+journey reproduces (`<report>:<id>` for reports the registry has not merged yet).
+
+```sh
+tests/run-installed.sh qa100 --list        # the table, counts per need and per expected result
+tests/run-installed.sh qa100 --dry-run     # every journey parses (wolvm --dry-run journey)
+tests/run-installed.sh qa100 --vm inst --have installed,account:alice,network,displays:2 \
+    --restore desktop --out /scratch/<you>/qa100
+```
+
+A journey whose needs `--have` does not cover is SKIP; a run journey is PASS, XFAIL (it failed and
+the manifest expects a failure), FAIL (it failed, expected to pass: the gate exits 1) or XPASS (it
+passed although a failure is expected: the bug may be fixed, check and set `pass`; fatal with
+`--strict`). XFAIL only says the journey failed somewhere: read its report to see it failed at the
+bug's step and not earlier. `--restore TAG` restores a wolvm snapshot before each journey so they
+start from the same state; `--only 'qa100-gfx*'` picks a subset. Results: `DIR/qa100-summary.tsv`,
+one journey dir and log per journey.
+
 ## Tests
 
 ```sh
-python3 tests/wolvm/test_wolvm.py     # step parser, key/QMP builders, qemu command, PNG writer, report, dry runs
+python3 tests/wolvm/test_wolvm.py     # step parser, key/QMP builders, qemu command, PNG writer, report, dry runs,
+                                      # hardware flags, hot-plug/S3/power-cut/frames/disk-edit steps, every journey
+                                      # dry-run, the qa100 manifest covering every qa journey
+shellcheck tests/run-installed.sh
 ```
 
 ## Known traps

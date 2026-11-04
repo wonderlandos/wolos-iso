@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# QA100-H13: two displays. Needs a VM with two heads (qemu virtio-vga,max_outputs=2 and kernel arg
-# video=Virtual-2:1280x800e) and an installed disk with alice/curiouser.
+# QA100-H13: two displays. Needs a VM with two heads (`wolvm new ... --displays 2`: virtio-vga
+# max_outputs=2 and kernel arg video=Virtual-2:1280x800e) and an installed disk with alice/curiouser.
+# A step with `heads: all` takes one screenshot per display (NN-name-h0.png, -h1.png).
 # GFX-1: Below rule must put Virtual-2 directly under Virtual-1 (BUG: main moves to 1280,0).
 # GFX-5: Displays page must drop a display unplugged while it is open.
 # GFX-7: at 200 % the Dock must fit the main display (BUG: x=-138 w=915 on 640 logical).

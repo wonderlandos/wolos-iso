@@ -4,9 +4,9 @@
 # surface, focus_grab.rs:270): wallpaper, menu bar and Dock vanish (DEV2-1). On 0.12.1 nothing
 # restarts the shell; webapp-int's supervisor (supervise.rs) would, with every panel state lost.
 # The display is hot-plugged from inside the guest through the DRM debugfs connector force, which
-# the compositor sees as a real hotplug (udev change on the drm subsystem). Needs a VM made with
-# `-device virtio-vga,max_outputs=2` (wolvm new ... then edit the start command, see
-# /scratch/qa100-dev2/setup.sh) and a logged-in desktop (uid 1000).
+# the compositor sees as a real hotplug (udev change on the drm subsystem; `wolvm display <vm> 2 on`
+# does the same by hand). Needs a VM with two heads (`wolvm new ... --displays 2`, or
+# `wolvm set <vm> --displays 2` then start again) and a logged-in desktop (uid 1000).
 #   wolvm journey dev2 tests/wolvm/journeys/qa100-dev2-display-hotplug-cc.yaml
 name: devices, second display plugged with the Control Center open kills the shell
 steps:

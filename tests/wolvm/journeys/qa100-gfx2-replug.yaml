@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# QA100-R2-gfx: three heads (qemu virtio-vga,max_outputs=3, kernel video=Virtual-2:1280x800e
-# video=Virtual-3:1280x800e), installed disk with alice/curiouser.
+# QA100-R2-gfx: three heads (`wolvm new ... --displays 3`: virtio-vga max_outputs=3, kernel
+# video=Virtual-2:1280x800e video=Virtual-3:1280x800e), installed disk with alice/curiouser.
 # GFX2-2: 150 % on 1280x800 becomes 1.6 and the Dock no longer fits.
 # GFX-8 (pass): a rotated display is dressed 1080x1920.
 # GFX2-1: a display unplugged and plugged back gets no wallpaper/bar/Dock (BUG: `Virtual-1 []`).

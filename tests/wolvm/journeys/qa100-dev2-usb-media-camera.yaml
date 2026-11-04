@@ -5,8 +5,9 @@
 # PipeWire), shows its own permission prompt with a live preview before the person answers, and the
 # WolOS menu bar and Control Center show no camera or microphone indicator while it streams (H12
 # DEV-9/DEV-15 confirmed live; the PipeWire stream list is empty, so an indicator fed from it alone
-# would miss browsers). USB plug steps need QMP: run them by hand (see /scratch/qa100-dev2 h.sh)
-# or extend wolvm with a `qmp:` verb; the steps below cover the in-guest half.
+# would miss browsers). The unreadable stick is hot-plugged with the `plug` step: a 256 MiB image
+# whose first 256 KiB are zero, in the directory wolvm runs from:
+#   truncate -s 256M usb-bad.img        (no filesystem signature at all)
 #   wolvm journey dev2 tests/wolvm/journeys/qa100-dev2-usb-media-camera.yaml
 name: devices, unreadable USB disk shown nowhere; camera in use with no indicator
 steps:
@@ -14,7 +15,9 @@ steps:
   timeout: 120
 - ssh: "P=$(pgrep -u 1000 -x wol-shell | head -1); tr '\\0' '\\n' < /proc/$P/environ | grep -E '^(WAYLAND_DISPLAY|HYPRLAND_INSTANCE_SIGNATURE|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR|HOME|USER)=' > /tmp/sess.env; wc -l < /tmp/sess.env"
   expect: "6"
-- note: "by hand: QMP blockdev-add a 256 MiB image whose first 256 KiB are zero, device_add usb-storage,removable=true on bus xhci.0"
+- plug: usb-storage usb-bad.img
+  id: usbbad
+  caption: QMP blockdev-add + device_add usb-storage,removable=true on xhci.0
 - ssh: "sleep 5; lsblk -o NAME,FSTYPE /dev/sda | tail -1; blkid /dev/sda || echo no-fs-signature"
   rc: any
   save: bad-disk.txt
@@ -38,5 +41,6 @@ steps:
 - ssh: "runuser -u $(id -nu 1000) -- env $(tr '\\n' ' ' < /tmp/sess.env) wol shell toggle control-center; sleep 2; echo cc"
   expect: "cc"
 - shot: cc-camera-live
+- unplug: usbbad
 - logs:
   n: 200

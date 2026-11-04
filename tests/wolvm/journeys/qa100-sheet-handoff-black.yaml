@@ -15,10 +15,9 @@
 # Expected after the fix: from the first black frame after the click until the live desktop, every
 # frame is black (or "Display output is not active"): no card, no console text.
 # Run from the live ISO (boot: cdrom): wolvm journey <vm> tests/wolvm/journeys/qa100-sheet-handoff-black.yaml
-# The 0.15 s burst is not a journey verb: run it beside the journey with
-#   for i in $(seq -f %02g 0 69); do wolvm screenshot <vm> try-$i.png --no-nudge & sleep 0.15; done
-# right after the `click` step, and judge the frames: fail if any frame after the first black one
-# matches the pre-click card or contains console text.
+# The 0.15 s burst is the `frames` step right after the `click` (10 s, NN-try-NNN.png, no pointer
+# nudge): judge the frames: fail if any frame after the first black one matches the pre-click card or
+# contains console text.
 name: Try WolOS hand-off is black to black
 steps:
 - start
@@ -34,18 +33,10 @@ steps:
 - shot: welcome
   caption: Welcome card; Try WolOS at about (1040,760) at 1080p (adjust from the shot)
 - click: 1040 760
-- sleep: 0.3
-- shot: t0-3s
-  caption: "card dimming (kit::Reveal fade to black, 320 ms)"
-- sleep: 0.7
-- shot: t1-0s
-  caption: "ASSERT: black"
-- sleep: 0.8
-- shot: t1-8s
-  caption: "ASSERT (fix): black or 'Display output is not active'. BUG: the Welcome card is back at full opacity with a garbage strip at the top (stale scanout buffer during compositor teardown)"
-- sleep: 0.5
-- shot: t2-3s
-  caption: "ASSERT (fix): black. BUG: a frame of the systemd boot log (fbdev pixels never blanked by installer-session)"
+- frames: try
+  every: 150
+  for: 10
+  caption: "0-0.3 s the card dims (kit::Reveal, 320 ms); then ASSERT (fix) every frame black or 'Display output is not active'. BUG: the Welcome card back at full opacity with a garbage strip at the top (~1.8 s, stale scanout during compositor teardown); a frame of the systemd boot log (~2.3 s, fbdev pixels never blanked by installer-session)"
 - wait-stable:
   timeout: 120
 - shot: live-desktop
