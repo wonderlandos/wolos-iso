@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-H19: our own misbehaving test plugin against the sandbox limits (headless, wol plugin run).
+# Only plugins written by this journey are used. Expect every limit to answer a sentence and the
+# CLI to return within seconds. Findings: .claude/v012/qa100/plugins-maker.md.
+name: misbehaving plugin meets the sandbox
+steps:
+- start
+- wait-agent:
+  timeout: 600
+- ssh: "su -l bob -c 'P=~/.local/share/wolos/plugins/bob.evil; mkdir -p $P; printf \"schema = 1\\nid = \\\"bob.evil\\\"\\nname = \\\"Evil\\\"\\nversion = \\\"1\\\"\\nlicense = \\\"MIT\\\"\\npermissions = [\\\"notifications\\\"]\\n[[widget]]\\nid = \\\"loop\\\"\\nscript = \\\"loop.lua\\\"\\n[[widget]]\\nid = \\\"esc\\\"\\nscript = \\\"esc.lua\\\"\\n[[widget]]\\nid = \\\"n\\\"\\nscript = \\\"n.lua\\\"\\n\" > $P/plugin.toml; echo \"return wol.widget { render = function() while true do end end }\" > $P/loop.lua; echo \"return wol.widget { render = function() return wol.label { tostring(io) .. tostring(os) .. tostring(load) .. tostring(warn ~= nil) } end }\" > $P/esc.lua; echo \"return wol.widget { render = function() local ok, m = wol.notify(\\\"a\\\", \\\"b\\\"); return wol.label { tostring(ok) .. tostring(m) } end }\" > $P/n.lua'; echo made"
+  expect: "made"
+- ssh: "su -l bob -c 'timeout 20 wol plugin run bob.evil widget loop --json'"
+  expect: "took too long"
+  rc: any
+- ssh: "su -l bob -c 'wol plugin run bob.evil widget esc --json'"
+  expect: "nilnilnilfalse"
+  rc: any
+  caption: io, os, load absent; warn should be too (PLUG-9)
+- ssh: "su -l bob -c 'wol plugin run bob.evil widget n --json'"
+  expect: "true"
+  rc: any
+  caption: PLUG-2 the first notification of a fresh run must be allowed (0.12.1 refuses it)

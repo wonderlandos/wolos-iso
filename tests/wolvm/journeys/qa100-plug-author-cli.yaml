@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-H19 (plugins-maker): the manual's "How an AI agent writes and tests a plugin in 5 steps"
+# (docs/modules/plugins.md) on an installed disk, as a desktop account made by the Setup Assistant
+# (here: bob / curiouser, uid 1001). Findings: .claude/v012/qa100/plugins-maker.md (PLUG-1 schema
+# file missing, PLUG-3 wol.run stops a render, PLUG-6 .wolplug path).
+name: write, check, run, enable and pack a plugin from the manual
+steps:
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+- ssh: "ls /usr/share/wolos/plugins.schema.json"
+  caption: PLUG-1 step 1 says to read the schema here (missing on 0.12.1)
+  rc: any
+  save: schema.txt
+- ssh: "su -l bob -c 'wol plugin new bob.weather menubar,widget >/dev/null; wol plugin check bob.weather --json' | grep -q '\"valid\": true' && echo scaffold-valid"
+  expect: "scaffold-valid"
+- ssh: "su -l bob -c 'wol plugin run bob.weather widget card 1 --json' | grep -q 'Count: 1' && echo click-ok"
+  expect: "click-ok"
+- ssh: "su -l bob -c 'XDG_RUNTIME_DIR=/run/user/1001 wol plugin enable bob.weather --json' | grep -q '\"enabled\": true' && echo enabled"
+  expect: "enabled"
+- shot: bar-with-plugin
+- ssh: "su -l bob -c 'cd /tmp && wol plugin pack bob.weather --json'"
+  rc: any
+  save: pack.txt
+  caption: PLUG-6 the package lands inside ~/.local/share/wolos/plugins/, listed by nothing
+- ssh: "su -l bob -c 'mkdir -p ~/.local/share/wolos/plugins/bob.slow && cd ~/.local/share/wolos/plugins/bob.slow && printf \"schema = 1\\nid = \\\"bob.slow\\\"\\nname = \\\"Slow\\\"\\nversion = \\\"1\\\"\\nlicense = \\\"MIT\\\"\\npermissions = [\\\"run\\\"]\\n[[widget]]\\nid = \\\"c\\\"\\nscript = \\\"c.lua\\\"\\n\" > plugin.toml && printf \"return wol.widget { render = function() local ok, o = wol.run { \\\"id\\\" }; return wol.label { tostring(ok) } end }\\n\" > c.lua && wol plugin run bob.slow widget --json' | grep -q 'took too long' && echo stopped || echo ran"
+  expect: "ran"
+  rc: any
+  caption: PLUG-3 a render that calls wol.run once is stopped as too long (fails until the meter pauses during services)
