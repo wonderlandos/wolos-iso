@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-R2-sheets: the "Try WolOS" hand-off (QA-VIS2-4; Setup "Get Started" QA-VIS2-20 is the
+# same path). Two causes, measured on the live ISO with 0.15 s bursts:
+#  1. files/usr/lib/wolos/installer-session never blanks the console VT before starting Hyprland
+#     (wol-login does: controller/src/bin/wol-login.rs:118 console_ready -> login.rs:607
+#     BLANK_CONSOLE). When the installer compositor exits, the kernel restores the fbdev
+#     framebuffer (virtio_gpudrmfb) whose PIXELS still hold the systemd boot log -> one frame of
+#     green/white console text. Writing the blank escape while the VT is in KD_GRAPHICS does not
+#     help (tested): it has to happen before the compositor starts, in text mode.
+#  2. kit/reveal.rs:202 exit_faded() fades the surface to black and exits; installer.conf:25 then
+#     runs `hyprctl dispatch exit`. Between the compositor's last black frame and the output going
+#     off ("Display output is not active") the scanout shows a stale buffer: the welcome card at
+#     full opacity with a garbage strip at the top (VIS-2 frame inst-06-try-12). Turning the output
+#     off first (`hyprctl dispatch dpms off`, then exit) removed that frame (qa100-sheets 22-fix-*).
+# Expected after the fix: from the first black frame after the click until the live desktop, every
+# frame is black (or "Display output is not active"): no card, no console text.
+# Run from the live ISO (boot: cdrom): wolvm journey <vm> tests/wolvm/journeys/qa100-sheet-handoff-black.yaml
+# The 0.15 s burst is not a journey verb: run it beside the journey with
+#   for i in $(seq -f %02g 0 69); do wolvm screenshot <vm> try-$i.png --no-nudge & sleep 0.15; done
+# right after the `click` step, and judge the frames: fail if any frame after the first black one
+# matches the pre-click card or contains console text.
+name: Try WolOS hand-off is black to black
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 240
+  caption: the installer Welcome card (dark) on the live ISO
+- ssh: "cat /sys/class/tty/tty0/active; pgrep -a Hyprland | head -1; ls /run/wolos-installer | tr '\\n' ' '"
+  rc: any
+  save: before.txt
+  caption: tty1 active, Hyprland -c installer.conf, no `try` word yet
+- shot: welcome
+  caption: Welcome card; Try WolOS at about (1040,760) at 1080p (adjust from the shot)
+- click: 1040 760
+- sleep: 0.3
+- shot: t0-3s
+  caption: "card dimming (kit::Reveal fade to black, 320 ms)"
+- sleep: 0.7
+- shot: t1-0s
+  caption: "ASSERT: black"
+- sleep: 0.8
+- shot: t1-8s
+  caption: "ASSERT (fix): black or 'Display output is not active'. BUG: the Welcome card is back at full opacity with a garbage strip at the top (stale scanout buffer during compositor teardown)"
+- sleep: 0.5
+- shot: t2-3s
+  caption: "ASSERT (fix): black. BUG: a frame of the systemd boot log (fbdev pixels never blanked by installer-session)"
+- wait-stable:
+  timeout: 120
+- shot: live-desktop
+  caption: the live desktop with menubar and dock
+- ssh: "test -e /run/wolos/try && echo try-set; journalctl -b --no-pager -t wolos | grep -i boot | tail -5"
+  rc: any
+  save: after.txt
+- checkpoint: qa100-sheet-handoff
+- stop

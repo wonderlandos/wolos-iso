@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-R2-sheets: Settings > Modules > Install grows its row by all the free height of the page.
+# Cause: kit/widgets.rs spinner() is built with .vexpand(true) (widgets.rs:387-396) and
+# ui/settings/modules.rs job_button() (modules.rs:128-162) puts that spinner in the row's hbox;
+# the vexpand propagates up to the row inside the vexpand page, so the row takes the slack
+# (~100 px at 600 px window height, ~600 px when the window is maximised: QA-VIS2-41).
+# Expected after the fix (busy_spinner(), or spinner() without vexpand): the list region is
+# pixel-identical before and during the job apart from the spinner and the greyed button.
+# Run on an installed disk with the desktop session up (Alice Liddell / curiouser):
+# wolvm journey <vm> tests/wolvm/journeys/qa100-sheet-modules-row.yaml
+name: Modules Install keeps the row height while the job runs
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop session up
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings Modules >/dev/null 2>&1; echo opened"
+  expect: "opened"
+- wait-stable:
+  timeout: 60
+- shot: modules
+  caption: "the Available list: seven rows of equal height (AI Assistants at y=324 … Gaming at y=588), Install buttons at x=1342"
+- click: 1342 412
+  caption: Install on Sessions (third row)
+- sleep: 0.6
+- shot: install-600ms
+  caption: "ASSERT (fix): the Sessions row is the same height as its neighbours, the spinner beside the greyed Install. BUG: the row is ~100 px tall and Console..Gaming moved down ~60 px (the whole free height of the page)"
+- sleep: 4
+- shot: install-sheet
+  caption: "the Authenticate sheet over the list; the row still tall while the bug is present"
+- click: 1082 344
+  caption: Cancel
+- sleep: 2
+- shot: after-cancel
+  caption: "ASSERT: rows back to one height, Install sensitive again; the status line under the list must NOT say 'Incorrect password. Try again.' (QA-HUNT-1)"
+- ssh: "u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 sh -c 'HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr | head -1) hyprctl dispatch fullscreen 1'; echo maximised"
+  rc: any
+  caption: maximise Settings — the free height is now ~500 px
+- sleep: 2
+- click: 1342 412
+  caption: Install again on a row (adjust x,y from the maximised layout if the list moved)
+- sleep: 0.6
+- shot: install-maximised
+  caption: "ASSERT (fix): row height unchanged. BUG (QA-VIS2-41): the row is hundreds of px tall and the list is pushed off the page"
+- checkpoint: qa100-sheet-modules
+- stop

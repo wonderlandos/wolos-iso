@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-R2-sheets: the Store's Get flips to "Installing…" before the password is asked and reverts
+# silently. Cause: ui/store.rs run_store_action() calls set(TileState::Installing) (store.rs:386)
+# before sh.ctx.act(); the Authenticate sheet arrives 1-2 s later; a Cancel/Denied or a failed
+# install ends in set(Get) with the sentence on the toolbar status sheet (QA-VIS2-46/48,
+# QA-STORE-59). Expected after the fix: the label stays "Get" (insensitive at most) until the
+# change really runs (the first non-NeedsAuth answer, or the retry sent with the password), and a
+# failure leaves a visible sentence on the page.
+# Run on an installed disk with the desktop session up (Alice Liddell / curiouser):
+# wolvm journey <vm> tests/wolvm/journeys/qa100-sheet-store-get-label.yaml
+# Coordinates: Store 900x600 centred on 1920x1080; the Discover hero's Get is at (834,425).
+name: Store Get keeps its label until the install really starts and says why it failed
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop session up
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-store >/dev/null 2>&1; echo opened"
+  expect: "opened"
+- wait-stable:
+  timeout: 60
+- shot: discover
+  caption: Discover with the Blender hero and its Get button
+- click: 834 425
+- sleep: 0.5
+- shot: get-500ms
+  caption: "ASSERT (fix): the hero button still reads 'Get' (greyed is fine). BUG: 'Installing…' already, no sheet yet (store.rs:386 runs before ctx.act)"
+- sleep: 3
+- shot: get-sheet
+  caption: "ASSERT: the Authenticate sheet is up and its sentence is 'App Store is trying to make changes…', NOT the Community sentence (QA-VIS2-47: set_why(AUR_WHY) is global sheet state)"
+- click: 1082 344
+  caption: Cancel (sheet buttons sit at y=344 in the toolbar sheet; adjust from get-sheet)
+- sleep: 2
+- shot: after-cancel
+  caption: "ASSERT: the button reads 'Get' and is sensitive; no error sentence is required for a Cancel"
+# A real failure: no network, then Get again and type the password.
+- ssh: "nmcli networking off 2>/dev/null || ip link set dev $(ip -o route show default | awk '{print $5}' | head -1) down; echo offline"
+  rc: any
+  caption: take the network down so the install fails after the password
+- click: 834 425
+- sleep: 4
+- click: 960 289
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 240
+- shot: failed-settled
+  caption: "ASSERT (fix): a sentence like 'Blender couldn’t be installed. Check that you’re online, then try again.' is visible on the page (toolbar status sheet) and the button is 'Get' again. BUG (QA-VIS2-48/QA-STORE-59): 'Get' with nothing said"
+- ssh: "nmcli networking on 2>/dev/null; journalctl -b --no-pager -n 20 -t wol-admind"
+  rc: any
+  save: admind-journal.txt
+- checkpoint: qa100-sheet-store-get
+- stop

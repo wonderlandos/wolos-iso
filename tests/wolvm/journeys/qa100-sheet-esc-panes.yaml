@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-R2-sheets: the Authenticate sheet's lifetime. The sheet is a gtk::Revealer overlaid on the
+# whole AppWindow body (kit/widgets.rs toolbar_place -> content_overlay) and owned by the Settings
+# Ctx for the life of the window: no key controller (Esc does nothing with the focus in its field,
+# QA-VIS2-37 / QA-LIVE-8), no hook on the sidebar selection (it survives every pane change), and
+# the retry's answer re-presents it wherever the window is by then (QA-VIS2-35). Expected after
+# the fix: Esc = Cancel while the sheet has the focus; a sheet left behind on a pane change is
+# cancelled (or follows with its control), never stacked.
+# Run on an installed disk with the desktop session up (Alice Liddell / curiouser, administrator):
+# wolvm journey <vm> tests/wolvm/journeys/qa100-sheet-esc-panes.yaml
+# Coordinates are for the 900x600 Settings window centred on 1920x1080 (sidebar rows at x=587).
+name: Authenticate sheet closes on Esc and does not survive a pane change
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop session up
+- ssh: "u=$(id -nu 1000); h=$(getent passwd 1000 | cut -d: -f6); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- env HOME=\"$h\" XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f wol-settings Sharing >/dev/null 2>&1; echo opened"
+  expect: "opened"
+  caption: Settings opens on General > Sharing
+- wait-stable:
+  timeout: 60
+- shot: sharing
+  caption: Remote Login switch off at (1354,400)
+- click: 1354 400
+- sleep: 7
+  caption: QA-QAF-3 — the sheet takes 2-5 s to arrive on a 4-vCPU VM
+- shot: sheet-open
+  caption: "ASSERT: the Authenticate sheet is up with the password field focused"
+- key: esc
+- sleep: 1
+- shot: after-esc
+  caption: "ASSERT (fix): the sheet is gone and the Remote Login switch is back to off and sensitive. BUG (0.12.1 and wave3): identical to sheet-open — kit/widgets.rs sheet()/authenticate_sheet() wire no key controller"
+# Open it again and leave the pane with the sheet up.
+- click: 1354 400
+- sleep: 7
+- shot: sheet-again
+- click: 587 461
+  caption: sidebar > Appearance
+- sleep: 3
+- shot: appearance-with-sheet
+  caption: "ASSERT (fix): Appearance shows with NO Authenticate sheet (the pending change was cancelled, its switch is off again on Sharing). BUG: the sheet floats over Appearance — the overlay is on the AppWindow body, the sidebar selection never touches it"
+- click: 598 545
+  caption: sidebar > Desktop & Dock
+- sleep: 3
+- shot: dock-with-sheet
+  caption: "BUG: the sheet is still there over Desktop & Dock; the toggles under it still take clicks (QA-VIS2-35)"
+- click: 960 285
+  caption: the sheet's password field (only meaningful while the bug is present)
+- type: curiouser
+- key: ret
+- sleep: 0.5
+- shot: allow-500ms
+  caption: "ASSERT: the sheet stays up with its spinner (HEAD: set_busy) and the field insensitive; it must not collapse at Return (0.12.1 hides at allow(): settings/mod.rs:634)"
+- sleep: 6
+- shot: allow-settled
+  caption: "ASSERT: the sheet is gone, no 'Incorrect password' line, focus is NOT on the sidebar Search (QA-VIS2-34)"
+- ssh: "for i in $(seq 1 20); do systemctl is-active sshd >/dev/null 2>&1 && break; sleep 1; done; systemctl is-active sshd; journalctl -b --no-pager -n 20 -t wol-admind -t wol-settings"
+  rc: any
+  save: admind-journal.txt
+  caption: Remote Login on (sshd active) and the admind lines for the two requests
+- checkpoint: qa100-sheet-esc
+- stop
