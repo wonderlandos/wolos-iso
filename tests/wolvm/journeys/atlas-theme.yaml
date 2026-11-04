@@ -1,0 +1,343 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# ATLAS-THEME (AT-15b), reel scene R03 (scene 4) "Light and dark follow WolOS": the open Atlas window follows
+# `wol theme dark` / `wol theme light` and an accent change with no restart, page included.
+#   VM: an installed 0.13 image (or a live session) with the atlas-browser package, logged in to the desktop, e.g.
+#     wolvm snapshot-restore inst installed-up && wolvm journey inst tests/wolvm/journeys/atlas-theme.yaml
+# What it proves (assertions of reel-program.md 5.2, row R03; every FAIL line names the number that missed):
+#   (a) after `wol theme dark`, within 2 s: the page's prefers-color-scheme is dark over CDP, the toolbar band of the window
+#       takes the dark token (glass over surface, wol-dark.json), the sidebar column and the page body go dark;
+#   (b) `wol theme light` brings all of it back within 2 s; the browser process is the same one (no restart);
+#   (c) `wol accent set <preset>` for each of the seven other WolOS accents (accent.rs) puts that colour on screen within
+#       2 s (the focus ring of the omnibox, the selected-row pill: pixels of the preset colour are counted, the violet
+#       must be gone); the selection-pill tint is reported as INFO.
+# The oracle tokens are read at run time from `wol theme css <id>` (the accent presets are the table of accent.rs); colours
+# compare by the largest channel difference (3 of 255), sampled from a grim screenshot of the
+# window region. The pair images are the `shot` steps (light, dark, light again, green accent). The wallpaper is the OS's
+# (a lead call, reel-ledger theme.dark.wall) and is not asserted here.
+name: Atlas follows the WolOS theme and accent live
+steps:
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+- ssh: "P=$(pgrep -u 1000 -x wol-shell | head -1); tr '\\0' '\\n' < /proc/$P/environ | grep -E '^(WAYLAND_DISPLAY|HYPRLAND_INSTANCE_SIGNATURE|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR|HOME|USER)=' > /tmp/sess.env; wc -l < /tmp/sess.env"
+  expect: "6"
+  caption: the session environment of the logged-in user
+- ssh: |
+    mkdir -p /tmp/atheme/www /tmp/atheme/profile && chmod 777 /tmp/atheme /tmp/atheme/www /tmp/atheme/profile
+    cat > /tmp/atheme/www/page.html <<'HTML'
+    <!doctype html><meta charset="utf-8"><meta name="color-scheme" content="light dark"><title>R03 page</title>
+    <style>html,body{margin:0;height:100%;background:Canvas;color:CanvasText;font:16px sans-serif}</style>
+    <h1>Light and dark follow WolOS</h1><p>The page uses the system colours Canvas and CanvasText.</p>
+    HTML
+    cat > /tmp/atheme/r03.py <<'PYEOF'
+    #!/usr/bin/env python3
+    # SPDX-License-Identifier: GPL-2.0-or-later
+    # R03 theme probe, run inside the guest as root: changes the WolOS theme as the session user and
+    # measures how long Atlas takes to follow (page colour scheme over CDP, window colours by screenshot).
+    import base64, collections, json, os, re, socket, struct, subprocess, sys, time, urllib.parse, urllib.request
+
+    PORT = 9333
+    USER = subprocess.run(["id", "-nu", "1000"], capture_output=True, text=True).stdout.strip()
+    ENV = dict(l.split("=", 1) for l in open("/tmp/sess.env").read().split("\n") if "=" in l)
+    # The oracle is the theme catalogue itself: `wol theme css <id>` prints the tokens of a theme (the built-in
+    # wol-light / wol-dark, crates/core/src/theme/builtin), so nothing here is a copy of a colour but the accent presets: the catalogue does not list the accent variants, so
+    # their colours are the table of crates/core/src/theme/accent.rs (ACCENTS, light and dark). glass is rgba over surface.
+    ACCENTS = {
+        "violet": ("#7452f5", "#7452f5"), "blue": ("#007292", "#35beee"), "pink": ("#b64495", "#d368b1"),
+        "red": ("#bb3f27", "#ee7e66"), "orange": ("#c06400", "#f2944c"), "yellow": ("#c58a00", "#ffd189"),
+        "green": ("#00863c", "#6bc681"), "graphite": ("#5b5873", "#a9a6c4"),
+    }
+    ACCENT_IDS = list(ACCENTS)
+    _cache = {}
+
+
+    def tokens(theme_id):
+        if theme_id not in _cache:
+            css = user("wol theme css " + theme_id)
+            t = {k: v.strip() for k, v in re.findall(r"--([a-z-]+):\s*([^;]+);", css)}
+            if "surface" not in t or "accent" not in t:
+                raise SystemExit("wol theme css %s gave no tokens: %r" % (theme_id, css[:200]))
+            _cache[theme_id] = t
+        return _cache[theme_id]
+
+
+    def colour(v):
+        """(r, g, b, alpha) of #rrggbb or rgba(r,g,b,a)."""
+        if v.startswith("#"):
+            return rgb(v) + (1.0,)
+        p = [float(x) for x in re.findall(r"[\d.]+", v)]
+        return (int(p[0]), int(p[1]), int(p[2]), p[3] if len(p) > 3 else 1.0)
+
+
+    def theme_tok(theme, accent="violet"):
+        """The oracle of one appearance and accent: surface, glass (flattened), card, control, accent."""
+        t = tokens("wol-" + theme)
+        g = colour(t["glass"])
+        return dict(surface=t["surface"], glass=(("#%02x%02x%02x" % g[:3]), g[3]), card=t["card"], control=t["control"],
+                    accent=ACCENTS[accent][0 if theme == "light" else 1])
+
+
+    class _Tok:
+        def __getitem__(self, theme):
+            return theme_tok(theme)
+
+
+    TOK = _Tok()
+    SELECTION = {"light": 0.22, "dark": 0.30}
+
+
+    def rgb(h):
+        h = h.lstrip("#")
+        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+    def over(fg, a, bg):
+        return tuple(round(fg[i] * a + bg[i] * (1 - a)) for i in range(3))
+
+
+    def lum(c):
+        f = lambda v: (v / 255 / 12.92) if v / 255 <= 0.03928 else (((v / 255) + 0.055) / 1.055) ** 2.4
+        return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2])
+
+
+    def near(a, b, tol=3):
+        return max(abs(a[i] - b[i]) for i in range(3)) <= tol
+
+
+    def user(cmd, timeout=60):
+        env = " ".join("%s=%s" % kv for kv in ENV.items())
+        r = subprocess.run(["runuser", "-u", USER, "--", "env"] + env.split(" ") + ["sh", "-c", cmd],
+                           capture_output=True, text=True, timeout=timeout)
+        return r.stdout
+
+
+    def window():
+        for c in json.loads(user("hyprctl clients -j") or "[]"):
+            if c.get("class") == "atlas" and c.get("mapped", True):
+                return c
+        return None
+
+
+    def scale():
+        try:
+            return float(json.loads(user("hyprctl monitors -j"))[0].get("scale", 1))
+        except Exception:
+            return 1.0
+
+
+    def grab():
+        p = "/tmp/atheme/shot.ppm"
+        user("grim -t ppm %s" % p)
+        d = open(p, "rb").read()
+        parts = d.split(b"\n", 3)
+        w, h = map(int, parts[1].split())
+        return w, h, parts[3]
+
+
+    def mode(shot, x0, y0, x1, y1):
+        w, h, data = shot
+        c = collections.Counter()
+        for y in range(max(0, y0), min(h, y1), 2):
+            row = y * w * 3
+            for x in range(max(0, x0), min(w, x1), 2):
+                o = row + x * 3
+                c[(data[o], data[o + 1], data[o + 2])] += 1
+        return c.most_common(1)[0][0] if c else (0, 0, 0)
+
+
+    def count(shot, x0, y0, x1, y1, want, tol=3):
+        w, h, data = shot
+        n = 0
+        for y in range(max(0, y0), min(h, y1)):
+            row = y * w * 3
+            for x in range(max(0, x0), min(w, x1)):
+                o = row + x * 3
+                if max(abs(data[o] - want[0]), abs(data[o + 1] - want[1]), abs(data[o + 2] - want[2])) <= tol:
+                    n += 1
+        return n
+
+
+    def measure():
+        w = window()
+        s = scale()
+        shot = grab()
+        x, y = int(w["at"][0] * s), int(w["at"][1] * s)
+        ww, hh = int(w["size"][0] * s), int(w["size"][1] * s)
+        return dict(
+            shot=shot, box=(x, y, ww, hh),
+            frame=mode(shot, x + 4, y + 2, x + ww - 4, y + 90),            # tab strip / toolbar band
+            sidebar=mode(shot, x + 4, y + 120, x + 200, y + hh - 8),         # the sidebar column
+            page=mode(shot, x + ww // 2, y + 200, x + ww - 8, y + hh - 8),   # page body
+        )
+
+
+    # ---- CDP (stdlib websocket, one page target) ----------------------------------------------
+    def cdp_eval(expr):
+        t = [x for x in json.loads(urllib.request.urlopen("http://127.0.0.1:%d/json/list" % PORT, timeout=5).read())
+             if x.get("type") == "page" and "127.0.0.1:8765" in x.get("url", "")][0]
+        u = urllib.parse.urlparse(t["webSocketDebuggerUrl"])
+        s = socket.create_connection((u.hostname, u.port), timeout=10)
+        key = base64.b64encode(os.urandom(16)).decode()
+        s.sendall(("GET %s HTTP/1.1\r\nHost: %s:%d\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                   "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n" % (u.path, u.hostname, u.port, key)).encode())
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            buf += s.recv(4096)
+        rest = buf.split(b"\r\n\r\n", 1)[1]
+        data = json.dumps({"id": 1, "method": "Runtime.evaluate", "params": {"expression": expr, "returnByValue": True}}).encode()
+        mask = os.urandom(4)
+        hdr = bytes([0x81]) + (bytes([0x80 | len(data)]) if len(data) < 126 else bytes([0x80 | 126]) + struct.pack(">H", len(data)))
+        s.sendall(hdr + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
+        def rd(n):
+            nonlocal rest
+            while len(rest) < n:
+                rest += s.recv(65536)
+            out, rest = rest[:n], rest[n:]
+            return out
+        while True:
+            b0, b1 = rd(2)
+            ln = b1 & 0x7F
+            if ln == 126:
+                ln = struct.unpack(">H", rd(2))[0]
+            elif ln == 127:
+                ln = struct.unpack(">Q", rd(8))[0]
+            msg = json.loads(rd(ln))
+            if msg.get("id") == 1:
+                s.close()
+                return msg["result"]["result"].get("value")
+
+
+    def media_dark():
+        return bool(cdp_eval("matchMedia('(prefers-color-scheme: dark)').matches"))
+
+
+    def pid():
+        w = window()
+        return str(w["pid"]) if w else ""
+
+
+    # ---- the phases ---------------------------------------------------------------------------
+    def poll(cmd, want_dark, theme, within=2.0, extra=None):
+        """Run cmd (a wol verb) and watch until the page and the frame follow; return the timings (s)."""
+        t0 = time.time()
+        user(cmd)
+        t_media = t_frame = None
+        m = None
+        while time.time() - t0 < 6.0:
+            if t_media is None and media_dark() == want_dark:
+                t_media = time.time() - t0
+            m = measure()
+            want = TOK[theme]
+            glass = over(rgb(want["glass"][0]), want["glass"][1], rgb(want["surface"]))
+            if t_frame is None and (near(m["frame"], glass, 6) or near(m["frame"], rgb(want["surface"]), 6)):
+                t_frame = time.time() - t0
+            if t_media is not None and t_frame is not None and time.time() - t0 > within + 0.5:
+                break
+            time.sleep(0.1)
+        return t_media, t_frame, m
+
+
+    def check(name, ok, detail):
+        print(("PASS " if ok else "FAIL ") + name + " " + detail, flush=True)
+        return ok
+
+
+    def phase(name):
+        ok = True
+        if name == "light0":
+            m = measure()
+            ok &= check("window", window() is not None, "class atlas mapped")
+            ok &= check("media-light", not media_dark(), "prefers-color-scheme light")
+            ok &= check("page-light", lum(m["page"]) > 0.7, "page body %s" % (m["page"],))
+            ok &= check("frame-light", lum(m["frame"]) > 0.7, "frame %s sidebar %s" % (m["frame"], m["sidebar"]))
+            open("/tmp/atheme/pid0", "w").write(pid())
+        elif name in ("dark", "light"):
+            dark = name == "dark"
+            tm, tf, m = poll("wol theme " + name, dark, name)
+            ok &= check("media-%s" % name, tm is not None and tm <= 2.0, "prefers-color-scheme follows in %s s" % (None if tm is None else round(tm, 2)))
+            ok &= check("frame-%s" % name, tf is not None and tf <= 2.0, "toolbar band takes the token in %s s, now %s" % (None if tf is None else round(tf, 2), m["frame"]))
+            tok = TOK[name]
+            ok &= check("page-%s" % name, (lum(m["page"]) < 0.15) == dark and (lum(m["page"]) > 0.7) == (not dark), "page body %s" % (m["page"],))
+            ok &= check("sidebar-%s" % name, (lum(m["sidebar"]) < 0.25) == dark, "sidebar column %s" % (m["sidebar"],))
+            ok &= check("surface-%s" % name, near(m["frame"], over(rgb(tok["glass"][0]), tok["glass"][1], rgb(tok["surface"])), 3) or near(m["frame"], rgb(tok["surface"]), 3),
+                        "toolbar %s vs glass-on-surface or surface of the token set within 3" % (m["frame"],))
+            ok &= check("same-process", pid() == open("/tmp/atheme/pid0").read(), "pid %s before, %s after" % (open("/tmp/atheme/pid0").read(), pid()))
+        elif name == "accent":
+            theme = "dark" if media_dark() else "light"
+            idx = 0 if theme == "light" else 1
+            m0 = measure()
+            x, y, ww, hh = m0["box"]
+            sel = SELECTION[theme]
+            prev = rgb(theme_tok(theme)["accent"])
+            for acc in ACCENT_IDS:
+                if acc == "violet":
+                    continue
+                pair = [theme_tok(th, acc)["accent"] for th in ("light", "dark")]
+                want = rgb(pair[idx])
+                t0 = time.time()
+                user("wol accent set " + acc)
+                got = 0
+                while time.time() - t0 < 5.0:
+                    m = measure()
+                    got = count(m["shot"], x, y, x + ww, y + hh, want)
+                    if got >= 30:
+                        break
+                    time.sleep(0.1)
+                dt = time.time() - t0
+                gone = count(m["shot"], x, y, x + ww, y + hh, prev)
+                ok &= check("accent-" + acc, got >= 30 and dt <= 2.0 and gone < got,
+                            "%d px of %s after %.2f s (the violet left: %d px)" % (got, pair[idx], dt, gone))
+                pill = count(m["shot"], x, y + 90, x + 220, y + hh, over(want, sel, rgb(TOK[theme]["surface"])), 6)
+                print("INFO %s: selection pill (accent at %.0f%%) pixels in the sidebar column: %d" % (acc, sel * 100, pill))
+            user("wol accent set violet")
+        print("r03-%s-%s" % (name, "ok" if ok else "FAILED"))
+        return 0 if ok else 1
+
+
+    if __name__ == "__main__":
+        sys.exit(phase(sys.argv[1]))
+    PYEOF
+    chmod 644 /tmp/atheme/r03.py
+    U=$(id -nu 1000)
+    runuser -u $U -- env $(tr '\n' ' ' < /tmp/sess.env) sh -c 'wol theme light >/dev/null 2>&1; wol accent set violet >/dev/null 2>&1; true'
+    systemctl stop atheme-www 2>/dev/null; systemd-run --unit=atheme-www --uid=1000 python3 -I -m http.server 8765 --bind 127.0.0.1 --directory /tmp/atheme/www >/dev/null 2>&1
+    echo prepared
+  expect: "prepared"
+  caption: the probe, a page in the system colours, a web server on loopback, the theme set to light and the violet accent
+- ssh: |
+    U=$(id -nu 1000); R="runuser -u $U -- env $(tr '\n' ' ' < /tmp/sess.env)"
+    pkill -u 1000 -f 'remote-debugging-port=9333' || true; sleep 1
+    $R sh -c 'setsid atlas --remote-debugging-port=9333 --user-data-dir=/tmp/atheme/profile --no-first-run --no-default-browser-check http://127.0.0.1:8765/page.html >/tmp/atheme/atlas.log 2>&1 </dev/null &'
+    for i in $(seq 1 60); do curl -fsS http://127.0.0.1:9333/json/version >/dev/null 2>&1 && break; sleep 1; done
+    sleep 6; echo started
+  expect: "started"
+  caption: Atlas on the light theme, a fresh profile, the page open
+- shot: r03-light-before
+- ssh: "python3 -I /tmp/atheme/r03.py light0"
+  expect: "r03-light0-ok"
+  save: r03-light0.txt
+  caption: "start state: window class atlas, prefers-color-scheme light, light page, light toolbar"
+- ssh: "python3 -I /tmp/atheme/r03.py dark"
+  expect: "r03-dark-ok"
+  save: r03-dark.txt
+  caption: "R03 `wol theme dark`: media, toolbar band, sidebar and page dark within 2 s, same process"
+- shot: r03-dark
+- ssh: "python3 -I /tmp/atheme/r03.py light"
+  expect: "r03-light-ok"
+  save: r03-light.txt
+  caption: "R03 `wol theme light`: everything back within 2 s, same process"
+- shot: r03-light
+- key: meta_l-l
+- sleep: 1
+- ssh: "python3 -I /tmp/atheme/r03.py accent"
+  expect: "r03-accent-ok"
+  save: r03-accent.txt
+  caption: "R03 `wol accent set <preset>`, all seven: the preset colour on the omnibox ring and the selected-row pill within 2 s (omnibox focused with Super L)"
+- ssh: "runuser -u $(id -nu 1000) -- env $(tr '\\n' ' ' < /tmp/sess.env) wol accent set green >/dev/null 2>&1; sleep 2; echo green-set"
+  expect: "green-set"
+  caption: the green accent, 2 s after the change, for the picture
+- shot: r03-accent-green
+- ssh: "runuser -u $(id -nu 1000) -- env $(tr '\\n' ' ' < /tmp/sess.env) wol accent set violet >/dev/null 2>&1; echo violet-set"
+- ssh: "pkill -u 1000 -f 'remote-debugging-port=9333' || true; systemctl stop atheme-www; echo cleaned"
+  expect: "cleaned"
