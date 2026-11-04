@@ -1,0 +1,104 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# ATLAS-PKG (AT-12/AT-23), reel scene R11 "Atlas updates with WolOS": a new version of Atlas arrives
+# through the package manager and nothing else; the profile (and the one from the previous browser
+# package, J-A9) survives; the app is started again on the new version.
+#   1. Host (an Arch host with makepkg, e.g. the forge): two lane artifacts N and N+1, the repo and a web server:
+#        tests/wolvm/atlas-update-repo.sh /scratch/atlas-pkg/srv <wolos-pkgbuilds>/atlas-browser N.tar.xz N1.tar.xz 8015
+#      (N and N+1 may be the same artifact: N+1 is then pkgrel 2.) Leave it running.
+#   2. A VM from install-auto.yaml (checkpoint installed-up) with an administrator and the network up
+#      (the guest reaches the host at 10.0.2.2):
+#        wolvm snapshot-restore inst installed-up && wolvm journey inst tests/wolvm/journeys/atlas-update.yaml
+# N+1 must be newer than the atlas-browser the image ships. The repo is unsigned (SigLevel = Never), listed
+# before every other repo of /etc/pacman.conf, and only this journey's guest sees it.
+# What it proves: (a) `/usr/bin/atlas`, atlas.desktop and its icon come from the package; (b) a profile
+# of the previous package (~/.config/net.imput.helium) is moved once, with its cache, the default-browser
+# entries and the keyring untouched; (c) `wol update apply` brings N+1, and after the restart
+# `pacman -Q atlas-browser` and `atlas --version` say N+1 and the profile is still there; (d) no
+# process of Atlas holds a connection to a non-local address while it runs (the full egress capture
+# is the privacy harness's, tools/bench/atlas/privacy).
+name: Atlas updates through the package manager and the profile survives
+steps:
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+  caption: login window
+- ssh: "curl -fsS --max-time 20 http://10.0.2.2:8015/n.txt && curl -fsS --max-time 20 http://10.0.2.2:8015/n1.txt"
+  save: expected-versions.txt
+  caption: the host repo answers; the first line of each file is the pacman version, the second what `atlas --version` prints
+# The test repo first in pacman.conf, pointing at N.
+- ssh: "sed -i '/^\\[atlas-test\\]/,/^$/d' /etc/pacman.conf && awk 'BEGIN{d=0} /^\\[/ && $0 != \"[options]\" && !d {print \"[atlas-test]\\nSigLevel = Never\\nServer = http://10.0.2.2:8015/n\\n\"; d=1} {print}' /etc/pacman.conf > /etc/pacman.conf.new && mv /etc/pacman.conf.new /etc/pacman.conf && grep -n -A2 '^\\[atlas-test\\]' /etc/pacman.conf"
+  expect: "10.0.2.2:8015/n"
+  caption: atlas-test is the first repo, version N
+# J-A9: a profile written by the previous package. The user has no ~/.config/atlas yet.
+- ssh: "u=$(id -nu 1000); h=$(getent passwd $u | cut -d: -f6); pkill -u $u -x atlas || true; sleep 1; rm -rf $h/.config/atlas $h/.cache/atlas; mkdir -p $h/.config/net.imput.helium/Default $h/.cache/net.imput.helium; echo keep-me > $h/.config/net.imput.helium/Default/atlas-update-marker; echo cached > $h/.cache/net.imput.helium/marker; printf '[Default Applications]\\nx-scheme-handler/https=helium.desktop;\\ntext/html=helium.desktop;\\napplication/pdf=org.gnome.Papers.desktop;\\n' > $h/.config/mimeapps.list; chown -R $u: $h/.config $h/.cache; echo old-profile-written"
+  expect: "old-profile-written"
+- ssh: "pacman -Sy --noconfirm atlas-test/atlas-browser 2>&1 | tail -5; pacman -Q atlas-browser"
+  timeout: 600
+  save: install-n.txt
+  caption: Atlas N from the test repo
+- ssh: "n=$(curl -fsS http://10.0.2.2:8015/n.txt | sed -n 1p); test \"$(pacman -Q atlas-browser | cut -d' ' -f2)\" = \"$n\" && echo pacman-has-N"
+  expect: "pacman-has-N"
+- ssh: "pacman -Qi atlas-browser | grep -E '^(Name|Version|Provides|Replaces|Conflicts With|Licenses) '; test -x /usr/bin/atlas && test -x /opt/atlas/atlas && echo launcher-and-binary; ls /opt/atlas/locales | wc -l; test ! -e /opt/atlas/chromedriver && echo no-chromedriver"
+  save: package-facts.txt
+  expect: "no-chromedriver"
+  caption: "pacman -Qi atlas-browser: provides web-browser, replaces helium-browser; 13 locale packs; no chromedriver"
+- ssh: "grep -E '^(Name|Icon|StartupWMClass|Exec)=' /usr/share/applications/atlas.desktop; test -e /usr/share/icons/hicolor/256x256/apps/atlas.png && echo icon-in-hicolor; find /usr/share/icons -name 'wolos-atlas*' | head -3"
+  save: desktop-file.txt
+  expect: "icon-in-hicolor"
+  caption: atlas.desktop names Atlas, class atlas, icon atlas (hicolor 256 from the package; the WolOS theme's Folio mark when it aliases it)
+# First start as the user: the launcher moves the old profile (headless: no window needed).
+- ssh: "u=$(id -nu 1000); runuser -u $u -- env HOME=$(getent passwd $u | cut -d: -f6) XDG_RUNTIME_DIR=/run/user/1000 timeout 60 /usr/bin/atlas --headless --disable-gpu --dump-dom about:blank >/dev/null 2>/tmp/atlas-first.err; h=$(getent passwd $u | cut -d: -f6); cat $h/.config/atlas/Default/atlas-update-marker; cat $h/.cache/atlas/marker; ls -d $h/.config/net.imput.helium $h/.cache/net.imput.helium 2>&1 | grep -c 'No such file'; grep -c atlas.desktop $h/.config/mimeapps.list; grep -c helium.desktop $h/.config/mimeapps.list; ls $h/.local/share/keyrings 2>/dev/null | head -3"
+  rc: any
+  save: migration.txt
+  expect: "keep-me"
+  caption: "J-A9: profile and cache moved to ~/.config/atlas and ~/.cache/atlas (marker kept, 2 old paths gone, 2 entries now atlas.desktop, 0 helium.desktop, keyring files untouched)"
+# R11 (d): while Atlas runs, no connection to a non-local address.
+- ssh: "u=$(id -nu 1000); (runuser -u $u -- env HOME=$(getent passwd $u | cut -d: -f6) XDG_RUNTIME_DIR=/run/user/1000 timeout 25 /usr/bin/atlas --headless --disable-gpu --remote-debugging-port=0 about:blank >/dev/null 2>&1 &) ; sleep 12; ss -H -tunp 2>/dev/null | grep -E 'atlas' | grep -vE '127\\.0\\.0\\.1|\\[::1\\]' | wc -l"
+  rc: any
+  save: egress.txt
+  caption: "R11: 0 sockets of the browser to a non-local address after 12 s (the debugging flag is this probe's own, not a default)"
+# The update: repo now serves N+1; the system update installs it into the other slot.
+- ssh: "sed -i 's#^Server = http://10.0.2.2:8015/n$#Server = http://10.0.2.2:8015/n1#' /etc/pacman.conf && grep -n '10.0.2.2:8015' /etc/pacman.conf"
+  expect: "8015/n1"
+  caption: the repo now offers N+1
+- ssh: "pacman -Sy >/dev/null 2>&1; pacman -Qu 2>/dev/null | grep atlas-browser || true"
+  rc: any
+  save: pending.txt
+  caption: pacman sees atlas-browser N -> N+1 as pending
+- ssh: "timeout 1700 wol update apply --yes >/tmp/atlas-apply.log 2>&1; echo rc=$?; tail -5 /tmp/atlas-apply.log"
+  timeout: 1800
+  rc: any
+  save: apply.txt
+- ssh: "grep -q 'updated into wolos-' /tmp/atlas-apply.log && echo applied"
+  expect: "applied"
+  caption: the update built the other slot (with the Atlas update inside it)
+- stop
+- start
+- wait-agent:
+  timeout: 600
+- wait-stable:
+  timeout: 180
+  caption: login window on the new slot
+- ssh: "cat /proc/cmdline | tr ' ' '\\n' | grep -E 'subvol=@wolos-'"
+  save: slot.txt
+- ssh: "n1=$(curl -fsS http://10.0.2.2:8015/n1.txt | sed -n 1p); test \"$(pacman -Q atlas-browser | cut -d' ' -f2)\" = \"$n1\" && echo pacman-has-N1"
+  expect: "pacman-has-N1"
+  caption: the package manager says N+1
+- ssh: "want=$(curl -fsS http://10.0.2.2:8015/n1.txt | sed -n 2p); got=$(env HOME=/tmp /usr/bin/atlas --version 2>/dev/null | head -1); echo want=$want got=$got; test \"$got\" = \"$want\" && echo browser-is-N1"
+  expect: "browser-is-N1"
+  caption: the browser itself reports N+1 (the same line `atlas://version` starts with)
+- ssh: "u=$(id -nu 1000); h=$(getent passwd $u | cut -d: -f6); cat $h/.config/atlas/Default/atlas-update-marker && echo profile-intact"
+  expect: "profile-intact"
+  caption: the profile survived the update
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop up
+- ssh: "u=$(id -nu 1000); runuser -u $u -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$') /usr/bin/atlas atlas://version >/dev/null 2>&1 & sleep 1; echo started"
+  expect: "started"
+- sleep: 8
+- shot: atlas-version-after-update
+  caption: "R11: atlas://version shows N+1, started after the update, same profile"
