@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA100-H13: two displays. Needs a VM with two heads (qemu virtio-vga,max_outputs=2 and kernel arg
+# video=Virtual-2:1280x800e) and an installed disk with alice/curiouser.
+# GFX-1: Below rule must put Virtual-2 directly under Virtual-1 (BUG: main moves to 1280,0).
+# GFX-5: Displays page must drop a display unplugged while it is open.
+# GFX-7: at 200 % the Dock must fit the main display (BUG: x=-138 w=915 on 640 logical).
+name: Two displays arrangement, unplug, 200 percent
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+- ssh: "H=\"runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl\"; $H keyword monitor 'Virtual-2,1280x800@74.99,0x800,1'; sleep 1; $H -j monitors"
+  save: below.json
+  caption: EXPECT Virtual-1 at 0,0 and Virtual-2 at 0,800
+- ssh: "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 systemd-run --user --collect wol-settings Displays"
+- wait-stable:
+  timeout: 30
+- ssh: "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl keyword monitor 'Virtual-2,disable'"
+- sleep: 4
+- shot: displays-after-unplug
+  caption: EXPECT one display section. BUG if two
+- ssh: "H=\"runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl\"; $H keyword monitor 'Virtual-1,1280x800@74.99,auto,2'; sleep 2; $H -j layers"
+  save: layers-200.json
+  caption: EXPECT wol-dock x >= 0 and w <= 640
+- shot: scale-200
+- ssh: "H=\"runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl\"; $H keyword monitor 'Virtual-1,1280x800@74.99,auto,1'; $H keyword monitor 'Virtual-2,1280x800@74.99,auto,1'; echo reset"
+  expect: reset
+- stop
