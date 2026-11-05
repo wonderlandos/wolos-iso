@@ -32,7 +32,7 @@ qa100-a8-session-power | installed,account:alice | fail:QA-FDAY-5@visual | A8: W
 qa100-boot-live-sb-off-later | live,secureboot,tpm | pass | pins facts: no key screen with Secure Boot off (needs live-secureboot.yaml first, then wolvm set --secureboot off)
 qa100-boot-tpm-reseal | installed,tpm,secureboot | fail:kernel-boot:BOOT-1@10 | recovery key asked on every start; reseal finds an empty keyring (RK= via envsubst)
 qa100-boot2-floor-ghost-loop | installed,disk-edit | fail:kernel-boot-r2:BOOT2-3@3 | restart loop every ~25 s (floor 99 + ghost wolos-b entry); related QA-STORE-3
-qa100-boot2-no-entry | installed,disk-edit | fail:kernel-boot-r2:BOOT2-1@4 | lost/garbage loader entry drops into the firmware menu
+qa100-boot2-no-entry | installed,disk-edit | pass | lost/garbage loader entry drops into the firmware menu
 qa100-boot2-refused-slot-silent | installed,disk-edit | fail:kernel-boot-r2:BOOT2-4@4 | verity-notice written, nobody shows it
 qa100-boot2-seal-symlinks | installed | fail:kernel-boot-r2:BOOT2-5@4 | symlinked commands outside the seal
 qa100-console-shells | installed,account:alice | fail:QA-FILES-4@15 | bash through wol-term-shell has no WolOS setup
