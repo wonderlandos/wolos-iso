@@ -201,3 +201,45 @@ fn autoinstall_from_the_kernel_command_line() {
     assert!(st.success());
     assert_eq!(log(&d), "install-run /dev/vda\nsystemctl poweroff\n");
 }
+
+/// QA-FDAY-2 / QA-SET-27: an unattended install (no plan) generates the languages Settings offers
+/// before the initramfs and before the seal; the first boot's Setup Assistant only writes LANG, and
+/// the sealed `/usr/lib/locale` cannot grow afterwards. The image keeps what locale-gen reads: no
+/// pacman.conf line drops glibc's locale sources.
+#[test]
+fn an_unattended_install_generates_every_language() {
+    for conf in ["profile/pacman.conf", "profile/airootfs/etc/pacman.conf"] {
+        let c = read(conf);
+        assert!(
+            !c.lines()
+                .any(|l| l.trim_start().starts_with("NoExtract") && l.contains("i18n")),
+            "{conf} drops /usr/share/i18n: locale-gen would make nothing"
+        );
+    }
+    // install-run: the plan-less branch generates them, before the initramfs and the seal.
+    let run = read("files/usr/lib/wolos/install-run");
+    let lines: Vec<&str> = run.lines().map(str::trim).collect();
+    let at = |w: &str| {
+        lines
+            .iter()
+            .position(|x| x.starts_with(w))
+            .unwrap_or_else(|| panic!("{w} not in install-run"))
+    };
+    let settings = at("wol install settings");
+    assert_eq!(
+        lines[settings + 1],
+        "else",
+        "the no-plan branch of the same if"
+    );
+    let locales = at("wol install locales");
+    assert!(locales > settings && locales < at("arch-chroot \"$T\" mkinitcpio -P"));
+    let seal = lines
+        .iter()
+        .position(|x| x.contains("wol seal apply"))
+        .expect("seal");
+    assert!(locales < seal, "before the seal");
+    assert!(
+        lines[locales].contains("|| fail"),
+        "a failed locale-gen stops the install"
+    );
+}

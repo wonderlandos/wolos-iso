@@ -17,7 +17,7 @@ steps:
 - wait-stable:
   timeout: 120
   caption: the desktop session is up
-- ssh: "runuser -u $(id -nu 1000) -- env XDG_RUNTIME_DIR=/run/user/1000 sh -c 'wol theme dark && (wol theme accent green || wol accent green)' && echo themed"
+- ssh: "runuser -u $(id -nu 1000) -- env XDG_RUNTIME_DIR=/run/user/1000 sh -c 'wol theme dark && wol accent set green' && echo themed"
   expect: "themed"
   caption: dark theme and the green accent, before the app opens
 - sleep: 2
@@ -46,7 +46,7 @@ steps:
 - ssh: "cat /tmp/qa100-doctor-theme.log; journalctl -b --no-pager -t wold -n 50 | grep -i theme || true"
   rc: any
   save: doctor-theme-log.txt
-- ssh: "runuser -u $(id -nu 1000) -- env XDG_RUNTIME_DIR=/run/user/1000 sh -c 'wol theme light; wol theme accent violet || wol accent violet' && pkill -u 1000 -x wol-webhost; echo cleaned"
+- ssh: "runuser -u $(id -nu 1000) -- env XDG_RUNTIME_DIR=/run/user/1000 sh -c 'wol theme light; wol accent set violet' && pkill -u 1000 -x wol-webhost; echo cleaned"
   expect: "cleaned"
   caption: back to the defaults, Doctor closed
 - checkpoint: qa100-webapp-doctor-theme
