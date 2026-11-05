@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# ADR 0055 on the real image: the system TLS policy is applied by the image build (pacman hook
+# wolos-tls.hook -> /usr/lib/wolos/tls-policy) and every TLS stack WolOS ships negotiates the hybrid
+# post-quantum group X25519MLKEM768 with a post-quantum server. Needs the network.
+# Run on an installed disk: wolvm journey <vm> tests/wolvm/journeys/qa100-tls-doctor.yaml
+name: Post-quantum TLS on the installed system
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- ssh: "grep -x 'ssl_conf = wolos_ssl_conf' /etc/ssl/openssl.cnf && grep -x '.include /usr/share/wolos/tls/openssl.cnf' /etc/ssl/openssl.cnf && grep -q '^default-priority-string = NORMAL:-VERS-ALL:+VERS-TLS1.3:+VERS-TLS1.2:-GROUP-ALL:+GROUP-X25519-MLKEM768' /etc/gnutls/config && echo policy-applied"
+  expect: "policy-applied"
+  save: tls-policy.txt
+  caption: the image build pointed OpenSSL and GnuTLS at the WolOS TLS policy
+- ssh: "echo | openssl s_client -connect pq.cloudflareresearch.com:443 -servername pq.cloudflareresearch.com -brief 2>&1"
+  expect: "Negotiated TLS1.3 group: X25519MLKEM768"
+  save: tls-openssl.txt
+  caption: OpenSSL (curl, pacman, DNS over TLS) negotiates the hybrid group
+- ssh: "gnutls-cli pq.cloudflareresearch.com </dev/null 2>&1 | grep -- '- Description'"
+  expect: "HYBRID-X25519-MLKEM768"
+  save: tls-gnutls.txt
+  caption: GnuTLS (GTK apps, wget) negotiates the hybrid group
+- ssh: "echo | openssl s_client -connect pq.cloudflareresearch.com:443 -tls1_1 -brief 2>&1; true"
+  expect: "no protocols available"
+  caption: TLS 1.1 is refused
+- ssh: "u=$(id -nu 1000) && runuser -u \"$u\" -- env HOME=$(getent passwd 1000 | cut -d: -f6) wol doctor tls --json"
+  expect: "\"ready\": true"
+  timeout: 120
+  save: wol-doctor-tls.json
+  caption: wol doctor tls, as the person, says every stack offered the post-quantum group and got it
