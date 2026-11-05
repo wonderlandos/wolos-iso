@@ -157,7 +157,7 @@ bsdtar -xOf "$ISO" wolos/x86_64/airootfs.sha512 2>/dev/null | grep -Eq '^[0-9a-f
 (cd "$(dirname "$ISO")" && sha256sum "$(basename "$ISO")" > "$(basename "$ISO").sha256")
 "$HERE/release/release-manifest.sh" "$ISO" "$SNAP" "$REV" "${WOLOS_IMAGE_URL:-https://github.com/wonderlandos/wolos-packages/releases/download/$SNAP}" \
   "$VER" "$KV" > "${ISO%.iso}.json"
-# A release asset is at most 2 GiB: the ISO is one download, never split.
-SZ=$(stat -c %s "$ISO")
-[ "$SZ" -le $((2047 * 1024 * 1024)) ] || die "$ISO is $SZ bytes, over the 2047 MiB release asset limit"
+# The size is reported, never a gate (ISO-GATE, lead 2026-11-04): an ISO over 2 GiB cannot be a GitHub
+# asset, so `wolos-build release` publishes it on the CDN and links it from the GitHub release.
+"$HERE/release/iso-size.sh" "$ISO"
 echo "image: $ISO  sha256: $ISO.sha256  manifest: ${ISO%.iso}.json"

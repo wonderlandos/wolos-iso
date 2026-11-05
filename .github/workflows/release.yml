@@ -20,7 +20,8 @@
 # the lead's gh login. A missing signing key is always an error.
 # Secrets: WOLOS_RELEASE_KEY (Ed25519 PEM, the package key: release.json.sig), WOLOS_SB_KEY /
 # WOLOS_SB_CERT (PEM, Secure Boot, ADR 0025; with
-# vars.WOLOS_SB_LAYOUT=1), WOLOS_RELEASES_TOKEN (optional: writes the releases repo). Variables:
+# vars.WOLOS_SB_LAYOUT=1), WOLOS_RELEASES_TOKEN (optional: writes the releases repo), WOLOS_CDN_UPLOAD_TOKEN (optional:
+# the CDN, the primary download; required for an ISO over 2 GiB, which GitHub cannot hold). Variables:
 # AWS_ROLE_ARN, AWS_REGION, BUCKET (S3 and ECR over OIDC), WOLOS_RELEASES_REPO, WOLOS_SB_LAYOUT.
 # The tool runs from the builder image (.github/builder, .github/builder-image; ECR over OIDC).
 name: release
@@ -40,6 +41,8 @@ on:
       WOLOS_SB_CERT:
         required: false
       WOLOS_RELEASES_TOKEN:
+        required: false
+      WOLOS_CDN_UPLOAD_TOKEN:
         required: false
 
 permissions:
@@ -144,6 +147,9 @@ jobs:
       - name: Sign and publish the release
         env:
           WOLOS_RELEASE_KEY: ${{ secrets.WOLOS_RELEASE_KEY }}
+          # The CDN (cdn.wolos.org) is where the ISO is published; an ISO of 2 GiB or more is not
+          # uploaded to GitHub at all (no size limit on the image), so without this it cannot be released.
+          WOLOS_CDN_UPLOAD_TOKEN: ${{ secrets.WOLOS_CDN_UPLOAD_TOKEN }}
         run: |
           mkdir -p out
           export WOLOS_ISO=$PWD/wolos-iso WOLOS_SUMMARY=$PWD/out/summary.md WOLOS_WORK=$PWD/out/work

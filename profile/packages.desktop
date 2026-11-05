@@ -76,11 +76,32 @@ atlas-browser
 nautilus
 foot
 gnome-text-editor
-eog
+eog                      # Image Viewer: the fallback viewer, default for GIF, WebP and SVG (Atlas second; E2E-SET)
+wolos-app-gallery        # Gallery: Photos pin and the default for PNG and JPEG (E2E-SET; libwolkit + libwol come with it)
+# Spell check (E2E-SET, ADR 0059 S14): enchant is the backend of libspelling (Text Editor, Papers, Geary), the
+# dictionaries are the languages of region::LANGUAGES that have one (Japanese and Chinese have no word list).
+enchant
+hunspell
+hunspell-en_us
+hunspell-en_gb
+hunspell-es_es
+hunspell-fr-comprehensive
+hunspell-de
+hunspell-it
+hunspell-nl
+hunspell-pl
+wolos-spell-pt           # Portuguese (Brazil, Portugal): Arch has no hunspell-pt, the recipe packs the LibreOffice word lists
+# System tools of the experience (E2E-SET): the colour picker (Ctrl+Super+P) and the PDF tools Quick Look and
+# Documents call (pdftocairo, pdftotext, pdftoppm; the library comes with papers anyway).
+hyprpicker
+poppler
+# Screen reader (ACC-1, S18): Orca, its speech service and the espeak-ng voice (brltty pulls espeak-ng anyway).
+orca
+speech-dispatcher
+espeak-ng
 # Dock apps (WolOS names + icons: crates/shell/src/apps.rs PINS, tests/pins_installed.rs)
 geary                    # Mail
 amberol                  # Music
-shotwell                 # Photos
 gnome-calendar           # Calendar
 gnote                    # Notes
 gnome-calculator

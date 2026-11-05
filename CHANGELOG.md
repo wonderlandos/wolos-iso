@@ -7,6 +7,7 @@ lists what changed in the image, its checks and its tests. The four repositories
 ## 0.12.1 (unreleased)
 
 Image
+- The 2047 MiB size gate of `build.sh` is gone (it was not the lead's): the image has no size limit. `build.sh` prints the size and a note when it is over GitHub's 2 GiB asset size (`release/iso-size.sh`); such an ISO is published on the CDN only and the GitHub release links it. `release.yml` takes the optional secret `WOLOS_CDN_UPLOAD_TOKEN`.
 - Modern-laptop hardware: `fprintd`, `bolt` and `thermald` join the desktop list (4 MiB); README "Hardware support" has the table and what is left off; `checks/tests/image_modern_hardware.rs` keeps the list, the absences and the Doctor rows in step.
 - Package snapshot 2026-11-02: `linux-firmware` 20261019 (the 0.12.0 image had 20260916) and 31 other package updates; `profile/snapshot` and both `pacman.conf` files point at it.
 - The builder image is pinned to a new digest in `.github/builder-image`.

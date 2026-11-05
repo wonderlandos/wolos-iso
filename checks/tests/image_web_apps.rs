@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! System web apps on the image (ADR 0048, QA-WEB-4). Doctor and the kit are text (wolos-webapps,
 //! under 1 MiB), but they run only on the engine library of webengine-wolos, which is large (the
-//! engine is about 900 crates and a JavaScript engine; never measured on the forge yet). The ISO has
-//! 21 MiB of room under the 2047 MiB release asset limit (prerelease run 2026-11-03), so the engine
-//! enters `profile/packages.*` only with its measured size recorded in `profile/web-engine-size`,
-//! and the two packages enter together: a launcher whose engine is absent opens nothing.
+//! engine is about 900 crates and a JavaScript engine; never measured on the forge yet). The
+//! engine enters `profile/packages.*` only with its measured size recorded in `profile/web-engine-size`
+//! (a number to read, not a cap: ISO-GATE, lead 2026-11-04, the image has no size limit and build.sh
+//! prints the size without failing on it), and the two packages enter together: a launcher whose
+//! engine is absent opens nothing.
 #![allow(dead_code, unused_imports)]
 #[path = "support/siblings.rs"]
 mod siblings;
@@ -47,18 +48,62 @@ fn the_web_apps_and_their_engine_enter_the_image_together_with_a_measured_size()
             .find_map(|l| l.strip_prefix("installed-mib:"))
             .and_then(|v| v.trim().parse().ok())
             .unwrap_or_else(|| panic!("profile/web-engine-size: a line `installed-mib: N`"));
-        // The compressed image takes roughly half of it; the room is 21 MiB (build.sh stops at 2047).
+        // The size is recorded, not capped: the image has no size limit (ISO-GATE).
         assert!(
-            mib > 0.0 && mib / 2.0 <= 21.0,
-            "the engine ({mib} MiB installed) does not fit the ISO's room"
+            mib > 0.0,
+            "profile/web-engine-size: installed-mib must be positive"
         );
     }
 }
 
+/// ISO-GATE: the image has no size limit. build.sh prints the size and the GitHub asset note
+/// (release/iso-size.sh); a 2.1 GiB image passes with the note, it is not a failure.
 #[test]
-fn the_build_still_stops_over_the_release_asset_limit() {
+fn the_build_never_fails_on_the_iso_size() {
+    let b = read("build.sh");
     assert!(
-        read("build.sh").contains("$((2047 * 1024 * 1024))"),
-        "the ISO size limit is what keeps a big package out"
+        !b.contains("$((2047 * 1024 * 1024))") && !b.contains("release asset limit"),
+        "build.sh still has the ISO size gate"
     );
+    assert!(
+        b.contains("release/iso-size.sh"),
+        "build.sh does not print the ISO size"
+    );
+    // A fake 2.1 GiB image (a sparse file): exit 0, size and the CDN note printed.
+    let d = std::env::temp_dir().join(format!("wolos-iso-size-{}", std::process::id()));
+    fs::create_dir_all(&d).unwrap();
+    let iso = d.join("wolos-0.12.0-x86_64.iso");
+    fs::File::create(&iso)
+        .unwrap()
+        .set_len(2200 * 1024 * 1024)
+        .unwrap();
+    let out = std::process::Command::new("sh")
+        .arg(siblings::root().join("release/iso-size.sh"))
+        .arg(&iso)
+        .output()
+        .unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "iso-size.sh failed on 2.1 GiB: {text}"
+    );
+    assert!(text.contains("2306867200 bytes"), "{text}");
+    assert!(text.contains("2.1 GiB") && text.contains("CDN"), "{text}");
+    // A small one: the size, no GitHub note.
+    fs::File::create(&iso)
+        .unwrap()
+        .set_len(1500 * 1024 * 1024)
+        .unwrap();
+    let out = std::process::Command::new("sh")
+        .arg(siblings::root().join("release/iso-size.sh"))
+        .arg(&iso)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        out.status.success() && text.contains("1.5 GiB") && !text.contains("CDN"),
+        "{text}"
+    );
+    let _ = fs::remove_dir_all(&d);
 }

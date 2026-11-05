@@ -30,6 +30,12 @@ tests/test-install.sh --release DIR    # checks the ISO against release.json (el
                                        # lines in $WOLOS_VM/test/checks.txt
 ```
 
+The image has no size limit. `build.sh` prints the size (`release/iso-size.sh`) and never fails on
+it. The primary download is the CDN (`https://cdn.wolos.org/v<version>/<iso>`, the `image` of
+`release.json`); an ISO of 2 GiB or more is not uploaded to the GitHub release at all (GitHub takes no
+asset that size), whose notes link the CDN ISO. That needs the CDN upload token
+(`WOLOS_CDN_UPLOAD_TOKEN`); without it `wolos-build release` stops before signing.
+
 The VM tests run on the forge (KVM, QEMU, swtpm, OVMF, virt-firmware) through wolvm
 (`tests/wolvm/wolvm`, [tests/README-wolvm.md](tests/README-wolvm.md)); without `/dev/kvm` they run
 on TCG with longer timeouts. How a person checks the download: README "Verify the download".

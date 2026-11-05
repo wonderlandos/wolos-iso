@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# E2E-SET (ADR 0059 S14, S16): a misspelled word is underlined in Text Editor, in every language of the
+# language picker that has a word list, and the colour picker key is bound.
+# Run on the installed desktop: wolvm journey <vm> tests/wolvm/journeys/e2e-spell.yaml
+name: Spell check in Text Editor (dictionaries for the picker languages), colour picker key
+from: desktop
+steps:
+- ssh: "pacman -Q hunspell enchant hunspell-en_us hunspell-en_gb hunspell-es_es hunspell-fr-comprehensive hunspell-de hunspell-it hunspell-nl hunspell-pl wolos-spell-pt hyprpicker poppler orca speech-dispatcher >/dev/null && echo packages-present"
+  expect: packages-present
+  save: spell-packages.txt
+  caption: the spell check, picker and screen reader packages are on the image
+- ssh: "bad=''; for p in en_US:house en_GB:colour es_ES:casa fr_FR:maison de_DE:Haus it_IT:casa nl_NL:huis pl_PL:dom pt_BR:casa pt_PT:casa; do l=${p%%:*}; w=${p#*:}; [ -z \"$(printf '%s\\n' \"$w\" | enchant-2 -d $l -l)\" ] || bad=\"$bad $l-rejects-$w\"; [ -n \"$(printf '%s\\n' qwzxkv | enchant-2 -d $l -l)\" ] || bad=\"$bad $l-accepts-qwzxkv\"; done; [ -z \"$bad\" ] && echo dictionaries-ok || echo \"$bad\""
+  user: tester
+  expect: dictionaries-ok
+  save: spell-dictionaries.txt
+  caption: each language accepts a real word and flags a non-word
+- ssh: "printf 'The quick brwon fox jumpd over the lazy dog.\\n' > ~/spell.txt; setsid -f gnome-text-editor ~/spell.txt >/dev/null 2>&1 </dev/null; echo started"
+  user: tester
+  expect: started
+- ssh: "for i in $(seq 40); do hyprctl clients -j | grep -qi 'texteditor' && { echo window-mapped; break; }; sleep 1; done"
+  user: tester
+  expect: window-mapped
+  timeout: 60
+  caption: Text Editor shows the file
+- sleep: 2
+- ssh: "gsettings get org.gnome.TextEditor spellcheck"
+  user: tester
+  expect: "true"
+  caption: spell check is on by default
+- shot: spell-underline
+  caption: brwon and jumpd carry the red wavy underline (review the picture)
+- ssh: "hyprctl binds -j | python3 -c \"import json,sys; b=json.load(sys.stdin); print('picker-bound' if any('hyprpicker' in x.get('arg','') for x in b) else 'picker-missing')\""
+  user: tester
+  expect: picker-bound
+  save: spell-binds.txt
+  caption: Ctrl+Super+P is bound to the colour picker
+- key: super-q
+- ssh: "for i in $(seq 10); do hyprctl clients -j | grep -qi 'texteditor' || { echo window-closed; break; }; sleep 1; done"
+  user: tester
+  expect: window-closed
+  timeout: 30
+  caption: Text Editor closed
