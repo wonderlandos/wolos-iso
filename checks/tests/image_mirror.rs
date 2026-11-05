@@ -123,3 +123,27 @@ fn nothing_republishes_cachyos_packages() {
         "no cachy field"
     );
 }
+
+/// QA-A9-IMAGE-05: the first active `[wolos]` Server is the WolOS CDN at the image's snapshot date
+/// (`https://cdn.wolos.org/$repo-<date>`, one folder per release, written by `wolos-build publish`),
+/// the GitHub release assets of the same tag second. The recipe once named a CloudFront placeholder,
+/// the CDN docs another layout, and the GitHub tag it fell back to was a 404.
+#[test]
+fn the_first_wolos_server_is_the_cdn_at_the_snapshot_date() {
+    let snap = read("profile/snapshot").trim().to_owned();
+    let list = read("wolos-mirrorlist/wolos-mirrorlist");
+    let active: Vec<&str> = list
+        .lines()
+        .filter_map(|l| l.strip_prefix("Server = "))
+        .collect();
+    assert_eq!(
+        active,
+        [
+            format!("https://cdn.wolos.org/$repo-{snap}"),
+            format!(
+                "https://github.com/wonderlandos/wolos-packages/releases/download/$repo-{snap}"
+            ),
+        ],
+        "{list}"
+    );
+}

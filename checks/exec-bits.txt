@@ -14,6 +14,7 @@ release/iso-size.sh
 release/release-manifest.sh
 release/sb-key.sh
 release/sb-layout.sh
+release/sb-release.sh
 release/sign-release.sh
 tests/guest-account.sh
 tests/run-gpu.sh

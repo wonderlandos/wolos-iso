@@ -268,8 +268,7 @@ fn profile_boots_linux_wolos_quietly_with_an_install_entry() {
     // The compositor starts from the Lua config (every writer emits Lua since DT-8); the .conf
     // stays beside it for a compositor that still reads that format and is checked below.
     assert!(
-        session.contains("hypr/installer.lua")
-            && session.contains("start --no-block wold.service")
+        session.contains("hypr/installer.lua") && session.contains("start --no-block wold.service")
     );
     let conf = read("desktop/overlay/usr/share/wolos/hypr/installer.conf");
     assert!(conf.contains("wol-installer --boot") && !conf.contains("wol-shell"));
@@ -502,6 +501,38 @@ fn build_refuses_a_repo_built_against_another_snapshot() {
 /// One build path (BF-9, W7): mkarchiso on the host, no container fallback; next to the ISO the
 /// download's `<iso>.sha256` (sha256sum -c form); inside it mkarchiso's medium hash, which the live
 /// medium check reads (plan W5): an ISO without it is refused.
+/// QA-A9-IMAGE-09: a comment or doc that names a unit of the live system names one the profile
+/// ships. `wolos-medium-verify` was documented in build.sh and the README (and the installer
+/// "refusing a corrupt stick") but never written: three files described a check that does not run.
+#[test]
+fn the_medium_check_is_not_claimed_without_a_unit() {
+    fn find(dir: &Path, name: &str, out: &mut Vec<PathBuf>) {
+        for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                find(&p, name, out);
+            } else if p
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with(name))
+            {
+                out.push(p);
+            }
+        }
+    }
+    let mut units = vec![];
+    find(&repo("profile"), "wolos-medium-verify", &mut units);
+    for f in ["build.sh", "README.md", "BUILD.md"] {
+        if !repo(f).is_file() {
+            continue;
+        }
+        let t = read(f);
+        assert!(
+            units.iter().any(|_| true) || !t.contains("wolos-medium-verify"),
+            "{f} names wolos-medium-verify, a unit the profile does not ship"
+        );
+    }
+}
+
 #[test]
 fn build_has_one_path_and_writes_the_download_and_medium_hashes() {
     let b = read("build.sh");
@@ -543,6 +574,7 @@ fn release_manifest_names_snapshot_repo_image_and_hash() {
         .arg("https://example.org/img")
         .arg("0.11.4")
         .arg("1:1.0+7.3.1-1")
+        .arg("wolos-testing")
         .output()
         .unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
@@ -565,6 +597,27 @@ fn release_manifest_names_snapshot_repo_image_and_hash() {
     assert_eq!(v("version"), "0.11.4");
     assert_eq!(v("snapshot"), "2026/10/20");
     assert_eq!(v("wolos_repo"), "r42");
+    // QA-A9-IMAGE-06: the manifest names the repo the image was built from (`wolos` = stable,
+    // `wolos-testing`): wolos-build's stable release refuses anything but `wolos`. build.sh passes
+    // the repo it read, and the script refuses to write a manifest without one.
+    assert_eq!(v("repo"), "wolos-testing");
+    assert!(
+        read("build.sh").contains("\"$VER\" \"$KV\" \"$NAME\" > \"${ISO%.iso}.json\""),
+        "build.sh passes the repo name ($NAME) to release-manifest.sh"
+    );
+    let none = Command::new("bash")
+        .arg(repo("release/release-manifest.sh"))
+        .args([
+            iso.to_str().unwrap(),
+            "2026-10-20",
+            "r42",
+            "https://example.org/img",
+            "0.11.4",
+            "k",
+        ])
+        .output()
+        .unwrap();
+    assert!(!none.status.success(), "a manifest without the repo name");
     assert!(
         !out.contains("\"cachy\""),
         "no cachy field since ADR 0030: {out}"
@@ -760,10 +813,14 @@ fn live_iso_secure_boot_layout_is_ready_and_on_with_the_key() {
         "WOLOS_SB_LAYOUT: ${{ vars.WOLOS_SB_LAYOUT || '0' }}",
         "SB_KEY: ${{ secrets.WOLOS_SB_KEY }}",
         r#"if [ -n "$SB_KEY" ] && [ -n "$SB_CERT" ]; then"#,
-        "release/sb-layout.sh sign",
-        "tests/test-secureboot.sh",
+        "release/sb-release.sh",
     ] {
         assert!(w.contains(want), "release.yml lacks {want}");
+    }
+    // The script it runs in the pinned container signs and boots the image.
+    let sr = read("release/sb-release.sh");
+    for want in ["release/sb-layout.sh sign", "tests/test-secureboot.sh"] {
+        assert!(sr.contains(want), "release/sb-release.sh lacks {want}");
     }
     // Without the certificate the Secure Boot test reports a skip and passes.
     let out = Command::new("bash")
@@ -870,7 +927,10 @@ fn atlas_browser_is_the_default_browser_package_of_the_image() {
             .map(|l| l.split('#').next().unwrap_or_default().trim())
             .any(|l| l == name)
     };
-    assert!(listed("atlas-browser"), "packages.desktop lacks atlas-browser");
+    assert!(
+        listed("atlas-browser"),
+        "packages.desktop lacks atlas-browser"
+    );
     assert!(
         !listed("helium-browser"),
         "helium-browser is replaced by atlas-browser"

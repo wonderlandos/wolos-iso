@@ -110,29 +110,9 @@ jobs:
           iso=$(cd dist && find . -maxdepth 1 -name '*.iso' -printf '%f')
           if [ -n "$SB_KEY" ] && [ -n "$SB_CERT" ]; then
             (umask 077; printf '%s\n' "$SB_KEY" > "$RUNNER_TEMP/sb.key"; printf '%s\n' "$SB_CERT" > "$RUNNER_TEMP/sb.crt"); [ -f "$RUNNER_TEMP/checks.txt" ] || : > "$RUNNER_TEMP/checks.txt"
-            # An image the build box already signed with the pinned live key keeps its tested bytes;
-            # otherwise the secrets must be that same key (a stray pair would give an image no PC boots).
-            docker run --rm --device /dev/kvm -v "$PWD:/src" -v "$RUNNER_TEMP:/keys" -w /src archlinux:latest bash -euo pipefail -c '
-              pacman -Sy --noconfirm --needed mtools sbsigntools openssl python util-linux qemu-base qemu-hw-display-virtio-vga edk2-ovmf virt-firmware >/dev/null
-              iso=dist/'"$iso"'; pin=wolos-iso/release/wolos-live-2026.cer
-              fp() { openssl x509 -noout -fingerprint -sha256 -inform DER -in "$1" 2>/dev/null || openssl x509 -noout -fingerprint -sha256 -inform PEM -in "$1"; }
-              if wolos-iso/release/sb-layout.sh check "$iso"; then
-                echo "secure boot: already signed by the pinned live key; not signed again"
-              else
-                [ "$(fp /keys/sb.crt)" = "$(fp "$pin")" ] || { echo "::error::WOLOS_SB_CERT is not the pinned live key ($pin)"; exit 1; }
-                [ "$(openssl x509 -in /keys/sb.crt -noout -pubkey)" = "$(openssl pkey -in /keys/sb.key -pubout)" ] || { echo "::error::WOLOS_SB_KEY does not belong to WOLOS_SB_CERT"; exit 1; }
-                wolos-iso/release/sb-layout.sh sign "$iso" /keys/sb.key /keys/sb.crt
-              fi
-              export WOLOS_SB_TEST=/src/dist/.sb-test
-              if ! wolos-iso/tests/test-secureboot.sh "$iso" wolos-iso/release/wolos-live-2026.crt; then
-                echo "::group::qemu and serial logs"; cat /src/dist/.sb-test/qemu.log 2>/dev/null; tail -n 80 /src/dist/.sb-test/serial.log 2>/dev/null; echo "::endgroup::"
-                # The build box booted this same image with Secure Boot on (its checks file says so):
-                # a runner whose KVM cannot run the firmware is a warning, not a verdict on the image.
-                if grep -qE "Secure Boot (still on|enabled in the booted system)" /keys/checks.txt; then
-                  echo "::warning::the runner could not boot the image with Secure Boot on, but the build box did (checks.txt); kept"
-                else exit 1; fi
-              fi
-              rm -rf /src/dist/.sb-test'
+            # The container is pinned by digest and its packages come from the image's archive date; the
+            # script says why (release/sb-release.sh, QA-A9-IMAGE-03).
+            docker run --rm --device /dev/kvm -v "$PWD:/src" -v "$RUNNER_TEMP:/keys" -w /src archlinux:latest@sha256:e82623936fa1a69700b48e98b058df6eaab18b737c27473a7234a40fdecb9413 bash wolos-iso/release/sb-release.sh "dist/$iso"
             rm -f "$RUNNER_TEMP/sb.key"; sudo chown -R "$(id -u)" dist
             echo "SB_SIGNED=1" >> "$GITHUB_ENV"
           elif [ "$WOLOS_SB_LAYOUT" = 1 ]; then

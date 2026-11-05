@@ -61,7 +61,13 @@ fn have(t: &str) -> bool {
         .success()
 }
 
-const SD_BOOT: &str = "/usr/lib/systemd/boot/efi/systemd-bootx64.efi";
+const SD_BOOT_DEFAULT: &str = "/usr/lib/systemd/boot/efi/systemd-bootx64.efi";
+
+/// systemd-boot's EFI binary, the fixture's stand-in for every EFI file (`WOLOS_TEST_SD_BOOT`
+/// names another copy on a host that keeps it elsewhere).
+fn sd_boot() -> String {
+    std::env::var("WOLOS_TEST_SD_BOOT").unwrap_or_else(|_| SD_BOOT_DEFAULT.to_owned())
+}
 const ENROL: &str = "ENROL_THIS_KEY_FOR_WOLOS.cer";
 
 /// The tools the fixture needs; false (and a note) where the host lacks one: the forge has all.
@@ -74,8 +80,8 @@ fn tools() -> bool {
             return false;
         }
     }
-    if !Path::new(SD_BOOT).is_file() {
-        eprintln!("live_secureboot: no {SD_BOOT}, fixture test skipped");
+    if !Path::new(&sd_boot()).is_file() {
+        eprintln!("live_secureboot: no {}, fixture test skipped", sd_boot());
         return false;
     }
     true
@@ -133,8 +139,10 @@ fn medium(d: &Path, shim: &Path) -> String {
         "mcopy",
         &["-i", &f, shim.to_str().unwrap(), "::/EFI/BOOT/BOOTX64.EFI"],
     );
-    ok("mcopy", &["-i", &f, SD_BOOT, "::/EFI/BOOT/grubx64.efi"]);
-    ok("mcopy", &["-i", &f, SD_BOOT, "::/EFI/Linux/wolos.efi"]);
+    ok("mcopy", &["-i", &f, &sd_boot(), "::/EFI/BOOT/grubx64.efi"]);
+    ok("mcopy", &["-i", &f, &sd_boot(), "::/EFI/Linux/wolos.efi"]);
+    // The key manager shim starts for the blue screen (any file: `check` compares its hash).
+    ok("mcopy", &["-i", &f, &sd_boot(), "::/EFI/BOOT/mmx64.efi"]);
     ok("truncate", &["-s", "20M", &m]);
     let mut p = Command::new("sfdisk")
         .args(["-q", &m])
@@ -176,11 +184,41 @@ fn sb(args: &[&str]) -> Output {
         .unwrap()
 }
 
-/// `sb-layout.sh` with WOLOS_SB_PIN_CERT=PIN: the dev/test override of the pinned live key.
+/// sha256 of FILE on the medium M (the fixture ESP), empty when it is not there.
+fn sha_on(m: &str, file: &str) -> String {
+    let o = Command::new("sh")
+        .args([
+            "-c",
+            &format!(
+                "mcopy -n -i '{}' '::/{file}' - 2>/dev/null | sha256sum | cut -d' ' -f1",
+                esp(m)
+            ),
+        ])
+        .env("MTOOLS_SKIP_CHECK", "1")
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&o.stdout).trim().to_owned()
+}
+
+/// `sb-layout.sh` with the dev/test pins: WOLOS_SB_PIN_CERT=PIN, and the first stage and key manager
+/// ON THE MEDIUM as the pinned shim and mmx64 (WOLOS_SB_PIN_SHIM / WOLOS_SB_PIN_MM; the real pins are
+/// the wolos-shim package's hashes, a fixture has no real shim).
 fn sb_pin(args: &[&str], pin: &str) -> Output {
+    let m = args[1];
+    sb_pin_hashes(
+        args,
+        pin,
+        &sha_on(m, "EFI/BOOT/BOOTX64.EFI"),
+        &sha_on(m, "EFI/BOOT/mmx64.efi"),
+    )
+}
+
+fn sb_pin_hashes(args: &[&str], pin: &str, shim_sha: &str, mm_sha: &str) -> Output {
     Command::new(repo("release/sb-layout.sh"))
         .args(args)
         .env("WOLOS_SB_PIN_CERT", pin)
+        .env("WOLOS_SB_PIN_SHIM", shim_sha)
+        .env("WOLOS_SB_PIN_MM", mm_sha)
         .output()
         .unwrap()
 }
@@ -243,7 +281,7 @@ fn sign_puts_signatures_and_the_der_certificate_on_the_medium_and_check_passes()
             &vc,
             "--output",
             shim.to_str().unwrap(),
-            SD_BOOT,
+            &sd_boot(),
         ],
     );
     let m = medium(&d, &shim);
@@ -401,7 +439,7 @@ fn check_refuses_an_unsigned_loader_or_one_without_sbat() {
     let d = scratch("check");
     let (k, c) = keypair(&d, "WolOS Live Test");
     // Unsigned systemd-boot as the firmware's loader (the v0.11.5 ISO).
-    let m = medium(&d, Path::new(SD_BOOT));
+    let m = medium(&d, Path::new(&sd_boot()));
     assert!(sb(&["sign", &m, &k, &c]).status.success());
     let o = sb_pin(&["check", &m], &c);
     assert!(!o.status.success(), "unsigned BOOTX64.EFI passed");
@@ -412,7 +450,7 @@ fn check_refuses_an_unsigned_loader_or_one_without_sbat() {
     );
     // Signed, but no .sbat section: not the shim.
     let nosbat = d.join("nosbat.efi");
-    without_sbat(Path::new(SD_BOOT), &nosbat);
+    without_sbat(Path::new(&sd_boot()), &nosbat);
     let shim = d.join("shim.efi");
     ok(
         "sbsign",
@@ -435,6 +473,117 @@ fn check_refuses_an_unsigned_loader_or_one_without_sbat() {
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(err.contains("has no .sbat section"), "{err}");
     assert!(!err.contains("carries no signature"), "{err}");
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// QA-A9-IMAGE-04: `check` takes as first stage only the pinned shim (sha256 of EFI/BOOT/BOOTX64.EFI)
+/// and requires the pinned key manager (EFI/BOOT/mmx64.efi): a signed PE with an .sbat section is
+/// not enough (another distro's shim, a revoked one, systemd-boot copied over the shim), and a medium
+/// without mmx64.efi shows the firmware's error on the key screen with no way to enrol the key.
+#[test]
+fn check_takes_only_the_pinned_shim_and_the_pinned_key_manager() {
+    if !tools() {
+        return;
+    }
+    let d = scratch("pins");
+    let (vk, vc) = keypair(&d, "vendor");
+    let shim = d.join("shim.efi");
+    ok(
+        "sbsign",
+        &[
+            "--key",
+            &vk,
+            "--cert",
+            &vc,
+            "--output",
+            shim.to_str().unwrap(),
+            &sd_boot(),
+        ],
+    );
+    let (k, c) = keypair(&d, "WolOS Live Test");
+    let m = medium(&d, &shim);
+    assert!(sb(&["sign", &m, &k, &c]).status.success());
+    let (shim_sha, mm_sha) = (
+        sha_on(&m, "EFI/BOOT/BOOTX64.EFI"),
+        sha_on(&m, "EFI/BOOT/mmx64.efi"),
+    );
+    assert_eq!(shim_sha.len(), 64);
+    assert!(
+        sb_pin_hashes(&["check", &m], &c, &shim_sha, &mm_sha)
+            .status
+            .success(),
+        "the pinned shim and key manager pass"
+    );
+    // Another signed first stage with an .sbat section (here: grubx64 signed like the shim, then
+    // copied over BOOTX64.EFI): signed, sbat, and not the pinned shim.
+    let d2 = d.join("m2");
+    fs::create_dir_all(&d2).unwrap();
+    let m2 = medium(&d2, &shim);
+    assert!(sb(&["sign", &m2, &k, &c]).status.success());
+    let (k3, c3) = keypair(&d2, "another distro");
+    let other = d2.join("other.efi");
+    ok(
+        "sbsign",
+        &[
+            "--key",
+            &k3,
+            "--cert",
+            &c3,
+            "--output",
+            other.to_str().unwrap(),
+            &sd_boot(),
+        ],
+    );
+    ok(
+        "mcopy",
+        &[
+            "-o",
+            "-i",
+            &esp(&m2),
+            other.to_str().unwrap(),
+            "::/EFI/BOOT/BOOTX64.EFI",
+        ],
+    );
+    let o = sb_pin_hashes(&["check", &m2], &c, &shim_sha, &mm_sha);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        !o.status.success(),
+        "a foreign signed first stage with .sbat passed: {err}"
+    );
+    assert!(
+        err.contains("EFI/BOOT/BOOTX64.EFI is not the pinned shim"),
+        "{err}"
+    );
+    // A key manager that is another file.
+    let d3 = d.join("m3");
+    fs::create_dir_all(&d3).unwrap();
+    let m3 = medium(&d3, &shim);
+    assert!(sb(&["sign", &m3, &k, &c]).status.success());
+    ok(
+        "mcopy",
+        &[
+            "-o",
+            "-i",
+            &esp(&m3),
+            shim.to_str().unwrap(),
+            "::/EFI/BOOT/mmx64.efi",
+        ],
+    );
+    let o = sb_pin_hashes(&["check", &m3], &c, &shim_sha, &mm_sha);
+    assert!(!o.status.success(), "another file as mmx64.efi passed");
+    assert!(
+        String::from_utf8_lossy(&o.stderr)
+            .contains("EFI/BOOT/mmx64.efi is not the pinned key manager")
+    );
+    // No key manager at all.
+    let d4 = d.join("m4");
+    fs::create_dir_all(&d4).unwrap();
+    let m4 = medium(&d4, &shim);
+    assert!(sb(&["sign", &m4, &k, &c]).status.success());
+    ok("mdel", &["-i", &esp(&m4), "::/EFI/BOOT/mmx64.efi"]);
+    let o = sb_pin_hashes(&["check", &m4], &c, &shim_sha, &mm_sha);
+    assert!(!o.status.success(), "a medium without mmx64.efi passed");
+    assert!(String::from_utf8_lossy(&o.stderr).contains("no EFI/BOOT/mmx64.efi"));
     let _ = fs::remove_dir_all(&d);
 }
 
@@ -574,4 +723,26 @@ fn the_secure_boot_journey_drives_the_key_screen_to_the_live_system() {
     ] {
         assert!(j.contains(want), "live-secureboot.yaml lacks {want}");
     }
+}
+
+/// QA-A9-IMAGE-03: the release workflow runs the Secure Boot step (the live key is mounted into the
+/// container) in an image pinned by digest, with packages from the image's archive date; the
+/// script holds the logic so the workflow's run: block stays short.
+#[test]
+fn the_release_signs_in_a_pinned_container_with_packages_from_the_snapshot_date() {
+    let wf = read(".github/workflows/release.yml");
+    let docker: Vec<&str> = wf.lines().filter(|l| l.contains("docker run")).collect();
+    assert_eq!(docker.len(), 1, "{docker:?}");
+    assert!(
+        docker[0].contains("archlinux:latest@sha256:") && !docker[0].contains("archlinux:latest "),
+        "the signing container is pinned by digest: {}",
+        docker[0]
+    );
+    assert!(docker[0].contains("wolos-iso/release/sb-release.sh"));
+    let sh = read("release/sb-release.sh");
+    assert!(
+        sh.contains("archive.archlinux.org/repos/${snap//-//}/") && sh.contains("profile/snapshot"),
+        "packages come from the archive date of profile/snapshot"
+    );
+    assert!(sh.contains("sb-layout.sh sign") && sh.contains("test-secureboot.sh"));
 }

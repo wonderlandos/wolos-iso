@@ -147,16 +147,18 @@ if [ "${WOLOS_SB_LAYOUT:-0}" = 1 ]; then
   fi
 fi
 
-# 4. The medium's own hash (plan W5): mkarchiso writes wolos/x86_64/airootfs.sha512 next to the
-# squashfs ("<sha512>  airootfs.sfs"); the live wolos-medium-verify unit checks the stick against
-# it (/run/archiso/bootmnt/wolos/x86_64). No file, no self-check: refuse the image.
+# 4. The medium's own hash: mkarchiso writes wolos/x86_64/airootfs.sha512 next to the squashfs
+# ("<sha512>  airootfs.sfs"), the hash of the live root. No unit of the live system reads it (a
+# boot-time check was planned and never written: QA-A9-IMAGE-09); it is on the stick for whoever
+# verifies it by hand (`cd <stick>/wolos/x86_64 && sha512sum -c airootfs.sha512`). No file, no way
+# to check the stick at all: refuse the image.
 ISO=$(ls -t "$OUT"/wolos-*.iso | head -1)
 bsdtar -xOf "$ISO" wolos/x86_64/airootfs.sha512 2>/dev/null | grep -Eq '^[0-9a-f]{128}  airootfs\.sfs$' ||
-  die "$ISO has no wolos/x86_64/airootfs.sha512 (mkarchiso's medium hash): the live medium check would have nothing to read"
+  die "$ISO has no wolos/x86_64/airootfs.sha512 (mkarchiso's medium hash): nobody could verify the stick"
 # 5. The download's hash (README "Verify the download": sha256sum -c) and the release manifest.
 (cd "$(dirname "$ISO")" && sha256sum "$(basename "$ISO")" > "$(basename "$ISO").sha256")
 "$HERE/release/release-manifest.sh" "$ISO" "$SNAP" "$REV" "${WOLOS_IMAGE_URL:-https://github.com/wonderlandos/wolos-packages/releases/download/$SNAP}" \
-  "$VER" "$KV" > "${ISO%.iso}.json"
+  "$VER" "$KV" "$NAME" > "${ISO%.iso}.json"
 # The size is reported, never a gate (ISO-GATE, lead 2026-11-04): an ISO over 2 GiB cannot be a GitHub
 # asset, so `wolos-build release` publishes it on the CDN and links it from the GitHub release.
 "$HERE/release/iso-size.sh" "$ISO"

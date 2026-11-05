@@ -13,6 +13,11 @@
 # WOLOS_SB_PIN_CERT=FILE (DER or PEM): dev/test only, the certificate `check` pins instead of
 # release/<name>.cer (build.sh sets it when it signs with a WOLOS_SB_CERT of its own). `wolos-build
 # release` (publish.sh) unsets it: a released medium always carries the WolOS live key.
+# `check` also compares the first stage and the key manager with the shim pins below (SHIM_SHA,
+# MM_SHA: sha256 of the wolos-shim package's shimx64.efi and mmx64.efi): another signed PE with an
+# .sbat section is not the shim, and a medium without mmx64.efi has no way to enrol the key.
+# WOLOS_SB_PIN_SHIM / WOLOS_SB_PIN_MM (sha256): dev/test only, replace those two pins (a fixture has
+# no real shim); `wolos-build release` unsets them with WOLOS_SB_PIN_CERT.
 # layout: EFI/BOOT/BOOTX64.EFI becomes the pinned shim (wolos-shim) with its key manager
 # (mmx64.efi) next to it; systemd-boot moves to EFI/BOOT/grubx64.efi, the second stage that shim
 # starts. The kernel, the initramfs and the two loader entries become one UKI with two profiles,
@@ -149,7 +154,7 @@ fp() {
 
 # check ISO: what firmware with Secure Boot on needs from the medium; every failure is named.
 check() {
-  local iso=$1 e t f name bad=0 pin want
+  local iso=$1 e t f name bad=0 pin want shim_pin=${WOLOS_SB_PIN_SHIM:-$SHIM_SHA} mm_pin=${WOLOS_SB_PIN_MM:-$MM_SHA} got
   name=$("$HERE/sb-key.sh" name)
   pin=${WOLOS_SB_PIN_CERT:-$HERE/$name.cer}
   want=$(fp "$pin"); [ -n "$want" ] || die "check: no pinned certificate at $pin"
@@ -160,6 +165,15 @@ check() {
   mcopy -n -i "$e" ::/EFI/BOOT/BOOTX64.EFI "$t/boot.efi" 2>/dev/null || die "$iso: no EFI/BOOT/BOOTX64.EFI"
   signed "$t/boot.efi" || { echo "sb-layout check: EFI/BOOT/BOOTX64.EFI carries no signature (not the signed shim)" >&2; bad=1; }
   sections "$t/boot.efi" | grep -qx .sbat || { echo "sb-layout check: EFI/BOOT/BOOTX64.EFI has no .sbat section (not the signed shim)" >&2; bad=1; }
+  # The first stage is THE pinned shim (QA-A9-IMAGE-04), and its key manager is on the medium.
+  got=$(sha256sum "$t/boot.efi" | cut -d' ' -f1)
+  [ "$got" = "$shim_pin" ] || { echo "sb-layout check: EFI/BOOT/BOOTX64.EFI is not the pinned shim (sha256 $got, pinned $shim_pin)" >&2; bad=1; }
+  if ! mcopy -n -i "$e" ::/EFI/BOOT/mmx64.efi "$t/mm.efi" 2>/dev/null; then
+    echo "sb-layout check: no EFI/BOOT/mmx64.efi (the key manager: the blue screen cannot enrol the key without it)" >&2; bad=1
+  else
+    got=$(sha256sum "$t/mm.efi" | cut -d' ' -f1)
+    [ "$got" = "$mm_pin" ] || { echo "sb-layout check: EFI/BOOT/mmx64.efi is not the pinned key manager (sha256 $got, pinned $mm_pin)" >&2; bad=1; }
+  fi
   if ! mcopy -n -i "$e" "::/$ENROL" "$t/key.cer" 2>/dev/null; then
     echo "sb-layout check: no /$ENROL (the certificate to enroll)" >&2; bad=1
   elif ! openssl x509 -inform DER -in "$t/key.cer" -out "$t/key.pem" 2>/dev/null; then

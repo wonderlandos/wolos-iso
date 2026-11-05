@@ -10,7 +10,7 @@ published repo** (+ the Arch snapshot), never from a source tree, so an image is
 | `profile/` | mkarchiso profile (releng-based): `snapshot`, `pacman.conf` (`[wolos]` first, then core/extra/multilib at the snapshot), `packages.x86_64` + `packages.desktop` (merged at build), systemd-boot entries (live, Install WolOS), live-only `airootfs` |
 | `build.sh` | repo `snapshot` == `profile/snapshot` check -> staged profile (the published repo, checked against `release/wolos-repo.pub.asc`; the live root names its channel) -> `mkarchiso` -> ISO + `<iso>.sha256` + release manifest |
 | `release/iso-size.sh` | prints the ISO's size; never a gate (an ISO of 2 GiB or more goes to the CDN only, not to the GitHub release) |
-| `release/release-manifest.sh` | `release.json`: `{version, snapshot, wolos_repo, kernel, image, sha256, size}`; version and kernel from the repo database |
+| `release/release-manifest.sh` | `release.json`: `{version, repo, snapshot, wolos_repo, kernel, image, sha256, size}`; version and kernel from the repo database, `repo` the repo it was built from (`wolos` or `wolos-testing`; a stable release needs `wolos`) |
 | `release/sign-release.sh` | `release.json.sig`: raw Ed25519 with the package key |
 | `release/sb-layout.sh` | Secure Boot (ADR 0025): `layout` (shim, systemd-boot, one UKI), `sign` with the live-image key (+ `/ENROL_THIS_KEY_FOR_WOLOS.cer`, `EFI/wolos/README.txt`), `check` (what `wolos-build release` requires) |
 | `release/sb-key.sh`, `release/wolos-live-2026.crt`/`.cer` | the live-image key's path where this host can sign (the forge; exit 3 elsewhere) and its certificate; `wolos-build iso` turns the Secure Boot layout on when the key is there (wolos-build `docs/signing-kms.md`) |
@@ -32,8 +32,8 @@ would then mix packages built against one Arch date with a base pinned to anothe
 `pacman.conf` names the repo and release tag the image came from (`[wolos-testing]` or `[wolos]` +
 `Server = URL`); `install-run` (wolos `install-channel`) gives the installed system the same channel.
 Next to the ISO it writes `<iso>.sha256` and the manifest `<iso>.json`; inside the ISO mkarchiso's
-`wolos/x86_64/airootfs.sha512` is the hash the live medium check reads (build.sh refuses an ISO
-without it).
+`wolos/x86_64/airootfs.sha512` is the hash of the live root (`sha512sum -c` on the stick checks it by
+hand; no unit of the live system reads it, and build.sh refuses an ISO without it).
 
 VM tests run on the forge, which has `/dev/kvm`, QEMU, swtpm and OVMF (`/usr/share/edk2/x64`). On a
 host without KVM, `tests/test-install.sh` says so, runs on TCG (software CPU) and multiplies its
@@ -55,9 +55,8 @@ done
 The loop checks that WolOS signed the manifest (Ed25519, the package key; the public keys are in
 wolos `desktop/overlay/usr/share/wolos/keys/`, on an installed system `/usr/share/wolos/keys/`). It
 prints `Signature Verified Successfully`. When the hash in `release.json` matches the ISO's, the
-ISO is the one WolOS released. With `wolos-medium-verify.service` (plan W5, profile) a booted medium
-checks itself too: the live system hashes its squashfs against `airootfs.sha512` in the background,
-and the installer refuses to write a disk from a corrupt stick.
+ISO is the one WolOS released. A written stick can be checked by hand against the hash of its live
+root: `cd <stick>/wolos/x86_64 && sha512sum -c airootfs.sha512`. (Nothing checks it at boot.)
 
 ## Release flow
 
