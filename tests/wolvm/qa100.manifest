@@ -119,7 +119,7 @@ qa100-b7-wifi-hotspot-hidden | live,ssh | fail:QA-NET-24@visual | B7: hotspot en
 qa100-dev-bluetooth | installed,account:alice,ssh | fail:QA-SET-15@visual | A7: Pair and Forget with a fake BlueZ agent, three states (SET-10), bluetoothd back after a kill (SYS-8), headset icon (DEV-12) (unrun)
 qa100-net2-two-nics-portal | live,ssh | fail:QA-NET-25@visual | network r2 part 2: captive portal (NET2-3), slow link, tray delay (NET2-5), AirPlay from the LAN, ssh live@; second NIC on a host tap spliced by hand (unrun)
 qa100-net2-wifi-join-argv | live,ssh | fail:QA-NET-23@visual | network r2 part 1: every password join ran nmcli passwd-file /dev/stdin, rc 2 in 50 ms (NET2-1); mac80211_hwsim AP (unrun)
-qa100-net-static-ip | live,ssh,network | pass | NET-3: `wol network ip` read, refuse, keep, 15 s rollback to DHCP; IP Settings page (unrun)
+qa100-net-static-ip | live,ssh,network | fail:QA-LIVE3-14@10,13 | NET-3: `wol network ip` read, refuse, keep, 15 s rollback to DHCP; IP Settings page (unrun)
 qa100-net3-airplane | live,ssh | fail:QA-NET-21 | NET-3 airplane mode: rfkill block all with the radios remembered, menu bar plane, Control Center tile, off restores (mac80211_hwsim; unrun)
 qa100-net3-proxy-dns | live,ssh,network | fail:QA-NET-21 | NET-3 proxy (proxy.conf, login environment) and DNS over TLS (resolved drop-in, strict refused without a server) (unrun)
 qa100-net3-vpn | live,ssh | fail:QA-NET-21 | NET-3 WireGuard import (name to interface name), connect, disconnect, forget; OpenVPN imported with networkmanager-openvpn from the image (unrun)
