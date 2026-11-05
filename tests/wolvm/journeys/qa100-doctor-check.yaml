@@ -30,12 +30,15 @@ steps:
   rc: any
   expect: "rc=66"
   caption: an unknown id is NotFound (exit 66)
-- ssh: "systemctl stop nftables; sleep 1; wol doctor security"
+# On but stopped is `warn` with the Turn On fix (doctor.rs security(): enabled, not guarding); off is `fail`.
+- ssh: "systemctl stop nftables; sleep 1; wol doctor security --json | python3 -c \"import json,sys;d=json.load(sys.stdin);c=[x for x in d['checks'] if x['id']=='security.firewall'][0];print('stopped-flagged' if c['status'] in ('warn','fail') else c['status'])\""
   rc: any
-  expect: "FAIL"
-  caption: the firewall stopped shows as a failed check with its fix line
-- ssh: "wol doctor security | grep -c 'fix: wol doctor fix security.firewall'"
-  expect: "1"
+  expect: "stopped-flagged"
+  caption: the firewall stopped shows as a flagged check with its fix
+# Over ssh stdout is no terminal, so wol answers JSON: the fix is the check's `fix` object (the
+# text report's "fix: wol doctor fix" line only shows on a terminal; 0.13.0 dry run, doctor-check).
+- ssh: "wol doctor security --json | python3 -c \"import json,sys;d=json.load(sys.stdin);c=[x for x in d['checks'] if x['id']=='security.firewall'][0];print('fix-offered' if c.get('fix') else 'no-fix')\""
+  expect: "fix-offered"
 - ssh: "systemctl start nftables; sleep 1; wol doctor security --json | python3 -c \"import json,sys;d=json.load(sys.stdin);c=[x for x in d['checks'] if x['id']=='security.firewall'][0];print(c['status'])\""
   expect: "ok"
   caption: back to ok once the unit runs again (the CLI fix path needs the admin password; the unit is restarted here)

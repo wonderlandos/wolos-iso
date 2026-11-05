@@ -22,16 +22,16 @@ steps:
 - ssh: "pacman -Q nautilus gvfs gvfs-afc udisks2 file-roller xdg-user-dirs 2>&1"
   rc: any
   save: files-packages.txt
-- ssh: "ls /usr/lib/gvfs/ | sort"
+- ssh: "ls /usr/lib/ | grep gvfsd | sort"
   save: gvfs-backends.txt
   caption: the gvfs backends on the image
-- ssh: "test -x /usr/lib/gvfs/gvfsd-mtp && echo have-mtp || echo no-mtp"
+- ssh: "test -x /usr/lib/gvfsd-mtp && echo have-mtp || echo no-mtp"
   expect: "have-mtp"
   caption: H4-6 Android phones (MTP) appear in Files
-- ssh: "test -x /usr/lib/gvfs/gvfsd-smb && echo have-smb || echo no-smb"
+- ssh: "test -x /usr/lib/gvfsd-smb && echo have-smb || echo no-smb"
   expect: "have-smb"
   caption: H4-6 network shares in Other Locations
-- ssh: "test -x /usr/lib/gvfs/gvfsd-trash && test -x /usr/lib/gvfs/gvfsd-afc && echo trash-afc-ok"
+- ssh: "test -x /usr/lib/gvfsd-trash && test -x /usr/lib/gvfsd-afc && echo trash-afc-ok"
   expect: "trash-afc-ok"
 # H4-14: the WolOS right-click extension and the default apps.
 - ssh: "ls /usr/lib/nautilus/extensions-4/"

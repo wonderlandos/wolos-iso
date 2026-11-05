@@ -42,7 +42,7 @@ steps:
   expect: "flathub-present"
   save: flatpak-remotes.txt
   caption: P1-11 (A8), the live account has Flathub (hyprland.lua adds it --user from /etc/flatpak/remotes.d, no download)
-- ssh: "for b in gvfsd-mtp gvfsd-gphoto2 gvfsd-smb; do test -x /usr/lib/gvfs/$b && echo has-$b || echo no-$b; done"
+- ssh: "for b in gvfsd-mtp gvfsd-gphoto2 gvfsd-smb; do test -x /usr/lib/$b && echo has-$b || echo no-$b; done"
   rc: any
   save: gvfs-backends.txt
   caption: H4-6, phones and shares are not reachable from Files
