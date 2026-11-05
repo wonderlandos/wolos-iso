@@ -78,6 +78,11 @@ foot
 gnome-text-editor
 eog                      # Image Viewer: the fallback viewer, default for GIF, WebP and SVG (Atlas second; E2E-SET)
 wolos-app-gallery        # Gallery: Photos pin and the default for PNG and JPEG (E2E-SET; libwolkit + libwol come with it)
+# System web apps (ADR 0048, QA-WEB-1): Doctor and the kit run on the engine library; the two enter together
+# (checks/tests/image_web_apps.rs) with the engine's installed size in profile/web-engine-size. The image has
+# no size limit (ISO-GATE, lead 2026-11-04).
+wolos-webapps
+webengine-wolos
 # Spell check (E2E-SET, ADR 0059 S14): enchant is the backend of libspelling (Text Editor, Papers, Geary), the
 # dictionaries are the languages of region::LANGUAGES that have one (Japanese and Chinese have no word list).
 enchant

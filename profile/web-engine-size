@@ -1,0 +1,6 @@
+# The installed size of webengine-wolos (libwolwebengine.so.1 and wolwebengine.h), read by
+# checks/tests/image_web_apps.rs: a number to read, not a cap (ISO-GATE: the image has no size limit).
+# ESTIMATE, not yet measured: the engine is about 900 crates and a JavaScript engine. The forge
+# build of the package (webengine-wolos, 6m56s in a clean chroot) replaces it with the real
+# `pacman -Qi webengine-wolos` "Installed Size" before the release; the ISO build prints the image size.
+installed-mib: 250
