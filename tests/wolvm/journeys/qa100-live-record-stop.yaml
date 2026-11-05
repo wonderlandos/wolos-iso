@@ -16,15 +16,15 @@ steps:
 - wait-stable:
   timeout: 120
   caption: desktop up
-- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell wol-screenshot record; sleep 2; test -f /run/user/1000/wol-record.pid && echo recording"
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/alice wol-screenshot record; sleep 2; test -f /run/user/1000/wol-record.pid && echo recording"
   expect: "recording"
 - sleep: 1
 - shot: indicator
   caption: a red record mark first in the status icons of the menu bar
-- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell wol shell show screen-record; sleep 4; test -f /run/user/1000/wol-record.pid && echo still-recording || echo stopped"
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/alice wol shell show screen-record; sleep 4; test -f /run/user/1000/wol-record.pid && echo still-recording || echo stopped"
   expect: "stopped"
   caption: the Record tile (the same verb) stops the recording
-- ssh: "f=$(ls -t /home/aliceliddell/Movies/*.mp4 | head -1); ffprobe -v error -show_entries format=duration -of csv=p=0 \"$f\" && echo mp4-valid"
+- ssh: "f=$(ls -t /home/alice/Movies/*.mp4 | head -1); ffprobe -v error -show_entries format=duration -of csv=p=0 \"$f\" && echo mp4-valid"
   rc: any
   expect: "mp4-valid"
   save: mp4-probe.txt
@@ -33,7 +33,7 @@ steps:
   caption: no red mark; banner "Screen recording saved to Movies"
 - click: 1148 14
   caption: second recording, then the mark itself stops it
-- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell wol-screenshot record; sleep 2; test -f /run/user/1000/wol-record.pid && echo recording"
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/alice wol-screenshot record; sleep 2; test -f /run/user/1000/wol-record.pid && echo recording"
   expect: "recording"
 - shot: indicator-2
 - click: 1100 14

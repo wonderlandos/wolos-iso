@@ -17,10 +17,10 @@ steps:
 - wait-stable:
   timeout: 120
   caption: desktop up
-- ssh: "rm -f /home/aliceliddell/.config/wolos/widgets.json; WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell wol shell reload; echo empty"
+- ssh: "rm -f /home/alice/.config/wolos/widgets.json; WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/alice wol shell reload; echo empty"
   expect: "empty"
 - shot: desktop-empty
-- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell setsid -f wol-settings Widgets >/dev/null 2>&1; echo opened"
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/alice setsid -f wol-settings Widgets >/dev/null 2>&1; echo opened"
   expect: "opened"
 - wait-stable:
   timeout: 60
@@ -30,7 +30,7 @@ steps:
   caption: Add Clock (adjust from widgets-page)
 - click: 900 360
   caption: Add Weather (adjust from widgets-page)
-- ssh: "grep -c '\"kind\"' /home/aliceliddell/.config/wolos/widgets.json"
+- ssh: "grep -c '\"kind\"' /home/alice/.config/wolos/widgets.json"
   rc: any
   save: widgets-json.txt
   caption: the file holds both widgets

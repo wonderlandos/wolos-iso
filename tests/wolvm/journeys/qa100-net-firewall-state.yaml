@@ -38,7 +38,7 @@ steps:
   caption: "step live-ssh-rule-in-nftables.d (NET-13): port 22 survives a firewall restart; BUG if ssh22=0"
 # NET-4 (B7): .local through nss-mdns (wolos-system's nsswitch-mdns puts mdns_minimal before
 # resolve); resolved keeps MulticastDNS=no (one mDNS stack) and has no third-party FallbackDNS.
-- ssh: "grep '^hosts' /etc/nsswitch.conf; resolvectl status --no-pager 2>/dev/null | grep -i -m1 'fallback' || echo no-fallback; (avahi-publish -a -R qa100test.local 10.0.2.15 >/dev/null 2>&1 &); sleep 2; timeout 5 getent hosts qa100test.local; echo getent-rc=$?; pkill avahi-publish"
+- ssh: "grep '^hosts' /etc/nsswitch.conf; resolvectl status --no-pager 2>/dev/null | grep -i -m1 'fallback' || echo no-fallback; (avahi-publish -a -R qa100test.local 10.0.2.15 >/dev/null 2>&1 &); sleep 2; timeout 10 getent ahosts qa100test.local; echo getent-rc=$?; pkill avahi-publish"
   rc: any
   expect: "getent-rc=0"
   save: mdns-resolve.txt

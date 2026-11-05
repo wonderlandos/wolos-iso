@@ -19,7 +19,7 @@ steps:
 - ssh: "python3 -I -c \"import json;d=json.load(open('/run/doctor-fail.json'));assert d['ready'] is False and len(d['checks'])>=8;print('report-full')\""
   expect: "report-full"
 # 2. The app's bridge call gets the report as an answer, not 'It did not work.' (QA-WEB-24).
-- ssh: "runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 wol webapp-call org.wolos.webapp.doctor doctor.check '{}' > /run/doctor-call.json; python3 -I -c \"import json;r=json.load(open('/run/doctor-call.json'));assert 'err' not in r, r;c=[x for x in r['ok']['checks'] if x['id']=='security.firewall'][0];print('bridge-report', c['status'])\""
+- ssh: "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 wol webapp-call org.wolos.webapp.doctor doctor.check '{}' > /run/doctor-call.json; python3 -I -c \"import json;r=json.load(open('/run/doctor-call.json'));assert 'err' not in r, r;c=[x for x in r['ok']['checks'] if x['id']=='security.firewall'][0];print('bridge-report', c['status'])\""
   rc: any
   expect: "bridge-report fail"
   save: doctor-bridge-report.txt
@@ -55,14 +55,14 @@ steps:
 - wait-stable:
   timeout: 120
   caption: "desktop up"
-- ssh: "runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$') sh -c 'nohup /usr/bin/wol-webhost /usr/share/wolos/webapps/doctor/app.toml >/tmp/doctor-failure.log 2>&1 &'; sleep 6; echo launched"
+- ssh: "runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$') sh -c 'nohup /usr/bin/wol-webhost /usr/share/wolos/webapps/doctor/app.toml >/tmp/doctor-failure.log 2>&1 &'; sleep 6; echo launched"
   expect: "launched"
 - wait-stable:
   timeout: 60
 - shot: doctor-with-failing-check
   caption: "EXPECT: the Security row 'Firewall / Needs a fix' on screen; 0.12.x: 'Doctor could not check your computer' exactly because a check failed (QA-WEB-24)"
 # 6. wold refuses / does not answer: the error state says what was checked, what to do, and the raw text.
-- ssh: "systemctl --user -M aliceliddell@ stop wold.service 2>/dev/null || pkill -u 1000 -x wold; echo wold-stopped"
+- ssh: "systemctl --user -M alice@ stop wold.service 2>/dev/null || pkill -u 1000 -x wold; echo wold-stopped"
   rc: any
   expect: "wold-stopped"
 - key: tab

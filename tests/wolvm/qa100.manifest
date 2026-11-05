@@ -47,8 +47,8 @@ qa100-dev-printer-ippeve | installed,account:any | fail:QA-DEV-3@visual | a dead
 qa100-dev2-bt-no-adapter | installed,account:any | fail:devices-r2:DEV2-3@visual | bluetoothctl spawned every 2 s with no adapter; DEV2-4
 qa100-dev2-display-hotplug-cc | installed,account:any,displays:2 | fail:devices-r2:DEV2-1@visual | plugging a display with the Control Center open kills the shell
 qa100-dev2-usb-media-camera | installed,account:any,usb | fail:devices-r2:DEV2-5@visual | unreadable USB disk shown nowhere; QA-DEV-9/QA-DEV-15 no camera indicator (browser step by hand)
-qa100-doctor-check | installed,account:any | fail:QA-DOC-5@4 | Doctor false positives/dead ends (feature newer than 0.12.1: fails on absence there)
-qa100-files-media | installed,account:alice,drive | fail:QA-FILES-6@9,10 | no gvfs-mtp/gphoto2/smb; QA-FILES-14 (extra disk = a vfat stick image)
+qa100-doctor-check | installed,account:any | pass | Doctor false positives/dead ends (feature newer than 0.12.1: fails on absence there)
+qa100-files-media | installed,account:alice,drive | pass | no gvfs-mtp/gphoto2/smb; QA-FILES-14 (extra disk = a vfat stick image)
 qa100-first-login-setup | installed,account:alice | pass | SETUP-firstlogin: an account added later gets its own Setup before the desktop, Later once, the six pages, then never again (unrun)
 qa100-gfx-two-displays | installed,account:alice,displays:2 | fail:QA-GFX-1@visual | Below rule leaves the screens diagonal; QA-GFX-5, QA-GFX-7
 qa100-gfx2-power | installed,account:alice,s3 | fail:QA-GFX-22@visual | the sleep hook gets "no answer" for its lock; QA-GFX-10/11/23
@@ -119,7 +119,7 @@ qa100-b7-wifi-hotspot-hidden | live,ssh | fail:QA-NET-24@visual | B7: hotspot en
 qa100-dev-bluetooth | installed,account:alice,ssh | fail:QA-SET-15@visual | A7: Pair and Forget with a fake BlueZ agent, three states (SET-10), bluetoothd back after a kill (SYS-8), headset icon (DEV-12) (unrun)
 qa100-net2-two-nics-portal | live,ssh | fail:QA-NET-25@visual | network r2 part 2: captive portal (NET2-3), slow link, tray delay (NET2-5), AirPlay from the LAN, ssh live@; second NIC on a host tap spliced by hand (unrun)
 qa100-net2-wifi-join-argv | live,ssh | fail:QA-NET-23@visual | network r2 part 1: every password join ran nmcli passwd-file /dev/stdin, rc 2 in 50 ms (NET2-1); mac80211_hwsim AP (unrun)
-qa100-net-static-ip | live,ssh,network | fail:QA-LIVE3-14 | NET-3: `wol network ip` read, refuse, keep, 15 s rollback to DHCP; IP Settings page (unrun)
+qa100-net-static-ip | live,ssh,network | pass | NET-3: `wol network ip` read, refuse, keep, 15 s rollback to DHCP; IP Settings page (unrun)
 qa100-net3-airplane | live,ssh | fail:QA-NET-21 | NET-3 airplane mode: rfkill block all with the radios remembered, menu bar plane, Control Center tile, off restores (mac80211_hwsim; unrun)
 qa100-net3-proxy-dns | live,ssh,network | fail:QA-NET-21 | NET-3 proxy (proxy.conf, login environment) and DNS over TLS (resolved drop-in, strict refused without a server) (unrun)
 qa100-net3-vpn | live,ssh | fail:QA-NET-21 | NET-3 WireGuard import (name to interface name), connect, disconnect, forget; OpenVPN imported with networkmanager-openvpn from the image (unrun)

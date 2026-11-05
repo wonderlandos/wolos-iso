@@ -25,14 +25,14 @@ steps:
 - wait-stable:
   timeout: 120
   caption: "desktop up"
-- ssh: "su -l aliceliddell -c 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user is-active wolos-media-unmount.service' 2>&1"
+- ssh: "su -l alice -c 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user is-active wolos-media-unmount.service' 2>&1"
   expect: "active"
   caption: "the unit is up for the session (the session target wants it)"
-- ssh: "su -l aliceliddell -c 'XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus udisksctl mount -b /dev/vdb' 2>&1"
-  expect: "Mounted /dev/vdb at /run/media/aliceliddell/"
+- ssh: "su -l alice -c 'XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus udisksctl mount -b /dev/vdb' 2>&1"
+  expect: "Mounted /dev/vdb at /run/media/alice/"
   caption: "the account mounts the stick"
 - ssh: "findmnt -n -o TARGET /dev/vdb"
-  expect: "/run/media/aliceliddell/"
+  expect: "/run/media/alice/"
   save: mounted-before.txt
 - click: 22 14
 - sleep: 1
@@ -42,7 +42,7 @@ steps:
 - key: ret
   caption: "Log Out"
 - sleep: 25
-- ssh: "loginctl list-sessions --no-legend | grep -c aliceliddell || true"
+- ssh: "loginctl list-sessions --no-legend | grep -c alice || true"
   rc: any
   expect: "0"
   caption: "the session is gone"
@@ -50,7 +50,7 @@ steps:
   rc: any
   expect: "not-mounted"
   save: mounted-after.txt
-  caption: "EXPECT not-mounted (0.12.1: still mounted under /run/media/aliceliddell, unreachable for the next account)"
+  caption: "EXPECT not-mounted (0.12.1: still mounted under /run/media/alice, unreachable for the next account)"
 - shot: login-after
   caption: "the login window; a second account would now see a clean stick"
 - stop

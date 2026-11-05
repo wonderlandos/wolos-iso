@@ -21,7 +21,7 @@ steps:
   timeout: 120
   caption: desktop up
 # A terminal that writes every key it receives to a file: nothing may land there.
-- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell setsid -f foot -e sh -c 'stty raw -echo; cat > /home/aliceliddell/foot-typed.txt' >/dev/null 2>&1; sleep 3; echo foot-up"
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/alice setsid -f foot -e sh -c 'stty raw -echo; cat > /home/alice/foot-typed.txt' >/dev/null 2>&1; sleep 3; echo foot-up"
   expect: "foot-up"
 - shot: before-click
   caption: the terminal is the focused window
@@ -32,19 +32,19 @@ steps:
 - sleep: 1
 - shot: search-open-typed
   caption: EXPECT the Search panel open with "zzqx" in its field (BUG: tooltip only, or an empty panel)
-- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell hyprctl layers | grep -c wol-panel-searchbar || true"
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/alice hyprctl layers | grep -c wol-panel-searchbar || true"
   rc: any
   expect: "1"
   save: layers.txt
   caption: Search is on screen after one click
-- ssh: "cat /home/aliceliddell/foot-typed.txt | od -c | head -3; test ! -s /home/aliceliddell/foot-typed.txt && echo nothing-in-the-terminal"
+- ssh: "cat /home/alice/foot-typed.txt | od -c | head -3; test ! -s /home/alice/foot-typed.txt && echo nothing-in-the-terminal"
   rc: any
   expect: "nothing-in-the-terminal"
   save: foot-typed.txt
   caption: not one key reached the window underneath
 - key: esc
 - sleep: 1
-- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell hyprctl layers | grep -c wol-panel-searchbar || true"
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/alice hyprctl layers | grep -c wol-panel-searchbar || true"
   rc: any
   expect: "0"
   caption: Esc closed it

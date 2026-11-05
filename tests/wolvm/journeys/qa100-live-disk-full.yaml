@@ -25,7 +25,7 @@ steps:
 - ssh: "id=$(btrfs subvolume show /home | awk '/Subvolume ID/ {print $3}'); btrfs qgroup show -re /home | awk -v i=\"0/$id\" '$1==i {print ($4 ~ /none/ ? \"no-limit\" : \"limited\")}'"
   expect: "limited"
   caption: "the homes' subvolume has a limit"
-- ssh: "su -l aliceliddell -c 'fallocate -l 400G ~/big1 2>&1; fallocate -l 400G ~/big2 2>&1; fallocate -l 400G ~/big3 2>&1; df -B1 --output=avail /var | tail -1'"
+- ssh: "su -l alice -c 'fallocate -l 400G ~/big1 2>&1; fallocate -l 400G ~/big2 2>&1; fallocate -l 400G ~/big3 2>&1; df -B1 --output=avail /var | tail -1'"
   rc: any
   save: fill.txt
   caption: "the account fills what it may (ENOSPC or EDQUOT on its own files)"
@@ -40,7 +40,7 @@ steps:
   rc: any
   save: journal.txt
   caption: "the journal is intact and capped (SystemMaxUse=512M)"
-- ssh: "su -l aliceliddell -c 'rm -f ~/big1 ~/big2 ~/big3'"
+- ssh: "su -l alice -c 'rm -f ~/big1 ~/big2 ~/big3'"
   rc: any
 - shot: desktop-after
   caption: "the desktop is still up (0.12.1: the disk-full banner behind a window, theme not applied)"

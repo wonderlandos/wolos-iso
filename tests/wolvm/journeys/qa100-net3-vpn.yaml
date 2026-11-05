@@ -36,7 +36,7 @@ steps:
   expect: "settings-running"
 - wait-stable:
   timeout: 40
-- key: Page_Down
+- key: pgdn
 - wait-stable:
   timeout: 20
 - shot: net3-network-vpn-connected

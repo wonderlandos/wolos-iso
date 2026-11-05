@@ -35,8 +35,8 @@ steps:
   timeout: 120
   caption: the login window with Alice and Bob
 # Bob's first sign-in: the setup, before the desktop.
-- click: 719 590
-  caption: the bob tile
+- click: 1120 646
+  caption: the bob tile (right of Alice Liddell in the 0.13 greeter, 1280x800)
 - type: curiouser
 - key: ret
 - wait-stable:
@@ -69,7 +69,7 @@ steps:
 - wait-stable:
   timeout: 120
 # Second sign-in: asked again; this time every page, then Done.
-- click: 719 590
+- click: 1120 646
 - type: curiouser
 - key: ret
 - wait-stable:
@@ -118,7 +118,7 @@ steps:
 - wait-stable:
   timeout: 120
 # Third sign-in: straight to the desktop.
-- click: 719 590
+- click: 1120 646
 - type: curiouser
 - key: ret
 - wait-stable:

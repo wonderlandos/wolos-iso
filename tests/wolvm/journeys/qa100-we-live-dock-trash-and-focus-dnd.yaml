@@ -19,7 +19,7 @@ steps:
   timeout: 120
   caption: "desktop up"
 # LIVE1-12: a Files window is open and behind another window; the Trash tile must bring Files up.
-- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell setsid -f nautilus >/dev/null 2>&1; sleep 3; runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell setsid -f foot >/dev/null 2>&1; sleep 2; echo windows-up"
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/alice setsid -f nautilus >/dev/null 2>&1; sleep 3; runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/alice setsid -f foot >/dev/null 2>&1; sleep 2; echo windows-up"
   expect: "windows-up"
 - shot: files-behind-terminal
   caption: "Files open, the terminal in front"
@@ -29,7 +29,7 @@ steps:
 - shot: after-trash-click
   caption: "EXPECT (LIVE1-12): the Files window comes to the front showing Trash; 0.12.1: it navigated behind the terminal, nothing seemed to happen"
 # LIVE1-20: Do Not Disturb on from the Focus page, then the same row turns it off.
-- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell wol shell toggle control-center; echo cc-open"
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/alice wol shell toggle control-center; echo cc-open"
   expect: "cc-open"
 - shot: control-center
   caption: "Control Center; open the Focus tile's submenu (adjust the click)"
@@ -43,7 +43,7 @@ steps:
   caption: "Do Not Disturb row again (off)"
 - shot: dnd-off
   caption: "EXPECT (LIVE1-20): the moon is gone and the row says Off; 0.12.1: the moon stayed, only the tile icon turned it off"
-- ssh: "cat /home/aliceliddell/.config/wolos/focus 2>/dev/null; echo; echo focus-file"
+- ssh: "cat /home/alice/.config/wolos/focus 2>/dev/null; echo; echo focus-file"
   expect: "focus-file"
   save: focus-file.txt
   caption: "the saved Focus state is off"

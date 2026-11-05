@@ -16,17 +16,17 @@ steps:
 - wait-stable:
   timeout: 120
   caption: desktop up
-- ssh: "for i in 1 2 3 4; do WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell wol-screenshot full; done | wc -l; ls /home/aliceliddell/Desktop | grep -c '^Screenshot '"
+- ssh: "for i in 1 2 3 4; do WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/alice wol-screenshot full; done | wc -l; ls /home/alice/Desktop | grep -c '^Screenshot '"
   rc: any
   expect: "4"
   save: four-files.txt
   caption: QA-LN-9, four captures taken back to back make four files (0.12.1: three)
-- ssh: "grep -c 'Screenshot%20' /home/aliceliddell/.local/share/recently-used.xbel"
+- ssh: "grep -c 'Screenshot%20' /home/alice/.local/share/recently-used.xbel"
   rc: any
   expect: "4"
   save: recent-xbel.txt
   caption: QA-LIVE1-46, all four are in the recent-files list
-- key: ctrl-meta_l-shift_l-3
+- key: ctrl-meta_l-shift-3
   caption: the hotkey (Ctrl+Super+Shift+3 copies; use Super+Shift+3 for the file)
 - sleep: 2
 - shot: banner
@@ -36,7 +36,7 @@ steps:
 - shot: notification-center
   caption: the notice is kept in Notification Center
 - key: esc
-- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell gio list recent:/// | grep -c Screenshot || true"
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/alice gio list recent:/// | grep -c Screenshot || true"
   rc: any
   save: gio-recent.txt
   caption: Files' Recent view (recent:///) lists the screenshots
