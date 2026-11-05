@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # A WolOS release. The ISO is built and VM-tested where it is built, on the forge (BF-9; never in a
-# rolling container on this runner), from the published [wolos-testing] repo, and left in
-# s3://$BUCKET/runs/release-<tag>/iso/ (BUILD.md "Release"):
-#   wolos-build iso --out DIR && WOLOS_VM=V sh wolos-iso/tests/test-install.sh --release DIR &&
+# rolling container on this runner), from the promoted [wolos] repo (`WOLOS_REPO_NAME=wolos
+# wolos-build iso`; a stable release of an image from [wolos-testing] is refused by `release_iso`),
+# and left in s3://$BUCKET/runs/release-<tag>/iso/ (BUILD.md "Release"):
+#   WOLOS_REPO_NAME=wolos wolos-build iso --out DIR &&
+#   WOLOS_VM=V sh wolos-iso/tests/test-install.sh --release DIR &&
 #   cp V/test/checks.txt DIR/ && aws s3 sync DIR/ s3://$BUCKET/runs/release-<tag>/iso/
 # Here: that ISO (its checks.txt must say BOOT PASS and no FAIL), Secure Boot signing and its OVMF
 # boot when the keys are set, then `wolos-build release --do --iso` (lib/publish.sh in wolos-build):
@@ -13,7 +15,8 @@
 # the one repo that holds the keys (explicit secrets); OIDC subject = wolos main, so vars.* are
 # wolos's. The tag (vX.Y.Z) is the release tag `wolos-build release vX.Y.Z` put on all four repos
 # (ADR 0029); calling again re-runs its release (same checks). The runner never builds: it signs and
-# publishes. Then promote the packages to [wolos] (what=promote, wolos-pkgbuilds promote.yml).
+# publishes. Promote the packages to [wolos] FIRST (what=promote, wolos-pkgbuilds promote.yml),
+# then build, VM-test and call this.
 # Every result also lands in s3://$BUCKET/runs/release-<tag>/dist/. With secrets.WOLOS_RELEASES_TOKEN
 # the release is written here; without it (hand mode, WOLOS_GH_RECORD) the writes go to
 # s3://$BUCKET/runs/release-<tag>/release.sh and a ::notice:: gives main the command to run with
