@@ -107,3 +107,19 @@ fn the_build_never_fails_on_the_iso_size() {
     );
     let _ = fs::remove_dir_all(&d);
 }
+
+/// QA-WEB-2: the theme journey called `wol theme accent`, which is no verb (the accent is `wol accent
+/// set <accent>`, appearance `wol theme dark|light`); the fallback after `||` hid it. Every `wol`
+/// command the journey runs is one the controller's command tree has.
+#[test]
+fn the_web_app_theme_journey_uses_verbs_that_exist() {
+    let j = read("tests/wolvm/journeys/qa100-webapp-doctor-theme.yaml");
+    let cli = read("crates/controller/src/cli.rs");
+    assert!(cli.contains(r#"&["accent", "set"]"#) && cli.contains(r#"&["theme", "dark"]"#));
+    assert!(
+        !cli.contains(r#"&["theme", "accent"]"#),
+        "if it exists now, the journey may use it"
+    );
+    assert!(!j.contains("wol theme accent"), "no such verb");
+    assert!(j.contains("wol accent set green") && j.contains("wol accent set violet"));
+}
