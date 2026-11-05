@@ -32,27 +32,32 @@ steps:
   save: ip-router-outside.txt
   caption: "FIXED (QA-LIVE3-14): a router outside 10.0.2.0/24 is refused with a sentence, rc not 0, nothing changed"
 - ssh: "timeout 60 wol network ip $(cat /tmp/qa100-if) manual 10.0.2.50/24 10.0.2.2 10.0.2.3 --json | tr -d ' \\n'; echo; ip -4 -o addr show dev $(cat /tmp/qa100-if) | grep -o 'inet [0-9./]*'; getent hosts archlinux.org >/dev/null && echo names-ok"
+  via: agent
   rc: any
   expect: "names-ok"
   save: ip-manual-kept.txt
   caption: "FIXED (QA-LIVE3-14): automatic false, address 10.0.2.50/24, router 10.0.2.2; names still resolve"
 - ssh: "runuser -u live -- env HOME=/home/live XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 setsid -f wol-settings 'IP Settings' >/dev/null 2>&1; sleep 4; pgrep -u 1000 -x wol-settings >/dev/null && echo settings-running"
+  via: agent
   expect: "settings-running"
 - wait-stable:
   timeout: 40
 - shot: net3-ip-settings-manual
   caption: "IP Settings: Ethernet (enpX) with Configure IPv4 on Manual, Address 10.0.2.50/24, Router 10.0.2.2, DNS servers 10.0.2.3, Apply"
 - ssh: "pkill -u 1000 -x wol-settings; START=$(date +%s); timeout 90 wol network ip $(cat /tmp/qa100-if) manual 10.9.9.9/24 10.9.9.1 2>&1; echo rc=$? secs=$(( $(date +%s) - START )); wol network ip $(cat /tmp/qa100-if) --json | tr -d ' \\n'; echo"
+  via: agent
   rc: any
   expect: "went back to Automatic"
   save: ip-rolled-back.txt
   caption: "FIXED (QA-LIVE3-14): an address on another network loses the router; after about 15 s the link is Automatic again (automatic true), rc not 0"
 - ssh: "wol network ip $(cat /tmp/qa100-if) auto --json | tr -d ' \\n'; echo; wol network | tr -d ' \\n' | grep -oE '\"online\":[a-z]+'"
+  via: agent
   rc: any
   expect: "\"online\":true"
   save: ip-auto-again.txt
   caption: "back to DHCP and online"
 - ssh: "runuser -u live -- env HOME=/home/live XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 setsid -f wol-settings Network >/dev/null 2>&1; sleep 4; echo opened"
+  via: agent
   rc: any
   expect: "opened"
 - wait-stable:
@@ -60,6 +65,7 @@ steps:
 - shot: net3-network-pane-ip-settings-row
   caption: "Network: the Ethernet section ends with IP settings and a Configure… button"
 - ssh: "pkill -u 1000 -x wol-settings; echo closed"
+  via: agent
   rc: any
 - checkpoint: qa100-net-static-ip
 - stop

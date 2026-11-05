@@ -1735,7 +1735,9 @@ def cmd_journey(a):
             for attempt in range(tries):
                 try:
                     ok, detail = run_step(vm, st, out, i)
-                except (OSError, RuntimeError, TimeoutError, ValueError) as e:
+                except (OSError, RuntimeError, TimeoutError, ValueError, subprocess.TimeoutExpired) as e:
+                    # subprocess.TimeoutExpired (an ssh that never returns: the forward died after a static address) fails THIS
+                    # step; before, it escaped and killed the whole journey with no result (RC2 net-static-ip, net-ethernet-states)
                     ok, detail = False, f"{type(e).__name__}: {e}"
                 except SystemExit as e:  # die() inside a step fails the step, not the journey
                     ok, detail = False, f"exit {e.code}"
