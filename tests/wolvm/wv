@@ -1,0 +1,14 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-or-later
+# wolvm wrapper for a gate run: a journey is bounded (40 min) and the VM is stopped after it, so the
+# next --restore restores a stopped disk. A journey whose first step is not `start` expects a running
+# VM (its header says so): this starts it first.
+W="$(dirname "$(readlink -f "$0")")/wolvm"
+if [ "${1:-}" = journey ]; then
+  first=$(awk '/^steps:/{f=1;next} f&&/^- /{print; exit}' "$3")
+  case $first in "- start"*) ;; *) python3 "$W" start "$2" >/dev/null 2>&1 < /dev/null ;; esac
+  timeout -k 30 2400 python3 "$W" "$@" < /dev/null; rc=$?
+  python3 "$W" stop "$2" --force >/dev/null 2>&1
+  exit $rc
+fi
+exec python3 "$W" "$@" < /dev/null

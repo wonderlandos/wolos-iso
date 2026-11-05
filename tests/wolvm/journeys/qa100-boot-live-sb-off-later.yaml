@@ -32,8 +32,10 @@ steps:
   expect: "[none]"
   save: lockdown.txt
   caption: the live kernel is not locked down (no lockdown= word on the medium's command line)
-- ssh: "mokutil --list-enrolled | grep -c 'CN=WolOS Live Image 2026'"
-  expect: "1"
+# A self-signed key names the CN twice (Subject and Issuer): count certificates, not lines.
+- ssh: "mokutil --list-enrolled | grep -c '^\\[key [0-9]*\\]'; mokutil --list-enrolled | grep -q 'CN=WolOS Live Image 2026' && echo key-enrolled"
+  expect: "key-enrolled"
+  save: moklist-count.txt
   caption: the enrolled key stays in MokList
 - ssh: "dmesg --level=emerg,alert,crit,err,warn | wc -l"
   save: dmesg-warn-count.txt

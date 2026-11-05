@@ -14,7 +14,8 @@ steps:
 - wait-stable:
   timeout: 120
 - click: 710 599
-- sleep: 3
+# Known wait (30 s): the session hand-off after Try WolOS draws black/partial frames before the desktop; wait-stable alone passed on them (IMAGE-013).
+- sleep: 30
 - wait-stable:
   timeout: 120
 - ssh: "runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 systemd-run --user --collect env GDK_BACKEND=x11 gnome-text-editor --new-window; sleep 5; runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl -j clients | python3 -c 'import json,sys; print([ (c[\"class\"],c[\"xwayland\"],c[\"tags\"]) for c in json.load(sys.stdin)])'"

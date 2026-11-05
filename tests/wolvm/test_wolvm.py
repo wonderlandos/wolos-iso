@@ -815,6 +815,83 @@ class NewCli(unittest.TestCase):
             self.assertIn("qemu-nbd --disconnect /dev/nbd3", out)
 
 
+class HarnessFixes(unittest.TestCase):
+    """IMAGE-013 round-1 harness fixes (a red that was the harness, not the image)."""
+
+    def test_click_accepts_list_and_pair(self):
+        for spec in ({"click": "720 590"}, {"click": [720, 590]}, {"click": "[720, 590]"}):
+            st = W.parse_step(spec)
+            with unittest.mock.patch.object(W, "click") as c:
+                ok, _ = W.run_step(None, st, "/tmp", 1)
+            self.assertTrue(ok)
+            self.assertEqual(c.call_args[0][1:3], (720, 590), spec)
+
+    def _guest_timeout(self, step):
+        with unittest.mock.patch.object(W, "guest", side_effect=subprocess.TimeoutExpired("ssh", 5)):
+            return W.run_step(None, W.parse_step(step), "/tmp", 1)
+
+    def test_ssh_reboot_with_rc_any_does_not_raise(self):
+        ok, detail = self._guest_timeout({"ssh": "systemctl reboot", "rc": "any"})
+        self.assertTrue(ok)
+        self.assertIn("went down", detail)
+
+    def test_ssh_timeout_still_raises_otherwise(self):
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self._guest_timeout({"ssh": "systemctl reboot"})  # no rc: any
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self._guest_timeout({"ssh": "sleep 999", "rc": "any"})  # not a shutdown command
+
+    def _stable(self, frames, clock):
+        it = iter(frames)
+
+        class Q:
+            def call(self, cmd):
+                pass
+        t = [0.0]
+        vm = unittest.mock.Mock()
+        vm.qmp.return_value = Q()
+        vm.p.return_value = "/x"
+        with unittest.mock.patch.object(W, "nudge"), unittest.mock.patch.object(W, "qmp_screendump"), \
+                unittest.mock.patch.object(W, "read_file", lambda p, m: next(it)), \
+                unittest.mock.patch.object(W.time, "time", lambda: t[0]), \
+                unittest.mock.patch.object(W.time, "sleep", lambda s: t.__setitem__(0, t[0] + clock)):
+            return W.wait_stable(vm, 300), t[0]
+
+    def test_black_frame_not_stable_before_90s(self):
+        hdr = b"P6\n1280 800\n255\n"
+        black, lit = hdr + b"\0" * 64, hdr + b"\x10" * 64
+        # steady black: stable only once 90 s have passed
+        ok, t = self._stable([black] * 60, 10.0)
+        self.assertTrue(ok)
+        self.assertGreaterEqual(t, 90)
+        # steady non-black: stable on the second frame
+        ok, t = self._stable([lit] * 5, 2.0)
+        self.assertTrue(ok)
+        self.assertLess(t, 10)
+
+    def test_journey_fixes_in_place(self):
+        J = os.path.join(HERE, "journeys")
+        sb = get(os.path.join(J, "qa100-boot-live-sb-off-later.yaml"))
+        self.assertNotIn("grep -c 'CN=", sb)  # a self-signed key names the CN twice
+        self.assertIn("key-enrolled", sb)
+        gui = [s["verb"] for s in W.load_journey(os.path.join(J, "qa100-install-gui-erase.yaml"))[1]]
+        self.assertLess(gui.index("wait-text"), gui.index("checkpoint"))  # Welcome card seen before begin
+        live = ["qa100-net-ethernet-states", "qa100-net-sharing-live", "qa100-net-static-ip",
+                "qa100-net2-two-nics-portal", "qa100-net3-airplane", "qa100-net3-proxy-dns", "qa100-net3-vpn",
+                "qa100-wm-decorations-xwayland-fill", "qa100-wm-minimise-focus", "qa100-wm-semaphore-states"]
+        for j in live:
+            text = get(os.path.join(J, j + ".yaml"))
+            self.assertIn("- sleep: 30\n", text, j)
+            self.assertIn("Known wait (30 s)", text, j)  # a wait is explained, not silent
+
+    def test_wv_wrapper_starts_vm_unless_first_step_is_start(self):
+        wv = os.path.join(HERE, "wv")
+        self.assertTrue(os.access(wv, os.X_OK))
+        text = get(wv)
+        self.assertIn('"- start"*) ;;', text)
+        self.assertIn("stop \"$2\" --force", text)
+
+
 class AllJourneys(unittest.TestCase):
     """Every journey in tests/wolvm/journeys parses and dry-runs (wolvm --dry-run journey), and every
     qa-/qa100- journey has exactly one line in the qa100 gate manifest."""

@@ -13,6 +13,9 @@ steps:
 - wait-stable:
   timeout: 180
   caption: Welcome to WolOS (Install WolOS, Try WolOS)
+- wait-text: "Install WolOS"
+  timeout: 240
+- sleep: 3
 - checkpoint: begin
 - key: ret
   caption: Install WolOS -> Language and Keyboard

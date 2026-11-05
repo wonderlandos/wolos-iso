@@ -994,12 +994,13 @@ def cmd_screenshot(a):
 
 def wait_stable(vm, timeout, interval=2.0):
     q, last, end = vm.qmp(), None, time.time() + timeout
+    black_ok = time.time() + 90  # an all-black frame is "stable" only after 90 s (boot and session hand-off draw black first)
     tmp = vm.p("stable.ppm")
     while time.time() < end:
         nudge(vm, q)
         q.call(qmp_screendump(tmp, "ppm"))
         cur = read_file(tmp, "rb")
-        if cur == last:
+        if cur == last and (max(cur[20:]) != 0 or time.time() >= black_ok):
             return True
         last = cur
         time.sleep(interval)
@@ -1605,7 +1606,8 @@ def run_step(vm, st, out_dir, idx):
         press(vm, args)
         return True, ""
     if v == "click":
-        click(vm, int(args[0]), int(args[1]), o.get("button", "left"), bool(o.get("double")))
+        xy = re.findall(r"-?\d+", " ".join(args))  # `click: [720, 590]` as well as `click: 720 590`
+        click(vm, int(xy[0]), int(xy[1]), o.get("button", "left"), bool(o.get("double")))
         return True, ""
     if v == "wait-text":
         ok, s = wait_text(vm, args[0], t, bool(o.get("regex")), bool(o.get("new")))
@@ -1618,7 +1620,12 @@ def run_step(vm, st, out_dir, idx):
         time.sleep(float(args[0]))
         return True, ""
     if v in ("ssh", "exec"):
-        rc, out, err = guest(vm, args[0], t, o.get("user", "root"), o.get("via", "auto"))
+        try:
+            rc, out, err = guest(vm, args[0], t, o.get("user", "root"), o.get("via", "auto"))
+        except (TimeoutError, subprocess.TimeoutExpired):
+            if o.get("rc") == "any" and re.search(r"\b(reboot|poweroff|shutdown)\b", args[0]):
+                return True, "the guest went down under the command (rc: any)"
+            raise
         text = out + err
         if o.get("save"):
             write_file(os.path.join(out_dir, os.path.basename(str(o["save"]))), text)

@@ -15,7 +15,8 @@ steps:
   timeout: 120
 - click: 710 599
   caption: Try WolOS (1280x800)
-- sleep: 3
+# Known wait (30 s): the session hand-off after Try WolOS draws black/partial frames before the desktop; wait-stable alone passed on them (IMAGE-013).
+- sleep: 30
 - wait-stable:
   timeout: 120
   caption: live desktop

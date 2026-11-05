@@ -43,3 +43,4 @@ tests/wolvm/atlas-update-repo.sh
 tests/wolvm/mok-esp.sh
 tests/wolvm/test_wolvm.py
 tests/wolvm/wolvm
+tests/wolvm/wv

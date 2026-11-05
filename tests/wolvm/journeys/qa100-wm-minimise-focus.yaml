@@ -15,7 +15,8 @@ steps:
   timeout: 120
 - click: 710 599
   caption: Try WolOS
-- sleep: 3
+# Known wait (30 s): the session hand-off after Try WolOS draws black/partial frames before the desktop; wait-stable alone passed on them (IMAGE-013).
+- sleep: 30
 - wait-stable:
   timeout: 120
 - ssh: "runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 systemd-run --user --collect foot; sleep 2; runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl dispatch resizewindowpixel exact 340 300,activewindow; runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl dispatch movewindowpixel exact 20 420,activewindow; echo placed"
