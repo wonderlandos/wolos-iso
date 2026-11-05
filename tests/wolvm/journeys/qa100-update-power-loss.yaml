@@ -16,11 +16,11 @@ steps:
 # Start the update in the background and cut the power once pacman is inside the new slot.
 - ssh: "nohup sh -c 'wol update apply --yes >/tmp/apply.log 2>&1' >/dev/null 2>&1 & echo started"
   expect: "started"
-- ssh: "n=0; while [ $n -lt 600 ] && ! grep -q 'arch-chroot.*pacman' /tmp/apply.log; do sleep 2; n=$((n+2)); done; sleep 20; tail -3 /tmp/apply.log"
+- ssh: "n=0; while [ $n -lt 600 ] && ! grep -q 'arch-chroot.*pacman' /tmp/apply.log; do sleep 2; n=$((n+2)); done; sleep 3; tail -3 /tmp/apply.log"
   timeout: 700
   rc: any
   save: at-cut.txt
-  caption: pacman is running inside the new slot when the power goes
+  caption: pacman is running inside the new slot when the power goes (3 s after its log line: the 0.13 seal finishes the whole update within seconds, a longer wait cut after 'updated into wolos-b', final run 2026-11-05)
 - stop
 - start
 - wait-agent:
@@ -36,9 +36,9 @@ steps:
 - ssh: "ls /efi/loader/entries /efi/EFI/wolos; btrfs subvolume list /run/wolos/top | grep -o '@wolos-[ab]\\|@wolos-tx'; bootctl list --no-pager"
   rc: any
   save: after-cut.txt
-- ssh: "for e in /efi/loader/entries/wolos-*.conf; do [ -f \"$e\" ] || continue; img=$(sed -n 's/^uki //p' \"$e\"); s=$(basename \"$e\" .conf | sed 's/+.*//'); test -f \"/efi$img\" && btrfs subvolume list /run/wolos/top | grep -q \"@$s\\$\" || { echo dangling=$e; exit 1; }; done; echo entries-consistent"
+- ssh: "for e in /efi/loader/entries/wolos-*.conf; do [ -f \"$e\" ] || continue; img=$(sed -n 's/^uki //p' \"$e\"); s=$(basename \"$e\" .conf | sed 's/-fallback//; s/+.*//'); test -f \"/efi$img\" && btrfs subvolume list /run/wolos/top | grep -q \"@$s\\$\" || { echo dangling=$e; exit 1; }; done; echo entries-consistent"
   expect: "entries-consistent"
-  caption: "U3: every boot entry has its image and its slot"
+  caption: "U3: every boot entry has its image and its slot (0.13: wolos-a-fallback+1.conf is slot a's fallback entry, ADR 0025; it carries the counter of the clean shutdown, so it is named after slot a, not after a subvolume called wolos-a-fallback)"
 - ssh: "wol update status 2>&1; wol restore list 2>&1"
   rc: any
   save: status-after-cut.txt

@@ -28,7 +28,7 @@ steps:
   caption: slot B built and waits for its first boot
 - ssh: "ls /efi/loader/entries; ls /efi/EFI/wolos; btrfs subvolume list /run/wolos/top | grep -o '@wolos-[ab]\\|@wolos-tx'"
   save: after-apply1.txt
-- ssh: "test -f /efi/loader/entries/wolos-b+3.conf && test -f /efi/EFI/wolos/wolos-b.efi && echo b-entry-and-image"
+- ssh: "test -f /efi/loader/entries/wolos-b+3.conf && test -f /efi/loader/entries/wolos-b-fallback+3.conf && test -f /efi/EFI/wolos/wolos-b.efi && echo b-entry-and-image"
   expect: "b-entry-and-image"
 # Boot B, bless it, so A becomes the previous restore point with a blessed entry wolos-a.conf.
 - stop
@@ -43,9 +43,9 @@ steps:
 - ssh: "timeout 120 systemctl is-system-running --wait; sleep 10; ls /efi/loader/entries"
   rc: any
   save: entries-after-b-boot.txt
-- ssh: "test -f /efi/loader/entries/wolos-b.conf && test -f /efi/loader/entries/wolos-a.conf && test -f /efi/EFI/wolos/wolos-a.efi && echo both-blessed"
-  expect: "both-blessed"
-  caption: both slots have blessed entries and images; A is the restore point
+- ssh: "cd /efi/loader/entries || exit 1; a=$(ls | grep -E '^wolos-a([+][0-9]+(-[0-9]+)?)?[.]conf$'); f=$(ls | grep -E '^wolos-a-fallback([+][0-9]+(-[0-9]+)?)?[.]conf$'); [ -n \"$a\" ] && [ -n \"$f\" ] && [ \"$(echo \"$a\" | wc -l)\" = 1 ] && [ \"$(echo \"$f\" | wc -l)\" = 1 ] || { echo a-entries-wrong; ls; exit 1; }; ca=${a#wolos-a}; ca=${ca%.conf}; cf=${f#wolos-a-fallback}; cf=${cf%.conf}; [ \"$ca\" = \"$cf\" ] || { echo a-pair-counters-differ=$ca/$cf; exit 1; }; case \"$ca\" in ''|+1) ;; *) echo a-counter-unexpected=$ca; exit 1;; esac; cd /efi/loader/entries; test -f wolos-b.conf && test -f wolos-b-fallback.conf && [ \"$(ls | grep -c '^wolos-b')\" = 2 ] || { echo b-not-blessed; ls; exit 1; }; test -f /efi/EFI/wolos/wolos-a.efi && test -f /efi/EFI/wolos/wolos-b.efi && echo both-slots-ready=a$ca"
+  expect: "both-slots-ready"
+  caption: "0.13 boot design (ADR 0025, Fallback entry): the running slot B has its entry and its fallback both blessed (no counter); A, the restore point, has its entry and its fallback with the same counter (blessed, or +1 from its clean shutdown), and both images are there"
 # Now a failing update into A: offline, pacman cannot sync. The plan deletes @wolos-a first.
 - ssh: "nmcli networking off || true; sleep 2; timeout 900 wol update apply --yes >/tmp/apply2.log 2>&1; echo rc=$?; tail -5 /tmp/apply2.log"
   timeout: 1000
@@ -64,17 +64,17 @@ steps:
   save: slot-a-state.txt
   caption: "U3: either the restore point survived, or nothing offers it any more"
 # QA-100 B4 (STORE-3 fix): the failed build ran in @wolos-tx; the restore point is kept whole.
-- ssh: "btrfs subvolume list /run/wolos/top | grep -q '@wolos-a$' && test -f /efi/loader/entries/wolos-a.conf && test -f /efi/EFI/wolos/wolos-a.efi && ! test -e /var/lib/wolos/update-building && echo restore-point-kept"
+- ssh: "btrfs subvolume list /run/wolos/top | grep -q '@wolos-a$' && test -f /efi/EFI/wolos/wolos-a.efi && ! test -e /var/lib/wolos/update-building && (cd /efi/loader/entries || exit 1; a=$(ls | grep -E '^wolos-a([+][0-9]+(-[0-9]+)?)?[.]conf$'); f=$(ls | grep -E '^wolos-a-fallback([+][0-9]+(-[0-9]+)?)?[.]conf$'); [ -n \"$a\" ] && [ -n \"$f\" ] && [ \"$(echo \"$a\" | wc -l)\" = 1 ] && [ \"$(echo \"$f\" | wc -l)\" = 1 ] || { echo a-entries-wrong; ls; exit 1; }; ca=${a#wolos-a}; ca=${ca%.conf}; cf=${f#wolos-a-fallback}; cf=${cf%.conf}; [ \"$ca\" = \"$cf\" ] || { echo a-pair-counters-differ=$ca/$cf; exit 1; }; case \"$ca\" in ''|+1) ;; *) echo a-counter-unexpected=$ca; exit 1;; esac; echo restore-point-kept)"
   expect: "restore-point-kept"
-  caption: "STORE-3: after a failed update the earlier restore point, its entry and its image are all still there"
+  caption: "STORE-3: after a failed update the earlier restore point, its entry, its fallback entry (same counter as before) and its image are all still there"
 - ssh: "grep -cE 'wolos-a|btrfs|/run/wolos' /tmp/apply2.log | grep -q '^0$' && echo plain-sentence"
   expect: "plain-sentence"
   caption: "STORE-6/55: the failure says it in words (no slot name, no commands)"
 - ssh: "wol restore list 2>&1; wol restore list --json 2>&1"
   rc: any
   save: restore-list.txt
-- ssh: "wol restore list --json | grep -o '\"name\":\"wolos-a\"' | wc -l | grep -q '^0$' && echo not-offered || (btrfs subvolume list /run/wolos/top | grep -q '@wolos-a$' && echo offered-and-exists)"
-  expect: "offered-and-exists|not-offered"
+- ssh: "{ wol restore list --json | grep -o '\"name\":\"wolos-a\"' | wc -l | grep -q '^0$' || btrfs subvolume list /run/wolos/top | grep -q '@wolos-a$'; } && echo restore-list-honest"
+  expect: "restore-list-honest"
   caption: "U5: the Restore page never offers a slot that does not exist"
 - ssh: "nmcli networking on || true; sleep 5"
   rc: any

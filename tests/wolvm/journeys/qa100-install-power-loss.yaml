@@ -37,11 +37,15 @@ steps:
 - ssh: "timeout 120 systemctl is-system-running --wait"
   expect: "running"
   caption: the installed system comes up clean
-- ssh: "ls /efi/loader/entries"
-  expect: "wolos-a.conf"
-  caption: one blessed entry
-- ssh: "ls /efi/loader/entries | grep -c '^wolos-'"
-  expect: "1"
+- ssh: "cd /efi/loader/entries && LC_ALL=C ls | grep '^wolos-' | tr '\\n' ' '"
+  expect: "wolos-a-fallback.conf wolos-a.conf"
+  caption: "0.13 boot design (ADR 0025, Fallback entry): the slot's blessed entry and its blessed fallback entry, and nothing else of WolOS (no counted leftovers of the cut install)"
+- ssh: "cd /efi/loader/entries && ls | grep -c '^wolos-' && ls | grep -c '^wolos-a-fallback[.]conf$' && ls | grep -c '^wolos-a[.]conf$'"
+  expect: "2\n1\n1"
+  caption: exactly two WolOS entries on the ESP, one of each kind
+- ssh: "cd /efi/loader/entries && grep -h '^sort-key' wolos-a.conf wolos-a-fallback.conf | tr '\\n' ' '; for e in wolos-a.conf wolos-a-fallback.conf; do img=$(sed -n 's/^uki //p' $e); test -f \"/efi$img\" || { echo dangling=$e; exit 1; }; done"
+  expect: "sort-key wolos sort-key wolos.fallback"
+  caption: the fallback sorts after the entry (sort-key wolos.fallback) and both name an image that is on the ESP
 - ssh: "lsblk -no PARTTYPE /dev/vda | grep -ic c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
   expect: "1"
   caption: exactly one startup partition (the first try's partitions did not pile up); moved here from before the poweroff

@@ -100,7 +100,7 @@ qa100-sheet-store-get-label | installed,account:alice,network | fail:QA-VIS2-46@
 qa100-store-pkg-paths | installed,network | fail:QA-STORE-32 | ENOSPC wording (partly on 0.12.1); QA-STORE-42 not reproducible in 0.12.1
 qa100-system-installed-faults | installed,account:none | fail:QA-SYS-1@13,18 | wold start-limit-hit after a crash burst: black screen for good
 qa100-system-live-faults | live | fail:QA-SYS-14 | log noise on every live boot
-qa100-update-check | installed,network | fail:QA-STORE-7@26 | a badly signed manifest still counts (U7, unknown on 0.12.1); QA-STORE-1 not reproducible
+qa100-update-check | installed,network | fail:QA-STORE-7@27 | a badly signed manifest still counts (U7, unknown on 0.12.1); QA-STORE-1 not reproducible
 qa100-update-now-installed | installed,network,account:alice | fail:QA-STORE-42 | Update Now on an installed disk (live-4 F1): the slot is built, or the journal carries the step's own words
 qa100-update-power-loss | installed,network | fail:QA-STORE-8@17 | leftover @wolos-tx / half slot after a cut during an update
 qa100-update-slot-failure | installed,network | fail:QA-STORE-3@20 | a failed replace leaves a dangling entry (confirmed on 0.12.1); QA-STORE-4 no update lock

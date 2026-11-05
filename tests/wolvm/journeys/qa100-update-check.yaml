@@ -14,6 +14,13 @@ steps:
   timeout: 600
 - wait-stable:
   timeout: 180
+# The journey waits 2 x 330 s with no input; the session locks at 300 s idle (hypridle), and a locked screen
+# shows no clickable banner (final run 2026-11-05: step 19 failed with the lock screen up). A logind idle
+# inhibitor held for the journey keeps hypridle from locking. NOT yet run on a VM.
+- ssh: "setsid -f systemd-inhibit --what=idle --who=qa100-update-check --why='keep the session unlocked for the banner click' --mode=block sleep 1500 >/dev/null 2>&1; sleep 1; systemd-inhibit --list --no-pager | grep -c qa100-update-check"
+  rc: any
+  save: inhibit.txt
+  caption: an idle inhibitor keeps the desktop from locking during the long waits
 - ssh: "systemctl list-timers --no-pager --all | grep -E 'wolos-update-(check|download)' || true"
   save: timers.txt
   caption: the hourly check and the daily download timers exist
@@ -64,10 +71,10 @@ steps:
   caption: click-notice - click the banner
 - wait-stable:
   timeout: 20
-- ssh: "pgrep -u $(id -u alice) -af 'wol-settings.*Software Update' && echo settings-opened-on-software-update"
+- ssh: "pgrep -u $(id -u alice) -af 'wol-settings.*software-update' && echo settings-opened-on-software-update"
   rc: any
   expect: "settings-opened-on-software-update"
-  caption: click-notice - the click opened Settings on Software Update
+  caption: "click-notice - the click opened Settings on Software Update: the banner runs `wol-settings software-update` (shell software_update::OPEN, the page id), not the title 'Software Update'"
 - ssh: "rm -f /var/lib/wolos/updates/pkg /var/lib/wolos/updates/checked"
   rc: any
 # Offline: no stamp, an honest sentence.
