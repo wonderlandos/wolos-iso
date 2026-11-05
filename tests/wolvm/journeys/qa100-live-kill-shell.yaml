@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-LIVE-21: `pkill -9 -x wol-shell` matches the supervisor AND the shell it runs, so the supervisor
+# (qa100-ln-shell-crash kills only the child) could not bring the desktop back: black screen, no menu
+# bar, Dock or notifications, Super+Esc dead because it needs the shell. The session now runs the
+# supervisor as the user unit wolos-shell.service (Restart=always); `wol shell show|toggle|hide`
+# starts that unit when the shell's socket is gone, so a key brings the shell back too.
+# wolvm journey <vm> tests/wolvm/journeys/qa100-live-kill-shell.yaml
+name: The shell comes back when supervisor and shell are both killed
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window
+- click: [720, 590]
+- sleep: 1.5
+- type: tester123
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop session up
+- ssh: "runuser -u tester -- env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user is-active wolos-shell.service; pgrep -u tester -c -x wol-shell"
+  caption: EXPECT active and two processes (supervisor + shell)
+- ssh: "old=$(pgrep -u tester -x wol-shell | tr '\n' ' '); pkill -KILL -u tester -x wol-shell; i=0; while [ $i -lt 10 ]; do n=$(pgrep -u tester -x wol-shell | wc -l); if [ $n -ge 2 ] && [ \"$(pgrep -u tester -x wol-shell | tr '\n' ' ')\" != \"$old\" ] && [ -S /run/user/1000/wol-shell.sock ]; then break; fi; sleep 0.5; i=$((i+1)); done; echo back=$([ $i -lt 10 ] && echo yes) waited=$i"
+  expect: "back=yes"
+  caption: QA-LIVE-21 EXPECT both back within 5 s (10 polls of 0.5 s = the registry row's 5 s
+- ssh: "runuser -u tester -- env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user show wolos-shell.service -p NRestarts -p ActiveState"
+  caption: EXPECT NRestarts=1 ActiveState=active
+- sleep: 2
+- shot: kill-shell-back
+  caption: EXPECT menu bar, Dock and wallpaper. BUG QA-LIVE-21 if the screen is black
+# The unit is down (a stop, a give-up that was lifted): Super+Esc starts it again.
+- ssh: "runuser -u tester -- env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user stop wolos-shell.service; sleep 1; pgrep -u tester -c -x wol-shell; echo stopped"
+  rc: any
+  expect: "stopped"
+- shot: kill-shell-gone
+  caption: black desktop, no menu bar (the unit was stopped on purpose)
+- key: super-esc
+  caption: Super+Esc runs `wol shell toggle session`; with no shell it starts wolos-shell.service
+- sleep: 5
+- shot: kill-shell-key
+  caption: EXPECT menu bar and Dock back (the session menu itself may need a second press). BUG QA-LIVE-21 if still black
+- ssh: "runuser -u tester -- env XDG_RUNTIME_DIR=/run/user/1000 systemctl --user is-active wolos-shell.service"
+  expect: "active"
+- stop

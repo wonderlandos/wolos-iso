@@ -58,6 +58,7 @@ qa100-install-power-loss | iso-install,tpm | pass | power cut at "files 15", sec
 qa100-install-two-disks | iso-install,tpm,drive | fail:QA-DOC-18@visual | Done page never says how to start Windows on the other disk (drive = mk_disk windows image)
 qa100-l10n2-first-boot-ja | iso-install,tpm,ssh | fail:QA-L10N-2 | L10N-2: Setup in Japanese on first boot, LANG=ja_JP.UTF-8 in locale.conf and the session (unrun)
 qa100-l10n2-first-boot-ptbr | iso-install,tpm,ssh | fail:QA-L10N-2 | L10N-2: Setup in Portuguese (Brazil) on first boot, LANG=pt_BR.UTF-8 in locale.conf and the session (unrun)
+qa100-live-kill-shell | installed,account:tester | fail:QA-LIVE-21@visual | wol-shell AND its supervisor killed (pkill -9 -x): wolos-shell.service brings both back within 5 s; Super+Esc starts the unit when it is down (unrun)
 qa100-live-logout | installed,account:alice | fail:QA-LIVE-32@visual | A8: Log Out sheet survives an outside click, sessions saved, no hypridle abort (unrun)
 qa100-live-record-stop | installed,account:alice | fail:QA-LIVE1-55 | A8: recording indicator and Stop (unrun)
 qa100-live-screenshot-recent | installed,account:alice | fail:QA-LN-9 | A8: four captures four files, Recent, banner names the folder (unrun)
@@ -109,6 +110,7 @@ qa100-wd-adr-crash-evidence | installed,account:any | fail:crash-surface:CRASH-4
 qa100-webapp-doctor-launch | installed,account:alice | fail:QA-WEB-1@17,24 | Doctor web app launch (feature not in 0.12.1: fails on absence); QA-WEB-24
 qa100-webapp-doctor-theme | installed,account:alice | fail:QA-WEB-2@visual | Doctor ignores the theme (feature not in 0.12.1)
 qa100-webapp-lifecycle | installed,account:alice | fail:QA-WEB-5@29 | closing the window leaves the approval sheet's child (feature not in 0.12.1)
+qa100-vis-files-lights | live,ssh | fail:QA-VIS1-25@visual | Files opened right after the desktop shows three window lights in its header, one set, no strip (QA-VIS2-51); gsettings default button-layout (unrun)
 qa100-wm-decorations-xwayland-fill | live,tpm,ssh | fail:QA-WM-2@visual | XWayland windows undecorated; QA-WM-3
 qa100-wm-minimise-focus | live,tpm,ssh | fail:QA-WM-1@visual | minimise leaves focus on the hidden window
 qa100-wm-semaphore-states | live,tpm,ssh | fail:QA-SHELL-1 | title-bar buttons misbehave (umbrella; QA-VIS1-23..26)

@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-VIS1-25 / QA-VIS2-51: Files (Nautilus, libadwaita) opened with no window buttons, or one grey dot at
+# the right edge, and no WolOS title bar. libadwaita takes its button layout from the settings portal
+# (gsettings org.gnome.desktop.wm.preferences button-layout); only `wol theme apply` wrote the key, a
+# moment into the session, so an app opened before it got the schema default `appmenu:close`. The image
+# now ships 50_wolos.gschema.override with ':minimize,maximize,close'. This journey opens Files at once
+# after the desktop is up (the racy case) and reads what the app was told and what it drew.
+# Exactly one set of three lights per window: Nautilus draws them itself (tag wol-lights-none, no strip).
+#   wolvm journey <vm> tests/wolvm/journeys/qa100-vis-files-lights.yaml
+name: Files shows its three window lights as soon as the desktop is up
+steps:
+- start
+- wait-text: "Install WolOS"
+  timeout: 240
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 120
+- click: 710 599
+  caption: Try WolOS
+- sleep: 3
+- wait-stable:
+  timeout: 120
+- ssh: "runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 gsettings get org.gnome.desktop.wm.preferences button-layout"
+  save: layout-default.txt
+  caption: EXPECT ':minimize,maximize,close' with no `wol theme apply` write needed (the schema default)
+- ssh: "runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 systemd-run --user --collect nautilus --new-window; sleep 5; runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl -j clients | python3 -c 'import json,sys; print([(c[\"class\"],c[\"at\"],c[\"size\"],c[\"tags\"]) for c in json.load(sys.stdin) if \"autilus\" in c[\"class\"]])'"
+  save: files-client.txt
+  caption: EXPECT one Files window; tags show wol-lights-none (it draws its own) and at y=28 (no strip above it)
+- wait-stable:
+  timeout: 30
+- shot: files-header
+  caption: EXPECT three circles at the right end of the Files header bar (minimise, zoom, close, close rightmost, 22 px apart) and no second row of buttons above the header. BUG QA-VIS1-25 if none or one grey dot; BUG QA-VIS2-51 if there is no title bar and no lights
+- ssh: "runuser -u live -- env XDG_RUNTIME_DIR=/run/user/1000 HYPRLAND_INSTANCE_SIGNATURE=$(ls /run/user/1000/hypr/|head -1) hyprctl dispatch closewindow class:org.gnome.Nautilus; echo closed"
+  expect: closed
+- stop
