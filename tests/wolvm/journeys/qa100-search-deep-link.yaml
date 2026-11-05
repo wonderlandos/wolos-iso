@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# QA-SEARCH-1 (lead, 2026-11-05: "pesquiso privacy settings abre ali beleza mas abre na primeira
+# default do settings"). A Settings result of the Search bar opened `wol-settings <title>` or, for the
+# app row "System Settings", `wol-settings` with no page: Settings showed its first pane. Now a
+# result carries a stable id (`wol-settings privacy`, `wol-settings privacy#screen-recording`), the
+# running Settings window goes to that pane (also when it is already open: one window, no second
+# one), scrolls to the row and lights it, and the same ids work with the interface in Portuguese.
+# The pane is read from the shot (the Settings window title is fixed and the harness has no OCR):
+# every shot has the sentence to check. The machine checks are that one Settings window exists
+# after each pick and that the ids resolve.
+# Needs an installed disk with the test account (Alice Liddell / curiouser, an administrator).
+# wolvm journey <vm> tests/wolvm/journeys/qa100-search-deep-link.yaml
+name: Search results open Settings on the pane and the row they name
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+  caption: login window
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: desktop session up
+# 1. 'privacy settings': the Privacy & Security pane, not the first pane.
+- key: meta_l-spc
+- sleep: 1.5
+- type: privacy settings
+- sleep: 1
+- shot: search-privacy-settings
+  caption: EXPECT the first result "Privacy & Security" (kind System Settings), not the app row "System Settings". BUG QA-SEARCH-1 if the list is empty or starts with the app
+- key: ret
+- wait-stable:
+  timeout: 30
+- shot: settings-privacy
+  caption: EXPECT Settings open with Privacy & Security selected in the sidebar and its content showing (Screen Recording, Security, Send error reports). BUG QA-SEARCH-1 if Wi-Fi (the first pane) is selected
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" hyprctl clients -j | grep -c '\"class\": \"org.wolos.settings\"'"
+  expect: "1"
+  caption: one Settings window
+# 2. Settings is open: a second pick goes to the running window (IPC), and to the row.
+- key: meta_l-spc
+- sleep: 1.5
+- type: reset audio
+- sleep: 1
+- shot: search-reset-audio
+  caption: EXPECT the first result "Reset audio · Sound" (kind System Settings)
+- key: ret
+- wait-stable:
+  timeout: 30
+- shot: settings-sound-row
+  caption: EXPECT the same window on Sound, scrolled so the Reset audio row is in view and lit (accent tint and ring). BUG QA-SEARCH-1 if it stayed on Privacy & Security or nothing is lit
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); u=$(id -nu 1000); runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" hyprctl clients -j | grep -c '\"class\": \"org.wolos.settings\"'"
+  expect: "1"
+  caption: still one Settings window (the pick went to the running one)
+# 3. A row of the Privacy pane, further down the page.
+- key: meta_l-spc
+- sleep: 1.5
+- type: screen recording
+- sleep: 1
+- shot: search-screen-recording
+  caption: EXPECT "Screen Recording · Privacy & Security" among the first results (a second row of that name is on Control Center)
+- key: ret
+- wait-stable:
+  timeout: 30
+- shot: settings-screen-recording
+  caption: EXPECT Privacy & Security with the Screen Recording section lit and scrolled near the top
+# 4. Portuguese: the same ids reach the same row (a launch by the shell is not by a title).
+- ssh: "u=$(id -nu 1000); WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u \"$u\" -- pkill -x wol-settings; sleep 2; runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" WOL_LANG=pt-BR sh -c 'nohup wol-settings sound >/dev/null 2>&1 &'; sleep 4; runuser -u \"$u\" -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" WOL_LANG=pt-BR wol-settings privacy#screen-recording; sleep 3; echo launched-pt"
+  expect: "launched-pt"
+  caption: Settings started in Portuguese on Sound, then a second launch by id (what the Search bar runs)
+- wait-stable:
+  timeout: 30
+- shot: settings-pt-br-screen-recording
+  caption: EXPECT Privacy & Security (in Portuguese where the pane is translated) with the Screen Recording section lit. BUG QA-SEARCH-1 if it stayed on Sound
+- ssh: "journalctl -b --no-pager -n 60 -t wol-settings"
+  rc: any
+  save: settings-journal.txt
+- checkpoint: qa100-search-deep-link
+- stop
