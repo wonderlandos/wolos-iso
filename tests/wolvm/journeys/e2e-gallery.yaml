@@ -1,0 +1,99 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# E2E-GALLERY (APPS-E2E GAP-PLAN, package E2E-GALLERY): Gallery is the app people meet for pictures.
+#   journey: a PNG opens from Files in Gallery, Delete moves it to the Trash and says so, Undo puts it
+#   back, Share opens the system sheet; none of it shows "is not allowed" (the bundled app holds the
+#   trash and share grants from the vendor defaults, no Settings visit first).
+# UNRUN: written on the build box (no KVM). Needs the image with wolos-app-gallery installed
+# (profile/packages.desktop), the wolos-system mimeapps.list that names Gallery for image/png and
+# image/jpeg, and wol_core::consent::effective (wolos wave3/e2e-gallery). Account alice/curiouser.
+# Register in tests/wolvm/e2e.manifest:
+#   e2e-gallery | installed,account:alice | pass | a PNG opens from Files in Gallery; Delete, Undo and Share work on a fresh system
+# STILL OPEN (waits for other packages, not tested here): "Share to Notes" needs E2E-NOTES and the
+# E2E-SHARE sheet; the step is the screenshot of the sheet. The click coordinates of the Share button
+# are for a 1280x800 guest with the 900x600 window centred: take them from the first forge shot.
+name: a picture opens in Gallery from Files, Delete and Undo work, Share opens the sheet
+steps:
+- start
+- wait-agent:
+  timeout: 300
+- wait-stable:
+  timeout: 180
+- type: curiouser
+- key: ret
+- wait-stable:
+  timeout: 120
+  caption: "desktop session up"
+- ssh: |
+    P=$(pgrep -u 1000 -x wol-shell | head -1); tr '\0' '\n' < /proc/$P/environ | grep -E '^(WAYLAND_DISPLAY|HYPRLAND_INSTANCE_SIGNATURE|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR|HOME|USER)=' > /tmp/sess.env; wc -l < /tmp/sess.env
+  expect: "6"
+# The package and the vendor defaults are on the image (E2E-GALLERY packaging).
+- ssh: "pacman -Q wolos-app-gallery && test -x /usr/bin/wol-gallery && test -f /usr/share/applications/org.wolos.gallery.desktop && echo installed"
+  expect: "installed"
+  caption: "Gallery is in the image"
+- ssh: "jq -r '.grants[] | .app + \" \" + .capability' /usr/share/wolos/consent.d/org.wolos.gallery.json | sort"
+  expect: "/usr/bin/wol-gallery share\n/usr/bin/wol-gallery trash"
+  save: gallery-defaults.txt
+  caption: "the package ships the two grants it needs; nothing was written to /etc/wolos/consent.json"
+- ssh: "! grep -q wol-gallery /etc/wolos/consent.json 2>/dev/null && echo no-seed-in-etc"
+  expect: "no-seed-in-etc"
+# Defaults: PNG and JPEG are Gallery's; the formats it cannot draw stay with the old viewer.
+- ssh: |
+    R="runuser -u $(id -nu 1000) -- env $(tr '\n' ' ' < /tmp/sess.env)"
+    for t in image/png image/jpeg image/gif image/webp; do echo "$t $($R xdg-mime query default $t)"; done
+  expect: "image/png org.wolos.gallery.desktop\nimage/jpeg org.wolos.gallery.desktop\nimage/gif org.gnome.eog.desktop\nimage/webp org.gnome.eog.desktop"
+  save: mime-defaults.txt
+  caption: "image/png and image/jpeg open in Gallery; gif, webp (and svg) stay with the viewer that can draw them"
+# Three pictures in Pictures (a 1x1 PNG, written by the journey).
+- ssh: |
+    R="runuser -u $(id -nu 1000) -- env $(tr '\n' ' ' < /tmp/sess.env)"
+    $R sh -c 'mkdir -p "$HOME/Pictures" && for n in harbour dunes forest; do echo iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg== | base64 -d > "$HOME/Pictures/$n.png"; done; ls "$HOME/Pictures" | wc -l'
+  expect: "3"
+# Open from Files: the same call a double-click in Files makes (gio open resolves the default).
+- ssh: |
+    R="runuser -u $(id -nu 1000) -- env $(tr '\n' ' ' < /tmp/sess.env)"
+    $R sh -c 'setsid gio open "$HOME/Pictures/dunes.png" >/dev/null 2>&1 &'; sleep 6
+    $R hyprctl clients -j | jq -r '.[] | select(.class=="org.wolos.gallery") | .class' | head -1
+  expect: "org.wolos.gallery"
+  caption: "dunes.png opened in Gallery, in the viewer, not in the old image viewer"
+- shot gallery-viewer
+- ssh: "pgrep -u 1000 -x eog | wc -l"
+  expect: "0"
+  caption: "no second photo app opened"
+# Delete: the picture goes to the Trash with a notice and Undo; the grant is the vendor default.
+- key: delete
+- sleep: 2
+- ssh: |
+    h=$(getent passwd 1000 | cut -d: -f6)
+    test ! -e "$h/Pictures/dunes.png" && test -e "$h/.local/share/Trash/files/dunes.png" && test -e "$h/.local/share/Trash/info/dunes.png.trashinfo" && echo in-the-trash
+  expect: "in-the-trash"
+  caption: "Delete moved dunes.png to the shared Trash (the Files Trash lists it)"
+- shot gallery-trashed
+- ssh: "journalctl -b --no-pager -t wold | grep -ci 'not allowed' || true"
+  rc: any
+  expect: "0"
+  save: wold-refusals-after-delete.txt
+  caption: "wold refused nothing: a fresh system needs no Settings visit before the first Delete"
+# Undo: Ctrl+Z puts it back.
+- key: ctrl-z
+- sleep: 2
+- ssh: |
+    h=$(getent passwd 1000 | cut -d: -f6)
+    test -e "$h/Pictures/dunes.png" && test ! -e "$h/.local/share/Trash/info/dunes.png.trashinfo" && echo back
+  expect: "back"
+  caption: "Undo put dunes.png back and removed its Trash note"
+- shot gallery-undone
+# Share: the toolbar button opens the system share sheet (no refusal sentence in the notice).
+- click: [1010, 130]
+- sleep: 3
+- shot gallery-share
+- ssh: "journalctl -b --no-pager -t wold | grep -ci 'not allowed' || true"
+  rc: any
+  expect: "0"
+  save: wold-refusals-after-share.txt
+  caption: "Share asked wold for the share grant and got it; the sheet is on screen (Notes as a target comes with E2E-NOTES)"
+- key: esc
+- ssh: "journalctl -b --no-pager -t wold -n 60"
+  rc: any
+  save: wold-journal.txt
+- checkpoint: e2e-gallery
+- stop
