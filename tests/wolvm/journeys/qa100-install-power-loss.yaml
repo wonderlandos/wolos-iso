@@ -23,12 +23,9 @@ steps:
 - wait-text: "wolos-install: done"
   timeout: 1800
   caption: the second install finished
-- ssh: "ls /dev/mapper | grep -c '^wolos' || echo none"
-  expect: "none"
-  caption: the installer closed every volume it opened (install-run cleanup, FIX-install prelude)
-- ssh: "lsblk -no PARTTYPE /dev/vda | grep -ic c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
-  expect: "1"
-  caption: exactly one startup partition (the first try's partitions did not pile up)
+# 0.13 (seal in seconds): the VM powers off right after "done", so no ssh here (the two checks that used to follow raced the
+# poweroff: TimeoutError). The partition check moved to the booted system below; "no volume left open" is not observable from the
+# installed system (its own root is a mapper device) and is not checked by this journey any more.
 - wait-text: "reboot: Power down"
   timeout: 300
   shot: false
@@ -45,6 +42,9 @@ steps:
   caption: one blessed entry
 - ssh: "ls /efi/loader/entries | grep -c '^wolos-'"
   expect: "1"
+- ssh: "lsblk -no PARTTYPE /dev/vda | grep -ic c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+  expect: "1"
+  caption: exactly one startup partition (the first try's partitions did not pile up); moved here from before the poweroff
 - ssh: "tail -n 20 /var/log/wolos-install.log"
   rc: any
   save: install-log-tail.txt

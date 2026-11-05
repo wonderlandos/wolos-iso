@@ -95,6 +95,9 @@ class Keys(unittest.TestCase):
         self.assertEqual(W.combo_keys("ctrl-alt-t"), ["ctrl", "alt", "t"])
         self.assertEqual(W.combo_keys("Super-Enter"), ["meta_l", "ret"])
         self.assertEqual(W.combo_keys("-"), ["minus"])
+        # journeys wrote shift_l and Page_Down; QEMU's qcodes are shift and pgdn (dry run 2026-11-05: ValueError at the step)
+        self.assertEqual(W.combo_keys("ctrl-meta_l-shift_l-3"), ["ctrl", "meta_l", "shift", "3"])
+        self.assertEqual(W.combo_keys("Page_Down"), ["pgdn"])
         with self.assertRaises(ValueError):
             W.combo_keys("ctrl--")
 

@@ -68,9 +68,9 @@ steps:
   caption: Continue creates the account through wol-login -> You're All Set
 - wait-stable:
   timeout: 60
-- ssh: "id alice && grep -q '^alice:' /etc/passwd && echo account-made"
+- ssh: "id aliceliddell && grep -q '^aliceliddell:' /etc/passwd && echo account-made"
   expect: "account-made"
-- ssh: "id -nG alice"
+- ssh: "id -nG aliceliddell"
   expect: "wheel"
   caption: the first account is an administrator
 - key: esc
@@ -83,7 +83,7 @@ steps:
   caption: Get Started -> the session
 - wait-stable:
   timeout: 120
-- ssh: "loginctl list-sessions --no-legend | grep -q alice && echo session-up"
+- ssh: "loginctl list-sessions --no-legend | grep -q aliceliddell && echo session-up"
   expect: "session-up"
   timeout: 120
 - checkpoint: desktop
@@ -94,11 +94,11 @@ steps:
   timeout: 600
 - wait-stable:
   timeout: 180
-  caption: the lock screen of alice's session, not Setup, not the login window
+  caption: the lock screen of aliceliddell's session (Setup makes the account name from 'Alice Liddell'), not Setup, not the login window
 - ssh: "pgrep -a wol-setup && echo setup-again || echo no-setup"
   rc: any
   expect: "no-setup"
-- ssh: "loginctl list-sessions --no-legend | grep -q alice && echo locked-session"
+- ssh: "loginctl list-sessions --no-legend | grep -q aliceliddell && echo locked-session"
   expect: "locked-session"
 - logs:
   n: 500

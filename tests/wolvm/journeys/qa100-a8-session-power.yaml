@@ -41,7 +41,7 @@ steps:
 - key: esc
 - sleep: 1
 # QA-DESIGN-37: logind's Lock (loginctl lock-session) puts the lock screen up within 1 s.
-- ssh: "s=$(loginctl list-sessions --no-legend | awk '$3==\"aliceliddell\"{print $1; exit}'); loginctl lock-session \"$s\"; for i in 1 2 3 4 5 6 7 8 9 10; do pgrep -u aliceliddell -x wol-lock >/dev/null && { echo locked-in-${i}00ms; exit 0; }; sleep 0.1; done; echo not-locked"
+- ssh: "s=$(loginctl list-sessions --no-legend | awk '$3==\"alice\"{print $1; exit}'); loginctl lock-session \"$s\"; for i in 1 2 3 4 5 6 7 8 9 10; do pgrep -u alice -x wol-lock >/dev/null && { echo locked-in-${i}00ms; exit 0; }; sleep 0.1; done; echo not-locked"
   expect: "locked-in-"
   save: loginctl-lock-within-1s.txt
   caption: loginctl-lock-within-1s
@@ -53,30 +53,30 @@ steps:
 - wait-stable:
   timeout: 60
 # QA-DEV-11: the mute key's OSD and the menu bar speaker together.
-- ssh: "WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" wol-volume mute; echo muted"
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" wol-volume mute; echo muted"
   expect: "muted"
 - sleep: 0.5
 - shot: mute-icon-half-second
   caption: OSD muted AND the menu bar speaker muted after 0.5 s (it lagged 1-3 s)
-- ssh: "WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" wol-volume mute; echo unmuted"
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" wol-volume mute; echo unmuted"
   expect: "unmuted"
 # Live-1 H4: a recording shows a red Stop in the menu bar; the Record tile and the Stop both end it.
-- ssh: "WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell wol-screenshot record; sleep 2; test -f /run/user/1000/wol-record.pid && echo recording"
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/alice wol-screenshot record; sleep 2; test -f /run/user/1000/wol-record.pid && echo recording"
   expect: "recording"
 - sleep: 1
 - shot: recording-indicator
   caption: a red record mark at the start of the status icons, tooltip "Stop Screen Recording"
-- ssh: "WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" wol shell show screen-record; sleep 3; test -f /run/user/1000/wol-record.pid && echo still-recording || echo stopped; ls /home/aliceliddell/Movies | tail -1"
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" wol shell show screen-record; sleep 3; test -f /run/user/1000/wol-record.pid && echo still-recording || echo stopped; ls /home/alice/Movies | tail -1"
   expect: "stopped"
   save: record-tile-stops.txt
   caption: the Record tile (wol shell show screen-record) stops the running recording instead of offering another
 - shot: recording-stopped
   caption: no red mark; the "Screen recording saved" banner
 # QA-FILES-5: Log Out saves the window set before the compositor exits.
-- ssh: "f=/home/aliceliddell/.local/state/wolos/sessions.json; stat -c %Y \"$f\" 2>/dev/null || echo 0"
+- ssh: "f=/home/alice/.local/state/wolos/sessions.json; stat -c %Y \"$f\" 2>/dev/null || echo 0"
   rc: any
   save: sessions-before.txt
-- ssh: "WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f foot >/dev/null 2>&1; echo opened"
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 '^wayland-[0-9]*$'); runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" setsid -f foot >/dev/null 2>&1; echo opened"
   expect: "opened"
 - sleep: 3
 - click: 22 14
@@ -88,7 +88,7 @@ steps:
 - key: ret
   caption: Log Out now
 - sleep: 15
-- ssh: "f=/home/aliceliddell/.local/state/wolos/sessions.json; t=$(stat -c %Y \"$f\" 2>/dev/null || echo 0); now=$(date +%s); [ $((now - t)) -lt 40 ] && grep -q terminal \"$f\" && echo saved-at-logout || echo not-saved; cat \"$f\" 2>/dev/null | head -c 600"
+- ssh: "f=/home/alice/.local/state/wolos/sessions.json; t=$(stat -c %Y \"$f\" 2>/dev/null || echo 0); now=$(date +%s); [ $((now - t)) -lt 40 ] && grep -q terminal \"$f\" && echo saved-at-logout || echo not-saved; cat \"$f\" 2>/dev/null | head -c 600"
   expect: "saved-at-logout"
   save: logout-sessions.json
   caption: logout-sessions.json, written at Log Out (the 60 s autosave alone left it old)

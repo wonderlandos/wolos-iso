@@ -18,7 +18,7 @@ steps:
 - wait-stable:
   timeout: 120
   caption: desktop up
-- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/aliceliddell setsid -f foot >/dev/null 2>&1; sleep 3; echo foot"
+- ssh: "WD=$(ls /run/user/1000 | grep -m1 \"^wayland-[0-9]*$\"); runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=\"$WD\" HOME=/home/alice setsid -f foot >/dev/null 2>&1; sleep 3; echo foot"
   expect: "foot"
 - wait-stable:
   timeout: 30
@@ -27,8 +27,8 @@ steps:
   caption: the WolOS menu (logo)
 - shot: menu-open
   caption: "the WolOS menu: read the Lock Screen row's centre for the next click"
-- click: 70 150
-  caption: Lock Screen (adjust from menu-open)
+- click: 60 240
+  caption: Lock Screen row of the 0.13 WolOS menu (Sleep, Restart, Shut Down above it; Log Out at 51 268)
 - wait-stable:
   timeout: 30
 - shot: locked

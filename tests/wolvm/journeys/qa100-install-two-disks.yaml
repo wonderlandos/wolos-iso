@@ -21,12 +21,15 @@ steps:
   rc: any
   expect: "os Windows"
   caption: install-check names Windows on the other disk
+# 0.13 (seal in seconds): the VM powers off right after "done", so the note is read while the install runs (the ssh that used
+# to follow "done" timed out against the poweroff); if the note is only written at the very end the loop keeps looking.
+- ssh: "i=0; while [ ! -s /run/wolos/boot-note ] && [ $i -lt 900 ]; do sleep 1; i=$((i+1)); done; cat /run/wolos/boot-note 2>/dev/null; echo waited=$i"
+  rc: any
+  timeout: 960
+  save: boot-note.txt
+  caption: what the Done page would say (Secure Boot tier, BitLocker when it applies), read before the poweroff
 - wait-text: "wolos-install: done"
   timeout: 1800
-- ssh: "cat /run/wolos/boot-note"
-  rc: any
-  save: boot-note.txt
-  caption: what the Done page would say (Secure Boot tier, BitLocker when it applies)
 - wait-text: "reboot: Power down"
   timeout: 300
   shot: false

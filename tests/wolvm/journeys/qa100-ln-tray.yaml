@@ -15,14 +15,14 @@ steps:
 - wait-stable:
   timeout: 120
   caption: desktop up
-- ssh: "busctl --user list | grep -c StatusNotifierWatcher || true"
+- ssh: "runuser -u $(id -nu 1000) -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus busctl --user list | grep -c StatusNotifierWatcher || true"
   rc: any
   expect: "1"
   save: watcher.txt
   caption: the shell owns org.kde.StatusNotifierWatcher
 - shot: before-item
 - ssh: |
-    WD=$(ls /run/user/1000 | grep -m1 "^wayland-[0-9]*$"); runuser -u aliceliddell -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY="$WD" HOME=/home/aliceliddell setsid -f python3 /dev/stdin >/dev/null 2>&1 <<'PY'
+    WD=$(ls /run/user/1000 | grep -m1 "^wayland-[0-9]*$"); runuser -u alice -- env XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY="$WD" HOME=/home/alice setsid -f python3 /dev/stdin >/dev/null 2>&1 <<'PY'
     import dbus, dbus.service, dbus.mainloop.glib
     from gi.repository import GLib
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)

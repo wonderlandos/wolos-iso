@@ -81,7 +81,9 @@ def die(msg, code=1):
 KEY_ALIAS = {"enter": "ret", "return": "ret", "space": "spc", "escape": "esc", "bksp": "backspace",
              "bs": "backspace", "del": "delete", "super": "meta_l", "win": "meta_l", "meta": "meta_l",
              "control": "ctrl", "ctl": "ctrl", "altgr": "alt_r", "pageup": "pgup", "pagedown": "pgdn",
-             "ins": "insert", "printscreen": "print", "menu": "compose"}
+             "ins": "insert", "printscreen": "print", "menu": "compose",
+             # names a journey wrote that QEMU does not know (qcodes are shift, pgdn): QA-IMG13-3 dry run
+             "shift_l": "shift", "page_down": "pgdn", "page_up": "pgup"}
 # Unshifted and shifted characters of a US layout -> QEMU qcodes (same table as tests/test/qmp.py).
 CHAR_KEY = {" ": "spc", "\n": "ret", "=": "equal", ",": "comma", ".": "dot", "/": "slash", "-": "minus",
             ";": "semicolon", "'": "apostrophe", "[": "bracket_left", "]": "bracket_right", "\t": "tab",

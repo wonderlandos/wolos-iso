@@ -11,10 +11,11 @@ steps:
   timeout: 120
 - ssh: "P=$(pgrep -u 1000 -x wol-shell | head -1); tr '\\0' '\\n' < /proc/$P/environ | grep -E '^(WAYLAND_DISPLAY|HYPRLAND_INSTANCE_SIGNATURE|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR|HOME|USER)=' > /tmp/sess.env; wc -l < /tmp/sess.env"
   expect: "6"
+# 0.13: wol-shell runs as a supervisor (wol-shell --supervised) and the shell it starts: two processes of that name.
 - ssh: "pgrep -u 1000 -c -x wol-shell"
-  expect: "1"
+  expect: "2"
 - ssh: "pkill -KILL -u 1000 -x dbus-broker; pkill -KILL -u 1000 -x dbus-broker-lau; sleep 6; pgrep -u 1000 -c -x wol-shell; coredumpctl list --no-legend --since -20s | grep -c portal-hyprland"
-  expect: "1\n0"
+  expect: "2\n0"
   save: after-bus-kill.txt
   caption: CRASH-2, 0.12.1 prints 0 shells and 1 portal SIGSEGV
 - shot: after-bus-kill
