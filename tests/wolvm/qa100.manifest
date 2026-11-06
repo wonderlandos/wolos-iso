@@ -109,6 +109,7 @@ qa100-wd-adr-crash-evidence | installed,account:any | fail:crash-surface:CRASH-4
 qa100-webapp-doctor-launch | installed,account:alice | fail:QA-WEB-1@17,24 | Doctor web app launch (feature not in 0.12.1: fails on absence); QA-WEB-24
 qa100-webapp-doctor-theme | installed,account:alice | fail:QA-WEB-2@visual | Doctor ignores the theme (feature not in 0.12.1)
 qa100-webapp-lifecycle | installed,account:alice | fail:QA-WEB-5@29 | closing the window leaves the approval sheet's child (feature not in 0.12.1)
+qa100-window-tiling | installed,account:alice | pass | window tiling (lead order 2026-11-04): Super+arrows, drag to an edge with a preview, layouts chooser, Snap windows to screen edges switch; needs the wave3/int image with wol-hypr 0.13
 qa100-wm-decorations-xwayland-fill | live,tpm,ssh | fail:QA-WM-2@visual | XWayland windows undecorated; QA-WM-3
 qa100-wm-minimise-focus | live,tpm,ssh | fail:QA-WM-1@visual | minimise leaves focus on the hidden window
 qa100-wm-semaphore-states | live,tpm,ssh | fail:QA-SHELL-1 | title-bar buttons misbehave (umbrella; QA-VIS1-23..26)
